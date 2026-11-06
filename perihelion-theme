@@ -560,7 +560,12 @@ def main(argv=None):
         return 0
 
     if kind == "image":
-        pixels = load_pixels(value)
+        try:
+            pixels = load_pixels(value)
+        except Exception as e:  # an image format with no loader installed, a broken file
+            print(f"perihelion-theme: could not read {value} ({e}); using the flavor's colors",
+                  file=sys.stderr)
+            pixels = []
     elif kind == "color":
         pixels = [hex_rgb(value.lstrip("#"))] * 64
     else:
