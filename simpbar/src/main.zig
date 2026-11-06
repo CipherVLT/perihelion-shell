@@ -6172,6 +6172,10 @@ fn closeCava() void {
 /// 1Hz respawn tick, and to stop a daemon the config no longer needs.
 fn cavaWanted() bool {
     if (findRightEntry(.cava) != null) return true;
+    // Perihelion: cava may also sit in the left group (a waveform beside mpris).
+    for (current_config.modules.left) |e| {
+        if (e.kind == .cava and e.enabled) return true;
+    }
     return std.mem.eql(u8, current_config.appearance.bg_mode, BG_MODE_CAVA);
 }
 
@@ -7853,7 +7857,9 @@ fn drawLeftGroup(
                 // module beats one overlapping the middle of the bar).
                 if (mpris_text.len > 0) {
                     const toggle_w = MPRIS_CONTROL_GAP + mprisToggleSide(font, mpris_playing);
-                    const avail = center_start_x - MPRIS_CENTER_CLEARANCE - x0;
+                    // Perihelion: leave room for the cava wave so a long title
+                    // ellipsizes instead of pushing the wave off the bar.
+                    const avail = center_start_x - MPRIS_CENTER_CLEARANCE - x0 - perihelionLeftCavaRoom();
                     if (textPixelWidth(font, mpris_text) + toggle_w <= avail) {
                         x0 = drawMprisPill(pixels, buf_width, buf_height, font, y0, x0, mpris_text, mpris_playing, mpris_frac, click_regions);
                     } else if (avail > toggle_w) {
@@ -7866,6 +7872,14 @@ fn drawLeftGroup(
                             x0 = drawMprisPill(pixels, buf_width, buf_height, font, y0, x0, capped, mpris_playing, mpris_frac, click_regions);
                         }
                     }
+                }
+            },
+            .cava => {
+                // Perihelion: a mirrored waveform after the track title,
+                // bounded by the center group like the mpris pill.
+                if (cava_state.has_data) {
+                    x0 += CAVA_WAVE_SPACER;
+                    x0 = drawCavaWave(pixels, buf_width, buf_height, x0, center_start_x - MPRIS_CENTER_CLEARANCE);
                 }
             },
             else => {}, // RIGHT-only kind in left: no left-anchored render for it
@@ -8886,6 +8900,74 @@ fn drawCavaEqualizer(pixels: [*]u32, buf_width: u32, buf_height: u32, x_end: i64
     // Left edge of the whole equalizer — what the next right-group module
     // docks against.
     return x_end - @as(i64, @intCast(cava_state.bar_count)) * (CAVA_BAR_WIDTH + CAVA_BAR_GAP);
+}
+
+// Perihelion: the left-group cava waveform. Each band is a bar mirrored
+// above and below the bar's middle line, so the whole run reads as a sound
+// wave rather than an equalizer.
+const CAVA_WAVE_BAR_W: i64 = 3;
+const CAVA_WAVE_GAP: i64 = 2;
+const CAVA_WAVE_PAD: i64 = 5;
+// Extra space between the track title and the wave (on top of MODULE_GAP).
+const CAVA_WAVE_SPACER: i64 = 16;
+
+/// Width the left-group cava wave needs, plus its gaps; 0 when it isn't
+/// placed in the left group or has nothing to draw. The mpris pill in the
+/// same group subtracts this from its room.
+fn perihelionLeftCavaRoom() i64 {
+    if (!cava_state.has_data) return 0;
+    for (current_config.modules.left) |e| {
+        if (e.kind == .cava and e.enabled) {
+            const n: i64 = @as(i64, @intCast(cava_state.bar_count));
+            return n * (CAVA_WAVE_BAR_W + CAVA_WAVE_GAP) - CAVA_WAVE_GAP + MODULE_GAP + CAVA_WAVE_SPACER;
+        }
+    }
+    return 0;
+}
+
+/// The wave's color `dy` pixels from the middle line, out of `half_max`:
+/// the user's `cava_color` (a distro can swap in a gradient here).
+fn waveColor(dy: i64, half_max: i64) u32 {
+    _ = dy;
+    _ = half_max;
+    return current_config.appearance.cava_color;
+}
+
+/// Draws the waveform starting at `x_start`, returning the pen after it.
+/// Draws nothing (and keeps the pen) when it would cross `x_limit`.
+fn drawCavaWave(pixels: [*]u32, buf_width: u32, buf_height: u32, x_start: i64, x_limit: i64) i64 {
+    const top_px = @min(current_config.appearance.border_top_px, buf_height);
+    const bottom_px = @min(current_config.appearance.border_bottom_px, buf_height - top_px);
+    const usable_top: i64 = @as(i64, @intCast(top_px));
+    const usable_bottom: i64 = @as(i64, @intCast(buf_height)) - @as(i64, @intCast(bottom_px));
+    const half_max: i64 = @divTrunc(usable_bottom - usable_top - 2 * CAVA_WAVE_PAD, 2);
+    if (half_max <= 0) return x_start;
+    const mid: i64 = @divTrunc(usable_top + usable_bottom, 2);
+    const step: i64 = CAVA_WAVE_BAR_W + CAVA_WAVE_GAP;
+    const n: i64 = @as(i64, @intCast(cava_state.bar_count));
+    if (n == 0) return x_start;
+    const width: i64 = n * step - CAVA_WAVE_GAP;
+    if (x_start + width > x_limit) return x_start;
+    const bw: i64 = @as(i64, @intCast(buf_width));
+    const bh: i64 = @as(i64, @intCast(buf_height));
+
+    var i: usize = 0;
+    while (i < cava_state.bar_count) : (i += 1) {
+        const v: i64 = @as(i64, @intCast(cava_state.bars[i]));
+        const h: i64 = @max(1, @divTrunc(v * half_max, @as(i64, CAVA_REFERENCE_MAX)));
+        const x: i64 = x_start + @as(i64, @intCast(i)) * step;
+        var dx: i64 = 0;
+        while (dx < CAVA_WAVE_BAR_W) : (dx += 1) {
+            const px = x + dx;
+            if (px < 0 or px >= bw) continue;
+            var py: i64 = mid - h;
+            while (py <= mid + h) : (py += 1) {
+                if (py < 0 or py >= bh) continue;
+                pixels[@as(usize, @intCast(py)) * buf_width + @as(usize, @intCast(px))] = waveColor(py - mid, half_max);
+            }
+        }
+    }
+    return x_start + width;
 }
 
 /// Whether any background effect needs per-tick repaints right now: a mode
