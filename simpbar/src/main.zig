@@ -9489,6 +9489,7 @@ fn drawRightGroup(
     buf_height: u32,
     font: *font_mod.Font,
     weather_text: []const u8,
+    time_text: []const u8,
     pacman_text: []const u8,
     volume_text: []const u8,
     drawer_anim: f32,
@@ -9796,15 +9797,36 @@ fn drawRightGroup(
                 // not interactive" stance as weather. Anchored opposite the
                 // bar's screen edge: grow from the bottom on a top bar, from
                 // the top on a bottom bar.
-                if (cava_state.has_data) {
-                    if (!first) x_end -= LAUNCHER_GAP;
-                    first = false;
-                    const cava_hi = x_end;
-                    x_end = drawCavaEqualizer(pixels, buf_width, buf_height, x_end);
-                    if (entry.in_drawer) island_now.include(x_end, cava_hi);
+                // Perihelion: the same mirrored waveform as the left group, so
+                // both sides can match. Skipped (no cell) when there isn't
+                // room before the center group.
+                if (cava_state.has_data and cava_state.bar_count > 0) {
+                    const n: i64 = @as(i64, @intCast(cava_state.bar_count));
+                    const wave_w: i64 = n * (CAVA_WAVE_BAR_W + CAVA_WAVE_GAP) - CAVA_WAVE_GAP;
+                    const gap: i64 = if (first) 0 else MODULE_GAP;
+                    const start = x_end - gap - wave_w;
+                    if (start > center_start_x) {
+                        first = false;
+                        const cava_hi = x_end - gap;
+                        _ = drawCavaWave(pixels, buf_width, buf_height, start, cava_hi);
+                        x_end = start;
+                        if (entry.in_drawer) island_now.include(x_end, cava_hi);
+                    }
                 }
             },
-            .workspaces, .mpris, .clock, .launchers => {}, // not valid in the right group; ignore defensively
+            .clock => {
+                // Perihelion: the clock may also sit in the right group
+                // (superdock style). Same static text as the left/center
+                // clock, drawn like the other right-aligned modules.
+                if (time_text.len > 0) {
+                    if (!first) x_end -= MODULE_GAP;
+                    first = false;
+                    const cell = reserveRightCell(x_end, textPixelWidth(font, time_text), center_start_x);
+                    x_end = cell.next_pen;
+                    _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, time_text, color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
+                }
+            },
+            .workspaces, .mpris, .launchers => {}, // not valid in the right group; ignore defensively
         }
     }
     // Publish this frame's island span for the next frame's pill (or clear
@@ -10533,7 +10555,7 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
     bar.dock_left_w = @max(0, left_end - pack_start);
     const center_end = drawCenterGroup(pixels, bar.width, bar.height, bar.font, time_text, barWorkspaces(bar), mpris_text, bar.mpris_frac, mpris_playing, center_start_last, &bar.click_regions);
     bar.dock_center_w = @max(0, center_end - center_start_last);
-    const right_start = drawRightGroup(pixels, bar.width, bar.height, bar.font, weather_text, bar.pacman.text(), volume_text, bar.drawer_anim, bar.tray, bar.workspaces, center_end, right_end_last, &bar.click_regions, bar);
+    const right_start = drawRightGroup(pixels, bar.width, bar.height, bar.font, weather_text, time_text, bar.pacman.text(), volume_text, bar.drawer_anim, bar.tray, bar.workspaces, center_end, right_end_last, &bar.click_regions, bar);
     bar.dock_right_w = @max(0, right_end_last - right_start);
 
     // Input follows the pill: without this the full-width transparent
@@ -10594,7 +10616,7 @@ fn paintMorph(bar: *Bar, pixels: [*]u32, e: f32, time_text: []const u8, mpris_te
     bar.dock_left_w = @max(0, left_end - L);
     const center_end = drawCenterGroup(pixels, bar.width, bar.height, bar.font, time_text, barWorkspaces(bar), mpris_text, bar.mpris_frac, mpris_playing, C, &bar.click_regions);
     bar.dock_center_w = @max(0, center_end - C);
-    const right_start = drawRightGroup(pixels, bar.width, bar.height, bar.font, weather_text, bar.pacman.text(), volume_text, bar.drawer_anim, bar.tray, bar.workspaces, center_end, Rend, &bar.click_regions, bar);
+    const right_start = drawRightGroup(pixels, bar.width, bar.height, bar.font, weather_text, time_text, bar.pacman.text(), volume_text, bar.drawer_anim, bar.tray, bar.workspaces, center_end, Rend, &bar.click_regions, bar);
     bar.dock_right_w = @max(0, Rend - right_start);
 
     // Input follows the morphing pill (same change-detect fields as dock).
@@ -10796,6 +10818,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
             bar.height,
             bar.font,
             weather_text,
+            time_text,
             bar.pacman.text(),
             volume_text,
             bar.drawer_anim,
