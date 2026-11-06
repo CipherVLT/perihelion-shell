@@ -1,0 +1,17 @@
+{
+  "bg_color": "#eff1f5",
+  "text_color": "#4c4f69",
+  "border_color": "#7287fd",
+  "hover_color": "#ccd0da",
+  "holiday_color": "#d20f39",
+  "cava_color": "#8839ef",
+  "module_bg_color": "#ccd0da",
+  "workspace_active_color": "#7287fd",
+  "workspace_inactive_color": "#9ca0b0",
+  "popup_bg_color": "#e6e9ef",
+  "popup_hover_color": "#bcc0cc",
+  "popup_separator_color": "#acb0be",
+  "popup_disabled_color": "#8c8fa1",
+  "bezel_color": "#1e66f5",
+  "matrix_color": "#179299"
+}
