@@ -686,7 +686,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if not args.dry_run and auto_theme_off():
-        print("perihelion-theme: "Match the wallpaper" is off in Simpbar Config; nothing to do")
+        print("perihelion-theme: 'Match the wallpaper' is off in Simpbar Config; nothing to do")
         return 0
 
     settings = read_settings()
