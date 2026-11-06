@@ -8987,12 +8987,10 @@ fn perihelionLeftCavaRoom() i64 {
     return 0;
 }
 
-// The wave's gradient (Catppuccin Macchiato): blue at the middle line, pink
-// halfway out, yellow at the peaks, so loud moments light up.
-const WAVE_BLUE: u32 = 0xFF8AADF4;
-const WAVE_PINK: u32 = 0xFFF5BDE6;
-const WAVE_YELLOW: u32 = 0xFFEED49F;
-
+// The wave's gradient follows the theme: bezel color at the middle line, the
+// Audio Visualizer color halfway out, the matrix color at the peaks, so loud
+// moments light up. perihelion-theme sets these to three Catppuccin accents
+// picked from the wallpaper (blue, pink and yellow by default).
 /// Mixes two 0xAARRGGBB colors; `t` runs 0 (all `a`) to 256 (all `b`).
 fn waveLerp(a: u32, b: u32, t: u32) u32 {
     var out: u32 = 0xFF000000;
@@ -9011,8 +9009,9 @@ fn waveLerp(a: u32, b: u32, t: u32) u32 {
 fn waveColor(dy: i64, half_max: i64) u32 {
     const d: i64 = if (dy < 0) -dy else dy;
     const t: i64 = @divTrunc(@min(d, half_max) * 512, @max(half_max, 1));
-    if (t <= 256) return waveLerp(WAVE_BLUE, WAVE_PINK, @intCast(t));
-    return waveLerp(WAVE_PINK, WAVE_YELLOW, @intCast(@min(t - 256, 256)));
+    const a = current_config.appearance;
+    if (t <= 256) return waveLerp(a.bezel_color, a.cava_color, @intCast(t));
+    return waveLerp(a.cava_color, a.matrix_color, @intCast(@min(t - 256, 256)));
 }
 
 /// Draws the waveform starting at `x_start`, returning the pen after it.
