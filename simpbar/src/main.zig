@@ -7441,6 +7441,54 @@ fn textPixelWidth(font: *font_mod.Font, text: []const u8) i64 {
 /// overlapping something else. Advances come from the same per-codepoint
 /// walk textPixelWidth sums, so a prefix capped here draws at exactly the
 /// width it was measured against.
+const perihelion_clock = struct {
+    extern "c" fn clock_gettime(clk: c_int, tp: *std.posix.timespec) c_int;
+};
+// One character every MARQUEE_STEP_MS; the bar repaints with every cava
+// frame, which keeps the scroll moving.
+const MARQUEE_STEP_MS: i64 = 220;
+const MARQUEE_GAP = "   ";
+
+/// Perihelion: `text` rotated by the clock (text, a gap, then the start
+/// again) and cut to `max_w` pixels at a character boundary, so a long
+/// track title scrolls left. Falls back to ellipsizing if it can't fit the
+/// buffers.
+fn perihelionMarquee(buf: []u8, font: *font_mod.Font, text: []const u8, max_w: i64) []const u8 {
+    var ring_buf: [96]u8 = undefined;
+    if (text.len + MARQUEE_GAP.len > ring_buf.len or text.len + MARQUEE_GAP.len > buf.len)
+        return ellipsizeToFit(buf, font, text, max_w);
+    @memcpy(ring_buf[0..text.len], text);
+    @memcpy(ring_buf[text.len..][0..MARQUEE_GAP.len], MARQUEE_GAP);
+    const ring = ring_buf[0 .. text.len + MARQUEE_GAP.len];
+
+    var starts: [96]usize = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < ring.len and n < starts.len) {
+        starts[n] = i;
+        n += 1;
+        const l: usize = std.unicode.utf8ByteSequenceLength(ring[i]) catch 1;
+        i += l;
+    }
+    if (n == 0) return ellipsizeToFit(buf, font, text, max_w);
+
+    var ts: std.posix.timespec = undefined;
+    _ = perihelion_clock.clock_gettime(1, &ts); // CLOCK_MONOTONIC
+    const ms: i64 = @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
+    const step: usize = @intCast(@mod(@divTrunc(ms, MARQUEE_STEP_MS), @as(i64, @intCast(n))));
+
+    const head = ring[starts[step]..];
+    const tail = ring[0..starts[step]];
+    @memcpy(buf[0..head.len], head);
+    @memcpy(buf[head.len..][0..tail.len], tail);
+    var end: usize = head.len + tail.len;
+    while (end > 0 and textPixelWidth(font, buf[0..end]) > max_w) {
+        end -= 1;
+        while (end > 0 and (buf[end] & 0xC0) == 0x80) end -= 1;
+    }
+    return buf[0..end];
+}
+
 fn ellipsizeToFit(buf: []u8, font: *font_mod.Font, text: []const u8, max_w: i64) []const u8 {
     if (max_w <= 0) return "";
     if (textPixelWidth(font, text) <= max_w) return text;
@@ -7867,7 +7915,12 @@ fn drawLeftGroup(
                         // (paintFrame's mpris_buf); the ellipsized output is
                         // a prefix of it plus three bytes.
                         var tbuf: [67]u8 = undefined;
-                        const capped = ellipsizeToFit(&tbuf, font, mpris_text, avail - toggle_w);
+                        // Perihelion: a playing title scrolls (like a marquee)
+                        // instead of being cut off; paused, it ellipsizes.
+                        const capped = if (mpris_playing)
+                            perihelionMarquee(&tbuf, font, mpris_text, avail - toggle_w)
+                        else
+                            ellipsizeToFit(&tbuf, font, mpris_text, avail - toggle_w);
                         if (capped.len > 0) {
                             x0 = drawMprisPill(pixels, buf_width, buf_height, font, y0, x0, capped, mpris_playing, mpris_frac, click_regions);
                         }
