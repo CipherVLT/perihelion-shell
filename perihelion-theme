@@ -18,6 +18,7 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
   ~/.config/btop/themes/perihelion.theme   btop (btop.conf picks "perihelion")
   ~/.config/perihelion/cmatrix-color    cmatrix's color (Perihelion's wrapper)
   ~/.config/mako/config                 notifications (Mango), reloaded live
+  the login screen (SDDM, Pixie)        through perihelion-greeter-sync
 
 and tells simpbar and simpbar-shell to reload (SIGUSR1).
 
@@ -800,7 +801,7 @@ def main(argv=None):
         kind, value = current_wallpaper()
 
     # Skip the work when nothing changed since the last run (login restores).
-    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|9"
+    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|10"
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
@@ -907,6 +908,21 @@ def main(argv=None):
                     subprocess.run(["makoctl", "reload"], capture_output=True, timeout=5, check=False)
                 except (OSError, subprocess.SubprocessError):
                     pass
+
+    # The login screen: same picture, same colors (Perihelion's helper; it
+    # does nothing for someone who may not change the shared greeter).
+    greeter = shutil.which("perihelion-greeter-sync")
+    if greeter and kind:
+        src = ["--image", value] if kind == "image" else ["--color", value]
+        c = theme["colors"]
+        try:
+            r = subprocess.run([greeter, *src, "--bg", c["base"], "--text", c["text"],
+                                "--accent", theme["accent"]],
+                               capture_output=True, text=True, timeout=30, check=False)
+            if r.returncode == 0:
+                changed.append("login screen")
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
