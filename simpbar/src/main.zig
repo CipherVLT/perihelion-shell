@@ -6802,10 +6802,18 @@ const MPRIS_REFRESH_SECONDS: i64 = 2; // mpris has no interval either (also even
 const SCROLL_INTERVAL_MS: i64 = 60; // drawer fade + hover/morph animation tick
 const DRAWER_ANIM_STEP: f32 = 0.25; // fraction of the fade per SCROLL_INTERVAL_MS tick (~240ms full fade)
 
+// Perihelion: the bar's weather follows the same place as the desktop
+// widget. perihelion-weather --bar prints wttr's format=1 shape
+// ("<emoji> <temp>"); without it, wttr.in is asked for the first line of
+// ~/.config/simpbar/weather-location (or guesses from the IP when empty).
+const WEATHER_BAR_CMD =
+    "if command -v perihelion-weather >/dev/null 2>&1; then exec perihelion-weather --bar; fi; " ++
+    "loc=$(head -n 1 \"$HOME/.config/simpbar/weather-location\" 2>/dev/null | tr -d '\\r' | sed 's/^ *//; s/ *$//; s/ /+/g'); " ++
+    "exec curl -s \"https://wttr.in/${loc}?format=1\"";
+
 fn startWeatherFetch(cmd: *PolledCommand) void {
-    // Routed through /usr/bin/env for PATH search — no execvp binding here.
-    var argv = [_:null]?[*:0]const u8{ "env", "curl", "-s", WEATHER_URL, null };
-    cmd.startFetch("/usr/bin/env", &argv);
+    var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", WEATHER_BAR_CMD, null };
+    cmd.startFetch("/bin/sh", &argv);
 }
 
 /// The shell one-liner that counts available package updates
@@ -7192,6 +7200,7 @@ fn splitWeatherLabel(text: []const u8) struct { icon: u32, icon_len: usize, rest
 fn wttrIconFor(cp: u32) ?u32 {
     return switch (cp) {
         0x2600 => 0xE30D, // ☀ sunny/clear
+        0x1F319 => 0xE32B, // 🌙 clear night (Perihelion: perihelion-weather --bar)
         0x26C5 => 0xE302, // ⛅ partly cloudy
         0x2601 => 0xE335, // ☁ cloudy
         0x1F324 => 0xE302, // 🌥 sun behind small cloud (wttr's current "partly cloudy day" emoji)
