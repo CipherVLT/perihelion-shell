@@ -225,6 +225,10 @@ try:
     check(pt.cmatrix_color(pt.build_theme("macchiato", ["blue", "pink", "yellow"])) == "blue", "cmatrix: blue accent -> blue")
     check(pt.cmatrix_color(pt.build_theme("macchiato", ["green", "pink", "yellow"])) == "green", "cmatrix: green accent -> green")
 
+    mk = pt.mako_config(pt.build_theme("macchiato", ["blue", "pink", "yellow"]))
+    check("border-color=#8aadf4" in mk and "background-color=#24273aee" in mk and "[urgency=high]" in mk,
+          "mako: notification colors from the palette")
+
     # 7. Material You through matugen (a stand-in when matugen isn't installed).
     fake_bin = os.path.join(tmp, "bin")
     os.makedirs(fake_bin)
