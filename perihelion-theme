@@ -459,14 +459,21 @@ def ensure_mango_source(conf):
     return write(conf, cur.rstrip("\n") + "\n" + add)
 
 
+def pids(name):
+    try:
+        return subprocess.run(["pgrep", "-x", name], capture_output=True, text=True,
+                              timeout=5, check=False).stdout.split()
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def running(name):
+    return bool(pids(name))
+
+
 def signal_procs(names, sig):
     for name in names:
-        try:
-            out = subprocess.run(["pgrep", "-x", name], capture_output=True, text=True,
-                                 timeout=5, check=False).stdout.split()
-        except (OSError, subprocess.SubprocessError):
-            continue
-        for pid in out:
+        for pid in pids(name):
             try:
                 os.kill(int(pid), sig)
             except (OSError, ValueError):
@@ -610,11 +617,13 @@ def main(argv=None):
         ensure_mango_source(os.path.join(mango_dir, "config.conf"))
         if wrote:
             changed.append("mango")
-            running = os.environ.get("MANGO_INSTANCE_SIGNATURE") or subprocess.run(
-                ["pgrep", "-x", "mango"], capture_output=True, check=False).returncode == 0
-            if running and shutil.which("mmsg"):
-                subprocess.run(["mmsg", "dispatch", "reload_config"],
-                               capture_output=True, check=False, timeout=5)
+            if shutil.which("mmsg") and (os.environ.get("MANGO_INSTANCE_SIGNATURE")
+                                         or running("mango")):
+                try:
+                    subprocess.run(["mmsg", "dispatch", "reload_config"],
+                                   capture_output=True, check=False, timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
 
     signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
