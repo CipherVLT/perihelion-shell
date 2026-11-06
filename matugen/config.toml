@@ -1,0 +1,197 @@
+# matugen — Material You colorscheme generator, wired into simpbar + a whole
+# desktop: simpbar, MangoWM + Hyprland, foot terminal, GTK (nautilus/nemo),
+# Qt/qt6ct (dolphin), Vesktop & Equibop Discord clients, the Fluxer chat
+# client, Zen and the swaync notification center.
+#
+# Two ways to use this:
+#
+#   1) Fresh setup (what the installers do): put THIS file at
+#      ~/.config/matugen/config.toml and the templates at
+#      ~/.config/matugen/templates/ (all files from the repo's matugen/
+#      folder), then run:  matugen image /path/to/wallpaper.jpg
+#
+#   2) Existing matugen config: don't clobber it — just merge the
+#      [templates.X] blocks (plus their template files) into your
+#      ~/.config/matugen/config.toml. Everything above is optional policy;
+#      only the template blocks matter.
+#
+# Every template here renders the Material You DARK scheme (matugen -m dark,
+# the default). Light mode would need a second set of templates.
+
+[config]
+version_check = false
+# Keep `matugen image` fully non-interactive — the wallpaper hook
+# (simpbar-wallpaper) runs it in the background with no terminal, and without an
+# explicit fallback + preference matugen stops to ask which source color to
+# use. closest-to-fallback keeps the picked color near the neutral teal
+# fallback below; change both to taste.
+fallback_color = "#80CBC4"
+prefer = "closest-to-fallback"
+
+# The wallpaper itself is owned by simpbar-wallpaper + swaybg
+# on this setup — matugen only recolors things, it must never set the
+# wallpaper. set = false + a no-op command keeps it that way (matugen 4.x
+# requires the command field to parse even when set is false).
+[config.wallpaper]
+set = false
+command = "true"
+
+# ═══════════════════════════ simpbar ═══════════════════════════
+# Renders the ten colors this bar draws into ~/.config/simpbar/matugen.json
+# (simpbar merges and applies whatever the file contains, key by key).
+[templates.simpbar]
+input_path = "~/.config/matugen/templates/simpbar.json"
+output_path = "~/.config/simpbar/matugen.json"
+# Live-reload the running bar AND the desktop widgets after the colors are
+# written — simpbar-shell takes the same SIGUSR1 (see reloadTheme in its
+# main.zig), otherwise the widgets keep yesterday's palette while the bar
+# moves. Uses pgrep (the bar's own pidfile can go stale across restarts);
+# harmless when neither is running.
+post_hook = "sh -c 'for P in simpbar simpbar-shell; do PID=$(pgrep -x \"$P\" | head -n1); [ -n \"$PID\" ] && kill -USR1 \"$PID\" 2>/dev/null || true; done'"
+
+# ═══════════════════════════ Hyprland ═══════════════════════════
+# Generates ~/.config/hypr/matugen-colors.lua (exports the MD3 palette and
+# applies Material You borders via hl.config()). hyprland.lua must load it at
+# the END, after hyprland-simpbar so these colors win:
+#     pcall(require, "matugen-colors")
+[templates.hyprland]
+input_path = "~/.config/matugen/templates/hyprland-colors.lua"
+output_path = "~/.config/hypr/matugen-colors.lua"
+# Tolerant: reloads borders/colors when Hyprland is up, no-ops otherwise so a
+# wallpaper change from a cron/systemd context can't abort the whole run.
+post_hook = "sh -c 'hyprctl reload 2>/dev/null || true'"
+
+# ═══════════════════════════ MangoWM ═══════════════════════════
+# Renders the MangoWM border/tag colors to
+# ~/.config/mango/cfg/matugen-colors.conf, which config.conf sources last so
+# these win over appearance.conf. No-ops when Mango isn't running.
+[templates.mango]
+input_path = "~/.config/matugen/templates/mango-colors.conf"
+output_path = "~/.config/mango/cfg/matugen-colors.conf"
+post_hook = "sh -c 'mmsg dispatch reload_config 2>/dev/null || true'"
+
+# ═══════════════════════════ Vesktop ═══════════════════════════
+# Overwrites the already-enabled midnight.theme.css (kept the same name so
+# enabledThemes needs no change). The post_hook re-enables it defensively in
+# case it was ever disabled in the client.
+[templates.vesktop]
+input_path = "~/.config/matugen/templates/vesktop-midnight.css"
+output_path = "~/.config/vesktop/themes/midnight.theme.css"
+post_hook = "sh -c 'python3 \"$HOME/.config/matugen/enable-theme.py\" \"$HOME/.config/vesktop/settings/settings.json\" midnight.theme.css'"
+
+# ═══════════════════════════ Equibop ═══════════════════════════
+# Renders a standalone MD3 theme and enables it in the client's settings.
+[templates.equibop]
+input_path = "~/.config/matugen/templates/equibop-matugen.css"
+output_path = "~/.config/equibop/themes/matugen.theme.css"
+post_hook = "sh -c 'python3 \"$HOME/.config/matugen/enable-theme.py\" \"$HOME/.config/equibop/settings/settings.json\" matugen.theme.css'"
+
+# ═══════════════════════════ Fluxer ═══════════════════════════
+# Renders an MD3 token set for the Fluxer chat client. Fluxer has no theme
+# directory and no auto-reload, so after each wallpaper change re-apply it
+# manually: stable → Settings > Look & Feel > Custom Theme Tokens > Custom CSS
+# Overrides (paste the file); canary → Theme Studio > Quick CSS > Import CSS.
+[templates.fluxer]
+input_path = "~/.config/matugen/templates/fluxer-matugen.css"
+output_path = "~/.config/fluxer/matugen.css"
+
+# ═══════════════════════════ Foot ═══════════════════════════
+# Renders the 16-color palette. foot.ini pulls it in with:
+#     include=~/.config/foot/colors.ini
+# (the old [colors-dark] background/foreground block was removed from foot.ini
+# so this file's colors are the ones that apply). New terminals pick it up.
+[templates.foot]
+input_path = "~/.config/matugen/templates/foot-colors.ini"
+output_path = "~/.config/foot/colors.ini"
+
+# ═══════════════════════════ GTK: nautilus & nemo ═══════════════════════════
+# Both gtk-3.0/gtk.css and gtk-4.0/gtk.css `@import 'colors.css';`, so one
+# template feeds both. GTK apps like nautilus refresh via colorreload-gtk-module.
+[templates.gtk3]
+input_path = "~/.config/matugen/templates/gtk-colors.css"
+output_path = "~/.config/gtk-3.0/colors.css"
+
+[templates.gtk4]
+input_path = "~/.config/matugen/templates/gtk-colors.css"
+output_path = "~/.config/gtk-4.0/colors.css"
+
+# ═══════════════════════════ Qt / qt6ct: dolphin ═══════════════════════════
+# Renders the qcolor scheme qt6ct already points at
+# (qt6ct.conf: color_scheme_path=matugen.conf). dolphin + other Qt apps pick
+# it up on their next launch.
+[templates.qt6ct]
+input_path = "~/.config/matugen/templates/qt6ct-colors.conf"
+output_path = "~/.config/qt6ct/colors/matugen.conf"
+
+# ═══════════════════════════ Zen Browser ═══════════════════════════
+# Renders the profile's chrome/userChrome.css and ensures the
+# toolkit.legacyUserProfileCustomizations.stylesheets pref is enabled so the
+# file is actually loaded.
+[templates.zen]
+input_path = "~/.config/matugen/templates/zen-userchrome.css"
+output_path = "~/.config/zen/1zf1flh5.Default (release)/chrome/userChrome.css"
+post_hook = "sh -c 'python3 \"$HOME/.config/matugen/zen-enable-pref.py\" \"$HOME/.config/zen/1zf1flh5.Default (release)/prefs.js\"'"
+
+# ═══════════════════════ Steam (Millennium) ═══════════════════════
+# Renders a complete Millennium skin to ~/.local/share/Steam/millennium/themes/
+# matugen/ — the directory Millennium 3 watches. Select it once in
+# Settings → Themes and every wallpaper change recolors Steam.
+#   • steam-skin.json      → the skin manifest (Millennium looks for this)
+#   • steam-md3.css        → MD3 palette, injected into every window
+#   • steam-*.css          → per-window rules (library/friends/overlay/etc.)
+# No patcher beyond Millennium is needed; see skin.json for the window → css
+# mapping. If your install uses steamui/skins instead of millennium/themes,
+# only the output paths below change.
+# NOTE: outputs intentionally target ~/.local/share/Steam (the real Steam data
+# dir), NOT ~/.steam/steam. ~/.steam/steam must remain a symlink to
+# ~/.local/share/Steam — if matugen creates it as a real directory (e.g. on a
+# fresh install where Steam has never bootstrapped), Steam fails with
+# "Couldn't set up Steam data" because its launcher (bin_steam.sh) cannot
+# repair the link with `ln -fns`. Writing to the real dir works with or
+# without the symlink and shows up via the symlink once Steam runs.
+[templates.steam-skin-json]
+input_path = "~/.config/matugen/templates/steam-skin.json"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/skin.json"
+
+[templates.steam-md3]
+input_path = "~/.config/matugen/templates/steam-md3.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-md3.css"
+
+[templates.steam-libraryroot]
+input_path = "~/.config/matugen/templates/steam-libraryroot.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-libraryroot.css"
+
+[templates.steam-friends]
+input_path = "~/.config/matugen/templates/steam-friends.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-friends.css"
+
+[templates.steam-overlay]
+input_path = "~/.config/matugen/templates/steam-overlay.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-overlay.css"
+
+[templates.steam-notifications]
+input_path = "~/.config/matugen/templates/steam-notifications.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-notifications.css"
+
+[templates.steam-bigpicture]
+input_path = "~/.config/matugen/templates/steam-bigpicture.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-bigpicture.css"
+
+[templates.steam-menu]
+input_path = "~/.config/matugen/templates/steam-menu.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-menu.css"
+
+[templates.steam-webkit]
+input_path = "~/.config/matugen/templates/steam-webkit.css"
+output_path = "~/.local/share/Steam/millennium/themes/matugen/steam-webkit.css"
+
+# ═══════════════════════════ swaync ═══════════════════════════
+# Renders the notification center's whole style.css from the MD3 dark palette
+# (same layout/design as the Dracula default, MD3 colors swapped in place).
+# config.json ships cssPriority = "user", so this file wins over swaync's
+# bundled style.css. Live-applies via --reload-css; no-ops when not running so
+# a wallpaper change from a cron/systemd context can't abort the run.
+[templates.swaync]
+input_path = "~/.config/matugen/templates/swaync-style.css"
+output_path = "~/.config/swaync/style.css"
+post_hook = "sh -c 'swaync-client --reload-css 2>/dev/null || true'"

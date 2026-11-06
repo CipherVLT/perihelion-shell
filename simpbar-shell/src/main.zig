@@ -1,0 +1,2210 @@
+//! simpbar-shell — desktop widgets for Wayland, the Event-Horizon-Shell idea
+//! rewritten in Zig.
+//!
+//! One full-output layer-shell surface per monitor on the `bottom` layer
+//! (above the wallpaper, behind your windows, rainmeter-style), painted
+//! entirely in software into wl_shm ARGB buffers. Each configured widget is
+//! a small paint-only object (see widgets.zig) drawn into that shared
+//! surface; the host repaints lazily — it poll()s with a timeout computed
+//! from the earliest widget cadence deadline, never a fixed animation loop.
+//!
+//! Input is limited to the widget rects (surface set_input_region), so the
+//! rest of the desktop passes clicks straight through to windows.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const posix = std.posix;
+const wayland = @import("wayland");
+const wl = wayland.client.wl;
+const zwlr = wayland.client.zwlr;
+const font_mod = @import("font");
+const logging = @import("logging");
+const widgets_mod = @import("widgets");
+const overview_mod = @import("overview");
+
+pub const panic = std.debug.FullPanic(logging.panicHandler);
+
+const MAX_OUTPUTS: usize = 8;
+// 6 base widgets + 3 sticky notes = 9 ≤ 12. Only bits tell you a tile is
+// stale, without scanning every widget for changes.
+const MAX_WIDGETS: usize = 8;
+const FONT_PIXEL_SIZE: u32 = 13;
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
+
+// getenv by hand — enough here, no env-map machinery needed (same approach
+// as the bar).
+extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+
+const libc_clock = struct {
+    extern "c" fn clock_gettime(clockid: c_int, tp: *posix.timespec) c_int;
+};
+
+/// Monotonic milliseconds since some arbitrary epoch — only deltas are
+/// meaningful. 0.16 removed std.time.milliTimestamp/Instant, and the bar
+/// binds its own libc time helpers, so this follows suit.
+fn nowMs() i64 {
+    var tp: posix.timespec = undefined;
+    if (libc_clock.clock_gettime(1, &tp) != 0) return 0; // 1 = CLOCK_MONOTONIC
+    const sec: i64 = @intCast(tp.sec);
+    const nsec: i64 = @intCast(tp.nsec);
+    return sec * 1000 + @divTrunc(nsec, 1_000_000);
+}
+
+// --- configuration ---------------------------------------------------------
+
+const JsonWidgetCfg = struct {
+    id: []const u8 = "clock",
+    x: i32 = 0,
+    y: i32 = 0,
+    /// Card size override (corner resize persists it here); null/absent
+    /// means the type's base size from cardSizeFor.
+    w: ?u32 = null,
+    h: ?u32 = null,
+};
+
+const JsonConfig = struct {
+    font_path: ?[]const u8 = null,
+    card_bg_opacity: ?u8 = null,
+    card_corner_radius: ?u32 = null,
+    holiday_country: ?[]const u8 = null,
+    holiday_region: ?[]const u8 = null,
+    overview_favorites: ?[]const []const u8 = null,
+    widgets: ?[]const JsonWidgetCfg = null,
+};
+
+const JsonMatugenColors = struct {
+    bg_color: ?[]const u8 = null,
+    text_color: ?[]const u8 = null,
+    border_color: ?[]const u8 = null,
+    hover_color: ?[]const u8 = null,
+    holiday_color: ?[]const u8 = null,
+};
+
+const WidgetCfg = struct {
+    id: widgets_mod.WidgetId,
+    x: i32,
+    y: i32,
+    /// Persisted size override, 0 = base size (matches absent JSON keys).
+    w: u32 = 0,
+    h: u32 = 0,
+};
+
+const ShellConfig = struct {
+    font_path: []const u8 = "",
+    card_bg_opacity: u8 = 55,
+    corner_radius: u32 = 12,
+    holiday_country: []const u8 = "AU",
+    holiday_region: []const u8 = "",
+    /// Overview dash launch commands (shell.json `overview_favorites`).
+    fav_cmds: [overview_mod.MAX_FAVS][]const u8 = undefined,
+    fav_count: usize = 0,
+    widget_cfgs: [MAX_WIDGETS]WidgetCfg = undefined,
+    widget_count: usize = 0,
+};
+
+const DEFAULT_WIDGETS = [_]WidgetCfg{
+    .{ .id = .clock, .x = 24, .y = 24 },
+    .{ .id = .weather, .x = 24, .y = 106 },
+    .{ .id = .media, .x = 24, .y = 176 },
+    // Media is a tall card (cover + progress + controls ≈ 156px at the
+    // 13px font); system sits below it with a gap.
+    .{ .id = .system, .x = 24, .y = 350 },
+    // Calendar below the stack (≈ 215px tall); drag anywhere with
+    // Ctrl+left-click once running.
+    .{ .id = .calendar, .x = 24, .y = 470 },
+    // The single sticky note along the middle-left, clear of the watch
+    // (right) and the weather/media/calendar stack (left column) at the
+    // 13px default font. Drag it anywhere with Ctrl+left-click.
+    .{ .id = .note1, .x = 24, .y = 700 },
+    // The analog watch stands alone on the right — it draws its own steel
+    // case instead of a frosted card.
+    .{ .id = .watch, .x = 1711, .y = 24 },
+    // The desktop-icon grid (~/Desktop shortcuts) floats top-center: both
+    // side columns belong to the widget stack and the watch. Its height
+    // grows and shrinks with the scanned shortcut count; drag it anywhere
+    // with Ctrl+left-click.
+    .{ .id = .icons, .x = 380, .y = 24 },
+};
+
+var shell_config_path_buf: [512]u8 = undefined;
+var shell_config_path: [:0]const u8 = "";
+var matugen_path_buf: [512]u8 = undefined;
+var matugen_path: [:0]const u8 = "";
+var reminders_path_buf: [512]u8 = undefined;
+var reminders_path: [:0]const u8 = "";
+var notes_dir_path_buf: [512]u8 = undefined;
+var notes_dir_path: [:0]const u8 = "";
+var desktop_dir_path_buf: [512]u8 = undefined;
+var desktop_dir_path: [:0]const u8 = "";
+var widgets_disabled_path_buf: [512]u8 = undefined;
+var widgets_disabled_path: [:0]const u8 = "";
+var shell_pidfile_path_buf: [512]u8 = undefined;
+var shell_pidfile_path: [:0]const u8 = "";
+
+/// SIGUSR1 live-reload flag: matugen's post_hook sends the shell the very
+/// same signal it sends the bar (see [templates.simpbar] in
+/// matugen/config.toml), so a wallpaper change reaches both at once. The
+/// handler only raises this — file I/O is not async-signal-safe — and the
+/// poll loop does the reading. The shell is single-threaded, so a plain flag
+/// is enough here; the bar needs a self-pipe only because it isn't.
+var g_reload_pending = std.atomic.Value(bool).init(false);
+
+fn reloadSignalHandler(sig: posix.SIG, info: *const posix.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+    _ = sig;
+    _ = info;
+    _ = ctx;
+    g_reload_pending.store(true, .release);
+}
+
+// --- xkbcommon (hand-bound, like everything else in this shell) ------------
+
+// The sticky notes translate compositor key events back into text, and only
+// xkbcommon can interpret the keymap the compositor sends. The bar links it
+// for the same reason; the C surface here is the four calls we need.
+const xkb = struct {
+    pub const Context = opaque {};
+    pub const Keymap = opaque {};
+    pub const State = opaque {};
+    pub const CONTEXT_NO_FLAGS: c_uint = 0;
+    pub const KEYMAP_FORMAT_TEXT_V1: c_uint = 1;
+    pub const KEYMAP_COMPILE_NO_FLAGS: c_uint = 0;
+
+    extern "c" fn xkb_context_new(flags: c_uint) ?*Context;
+    extern "c" fn xkb_context_unref(ctx: ?*Context) void;
+    extern "c" fn xkb_keymap_new_from_string(ctx: *Context, str: [*:0]const u8, format: c_uint, flags: c_uint) ?*Keymap;
+    extern "c" fn xkb_keymap_unref(keymap: ?*Keymap) void;
+    extern "c" fn xkb_state_new(keymap: *Keymap) ?*State;
+    extern "c" fn xkb_state_unref(state: ?*State) void;
+    extern "c" fn xkb_state_update_mask(state: *State, depressed: u32, latched: u32, locked: u32, depressed_layout: u32, latched_layout: u32, locked_layout: u32) c_int;
+    extern "c" fn xkb_state_key_get_utf32(state: *State, key: u32) u32;
+};
+
+var g_xkb_ctx: ?*xkb.Context = null;
+var g_xkb_keymap: ?*xkb.Keymap = null;
+var g_xkb_state: ?*xkb.State = null;
+/// True once the compositor's keymap has been compiled — note editing won't
+/// decode anything before it (and the self-test waits for it).
+var g_kb_ready = false;
+
+fn resolveConfigPaths() void {
+    const home = std.mem.span(getenv("HOME") orelse return);
+    var dir_buf: [512]u8 = undefined;
+    const dir = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/simpbar", .{home}) catch return;
+    _ = posix.system.mkdir(dir.ptr, 0o755); // EEXIST on a normal first boot — best-effort
+    shell_config_path = std.fmt.bufPrintZ(&shell_config_path_buf, "{s}/shell.json", .{dir}) catch "";
+    matugen_path = std.fmt.bufPrintZ(&matugen_path_buf, "{s}/matugen.json", .{dir}) catch "";
+    reminders_path = std.fmt.bufPrintZ(&reminders_path_buf, "{s}/reminders.txt", .{dir}) catch "";
+    notes_dir_path = std.fmt.bufPrintZ(&notes_dir_path_buf, "{s}/notes", .{dir}) catch "";
+    if (notes_dir_path.len > 0) _ = posix.system.mkdir(notes_dir_path.ptr, 0o755); // sticky-note slots
+    // The shortcuts folder — the freedesktop ~/Desktop. Never mkdir'd
+    // here on purpose: an empty desktop shows no grid, and the app
+    // drawer's "Add to desktop" creates it on the first drop.
+    const homez = std.mem.span(getenv("HOME") orelse "");
+    desktop_dir_path = std.fmt.bufPrintZ(&desktop_dir_path_buf, "{s}/Desktop", .{homez}) catch "";
+    // Per-widget on/off list (written by simpbar-config, one widget id per
+    // line): widgets named here are skipped at startup. Missing file means
+    // all enabled, so fresh installs behave exactly as before. A separate
+    // file rather than flags inside shell.json so the GUI never has to
+    // rewrite shell.json (which would risk clobbering drag-persisted widget
+    // positions); the GUI owns this file outright.
+    widgets_disabled_path = std.fmt.bufPrintZ(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}) catch "";
+    // Pidfile so simpbar-config can restart the widgets when a toggle flips
+    // (same convention as the bar's simpbar.pid).
+    shell_pidfile_path = std.fmt.bufPrintZ(&shell_pidfile_path_buf, "{s}/simpbar-shell.pid", .{dir}) catch "";
+}
+
+fn readFileAlloc(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
+    if (path.len == 0) return error.NoPath;
+    const raw_fd = posix.system.open(path.ptr, .{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
+    if (raw_fd < 0) return error.OpenFailed;
+    const fd: posix.fd_t = @intCast(raw_fd);
+    defer _ = posix.system.close(fd);
+
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
+    var chunk: [4096]u8 = undefined;
+    while (true) {
+        const n = posix.read(fd, &chunk) catch break;
+        if (n == 0) break;
+        try list.appendSlice(allocator, chunk[0..n]);
+        if (list.items.len > 1024 * 1024) break; // sanity cap
+    }
+    return list.toOwnedSlice(allocator);
+}
+
+/// Bitmask of widgets the user switched off in simpbar-config: bit i is
+/// @intFromEnum(WidgetId) for each id named (one per line) in the
+/// widgets-disabled file. Missing/unreadable file = 0 (all enabled).
+/// Unknown ids warn and skip rather than failing startup.
+fn disabledMask(allocator: std.mem.Allocator) u8 {
+    // The u8 mask (and u3 shifts below) hold at most 8 widgets — today there
+    // are 7. Trip the compiler, not a runtime panic, if an 8th+ arrives.
+    comptime {
+        const n = @typeInfo(widgets_mod.WidgetId).@"enum".fields.len;
+        if (n > 8) @compileError("disabledMask: u8 mask holds at most 8 widgets");
+    }
+    if (widgets_disabled_path.len == 0) return 0;
+    const bytes = readFileAlloc(allocator, widgets_disabled_path) catch return 0;
+    defer allocator.free(bytes);
+    var mask: u8 = 0;
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    while (it.next()) |line| {
+        const id = std.mem.trim(u8, line, " \t\r");
+        if (id.len == 0) continue;
+        const e = std.meta.stringToEnum(widgets_mod.WidgetId, id) orelse {
+            logging.warn("widgets: unknown id \"{s}\" in widgets-disabled — skipping", .{id});
+            continue;
+        };
+        mask |= @as(u8, 1) << @as(u3, @intCast(@intFromEnum(e)));
+    }
+    return mask;
+}
+
+/// Compacts cfg.widget_cfgs in place, dropping widgets the user switched off
+/// (see disabledMask). Runs on a startup copy in main(), not on g_shell_cfg —
+/// positions of dropped widgets stay in shell.json untouched, so re-enabling
+/// restores them where they were.
+fn applyDisabledWidgets(allocator: std.mem.Allocator, cfg: *ShellConfig) void {
+    const mask = disabledMask(allocator);
+    if (mask == 0) return;
+    var n: usize = 0;
+    for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
+        const bit: u8 = @as(u8, 1) << @as(u3, @intCast(@intFromEnum(wc.id)));
+        if (mask & bit != 0) {
+            logging.step("widgets: {s} switched off — skipping", .{@tagName(wc.id)});
+            continue;
+        }
+        cfg.widget_cfgs[n] = wc;
+        n += 1;
+    }
+    cfg.widget_count = n;
+}
+
+/// Writes this process's PID to ~/.config/simpbar/simpbar-shell.pid so
+/// simpbar-config knows what to signal when the widgets switch flips.
+/// Best effort, mirroring the bar's writePidfile — a missing pidfile just
+/// means the GUI falls back to spawning, never a reason to fail startup.
+fn writeShellPidfile() void {
+    if (shell_pidfile_path.len == 0) return;
+    const raw_fd = posix.system.open(shell_pidfile_path.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
+    if (raw_fd < 0) return;
+    const fd: posix.fd_t = @intCast(raw_fd);
+    defer _ = posix.system.close(fd);
+    var buf: [16]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{d}\n", .{std.c.getpid()}) catch return;
+    var off: usize = 0;
+    while (off < text.len) {
+        const n = posix.system.write(fd, text[off..].ptr, text.len - off);
+        if (n <= 0) return;
+        off += @intCast(n);
+    }
+}
+
+fn parseHexColor(s: []const u8) !u32 {
+    if (s.len != 7 or s[0] != '#') return error.InvalidColor;
+    const rgb = try std.fmt.parseInt(u32, s[1..7], 16);
+    return 0xFF000000 | rgb;
+}
+
+/// The startup config, kept around so config writes (drag-persisted widget
+/// positions) can round-trip every other key untouched.
+var g_shell_cfg: ShellConfig = blk: {
+    var c = ShellConfig{};
+    for (DEFAULT_WIDGETS, 0..) |dw, i| c.widget_cfgs[i] = dw;
+    c.widget_count = DEFAULT_WIDGETS.len;
+    break :blk c;
+};
+
+/// Reads shell.json (missing/malformed → defaults). Read once at startup —
+/// no live reload in v1.
+fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
+    var cfg = ShellConfig{};
+    for (DEFAULT_WIDGETS, 0..) |dw, i| cfg.widget_cfgs[i] = dw;
+    cfg.widget_count = DEFAULT_WIDGETS.len;
+    // Dash defaults until shell.json lists its own overview_favorites.
+    for (overview_mod.DEFAULT_FAVS, 0..) |f, i| cfg.fav_cmds[i] = f;
+    cfg.fav_count = overview_mod.DEFAULT_FAVS.len;
+    g_shell_cfg = cfg;
+    if (shell_config_path.len == 0) return cfg;
+
+    const bytes = readFileAlloc(gpa, shell_config_path) catch |err| {
+        if (err != error.OpenFailed) {
+            logging.warn("config: could not read {s}: {}", .{ shell_config_path, err });
+        }
+        return cfg;
+    };
+    defer gpa.free(bytes);
+
+    // alloc_always: the default (alloc_if_needed) would leave string fields
+    // pointing into `bytes`, which is freed below — a dangling holiday_country
+    // then segfaults the calendar widget's configure(). Strings must outlive
+    // this function (they land in cfg / g_shell_cfg for the process lifetime).
+    const parsed = std.json.parseFromSliceLeaky(JsonConfig, gpa, bytes, .{
+        .ignore_unknown_fields = true,
+        .allocate = .alloc_always,
+    }) catch |err| {
+        logging.warn("config: could not parse {s}: {} — keeping defaults", .{ shell_config_path, err });
+        return cfg;
+    };
+
+    if (parsed.font_path) |fp| {
+        if (fp.len > 0) cfg.font_path = fp;
+    }
+    if (parsed.card_bg_opacity) |a| cfg.card_bg_opacity = @min(a, 100);
+    if (parsed.card_corner_radius) |r| cfg.corner_radius = r;
+    if (parsed.holiday_country) |hc| {
+        if (hc.len > 0) cfg.holiday_country = hc;
+    }
+    if (parsed.holiday_region) |hr| cfg.holiday_region = hr;
+    if (parsed.overview_favorites) |fs| {
+        // An explicit list replaces the defaults entirely (including an
+        // explicit empty list = no dash). Strings are alloc_always, so they
+        // live for the process — saveConfig round-trips them later.
+        var n: usize = 0;
+        for (fs) |f| {
+            if (f.len == 0 or n >= overview_mod.MAX_FAVS) continue;
+            cfg.fav_cmds[n] = f;
+            n += 1;
+        }
+        cfg.fav_count = n;
+    }
+    if (parsed.widgets) |ws| {
+        if (ws.len == 0) {
+            cfg.widget_count = 0; // explicit empty list = all widgets off
+            g_shell_cfg = cfg;
+            return cfg;
+        }
+        var count: usize = 0;
+        for (ws) |w| {
+            if (count >= MAX_WIDGETS) break;
+            const id = std.meta.stringToEnum(widgets_mod.WidgetId, w.id) orelse {
+                logging.warn("config: unknown widget id \"{s}\" — skipping", .{w.id});
+                continue;
+            };
+            cfg.widget_cfgs[count] = .{ .id = id, .x = w.x, .y = w.y, .w = w.w orelse 0, .h = w.h orelse 0 };
+            count += 1;
+        }
+        // Backfill defaults for widgets shell.json doesn't name (it only
+        // gains entries when a widget is dragged, so never-dragged widgets
+        // would otherwise vanish entirely): every widget always exists with
+        // a position, and widgets-disabled alone controls visibility. This
+        // mirrors the bar GUI's ensureKindsPresent for the same "modules
+        // disappeared" trap.
+        for (DEFAULT_WIDGETS) |dw| {
+            var found = false;
+            for (cfg.widget_cfgs[0..count]) |wc| {
+                if (wc.id == dw.id) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found and count < MAX_WIDGETS) {
+                cfg.widget_cfgs[count] = dw;
+                count += 1;
+            }
+        }
+        cfg.widget_count = count;
+    }
+    g_shell_cfg = cfg;
+    return cfg;
+}
+
+/// Merges the matugen palette (same keys the bar reads) when present.
+/// Any failure keeps the defaults entirely.
+fn tryApplyMatugenColors(gpa: std.mem.Allocator, theme: *widgets_mod.Theme) bool {
+    if (matugen_path.len == 0) return false;
+    const bytes = readFileAlloc(gpa, matugen_path) catch |err| {
+        if (err != error.OpenFailed) {
+            logging.warn("config: could not read {s}: {}", .{ matugen_path, err });
+        }
+        return false;
+    };
+    defer gpa.free(bytes);
+    const colors = std.json.parseFromSliceLeaky(JsonMatugenColors, gpa, bytes, .{
+        .ignore_unknown_fields = true,
+    }) catch |err| {
+        logging.warn("config: could not parse {s}: {} — keeping defaults", .{ matugen_path, err });
+        return false;
+    };
+    if (colors.bg_color) |hex| {
+        theme.bg_color = parseHexColor(hex) catch theme.bg_color;
+    }
+    if (colors.text_color) |hex| {
+        theme.text_color = parseHexColor(hex) catch theme.text_color;
+    }
+    if (colors.border_color) |hex| {
+        theme.border_color = parseHexColor(hex) catch theme.border_color;
+    }
+    if (colors.hover_color) |hex| {
+        theme.hover_color = parseHexColor(hex) catch theme.hover_color;
+    }
+    if (colors.holiday_color) |hex| {
+        theme.holiday_color = parseHexColor(hex) catch theme.holiday_color;
+    }
+    return true;
+}
+
+/// Re-reads the palette on SIGUSR1 so a wallpaper change reaches the widgets
+/// the same moment it reaches the bar. Rebuilt from defaults exactly like the
+/// startup path — never mutated — so a key dropped from the file falls back
+/// instead of carrying yesterday's value forward; shell.json's card alpha and
+/// corner radius are carried over untouched. Widget *placement* is
+/// deliberately not re-applied (that needs a rebuild, and the hook only ever
+/// fires for palette changes). With no readable file the current palette
+/// stays put rather than snapping back to grey defaults.
+fn reloadTheme(host: *Host) void {
+    var theme = widgets_mod.Theme{
+        .card_alpha = host.theme.card_alpha,
+        .radius_px = host.theme.radius_px,
+    };
+    if (!tryApplyMatugenColors(host.gpa, &theme)) {
+        logging.warn("theme: reload found no matugen colors — keeping the current palette", .{});
+        return;
+    }
+    host.theme = theme;
+    // Every cached tile still holds the old colours, so invalidate all of
+    // them — the same frame-wide reset the hover path uses.
+    markAllDirty(host);
+    logging.step("theme: reloaded matugen colors", .{});
+}
+
+fn setCloexec(fd: posix.fd_t) void {
+    _ = std.c.fcntl(fd, 2, @as(c_int, 1)); // F_SETFD, FD_CLOEXEC
+}
+
+fn fontPathZ(path: []const u8, buf: []u8) ?[:0]const u8 {
+    if (path.len == 0 or path.len >= buf.len) return null;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    return buf[0..path.len :0];
+}
+
+// --- Wayland plumbing ------------------------------------------------------
+
+const Globals = struct {
+    compositor: ?*wl.Compositor = null,
+    shm: ?*wl.Shm = null,
+    layer_shell: ?*zwlr.LayerShellV1 = null,
+    /// zwlr_screencopy_manager_v1 (bound at v1, see overview.zig): the
+    /// overview's real window thumbnails. Absent on compositors without it
+    /// — the overview falls back to icon cards.
+    screencopy: ?*zwlr.ScreencopyManagerV1 = null,
+    seat: ?*wl.Seat = null,
+    seat_has_pointer: bool = false,
+    seat_has_keyboard: bool = false,
+    /// Outputs + their wl_output.name (v4) — the names tie hyprctl's JSON
+    /// ("focused monitor") to a real wl_output for screencopy/layer mapping.
+    outputs: overview_mod.OutputSet = .{},
+};
+
+fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, globals: *Globals) void {
+    switch (event) {
+        .global => |g| {
+            const iface = std.mem.sliceTo(g.interface, 0);
+            if (std.mem.eql(u8, iface, "wl_compositor")) {
+                globals.compositor = registry.bind(g.name, wl.Compositor, 4) catch return;
+            } else if (std.mem.eql(u8, iface, "wl_shm")) {
+                globals.shm = registry.bind(g.name, wl.Shm, 1) catch return;
+            } else if (std.mem.eql(u8, iface, "zwlr_layer_shell_v1")) {
+                globals.layer_shell = registry.bind(g.name, zwlr.LayerShellV1, 4) catch return;
+            } else if (std.mem.eql(u8, iface, "wl_seat")) {
+                const seat = registry.bind(g.name, wl.Seat, 7) catch return;
+                globals.seat = seat;
+                seat.setListener(*Globals, seatListener, globals);
+            } else if (std.mem.eql(u8, iface, "wl_output")) {
+                const output = registry.bind(g.name, wl.Output, 4) catch return;
+                const slot = globals.outputs.add(output) orelse return;
+                output.setListener(*overview_mod.OutputSet.Slot, overview_mod.OutputSet.listener, slot);
+            } else if (std.mem.eql(u8, iface, "zwlr_screencopy_manager_v1")) {
+                // v1 is all the overview needs (buffer/copy/ready/failed),
+                // and skipping v3's buffer_done handshake keeps the capture
+                // state machine trivial — bind below whatever's advertised.
+                globals.screencopy = registry.bind(g.name, zwlr.ScreencopyManagerV1, @min(g.version, 1)) catch return;
+            }
+        },
+        .global_remove => {},
+    }
+}
+
+fn seatListener(_: *wl.Seat, event: wl.Seat.Event, globals: *Globals) void {
+    switch (event) {
+        .capabilities => |caps| {
+            globals.seat_has_pointer = caps.capabilities.pointer;
+            globals.seat_has_keyboard = caps.capabilities.keyboard;
+        },
+        .name => {},
+    }
+}
+
+const Desktop = struct {
+    host: *Host,
+    surface: *wl.Surface,
+    layer_surface: *zwlr.LayerSurfaceV1,
+    width: u32 = 0,
+    height: u32 = 0,
+    configured: bool = false,
+};
+
+const Host = struct {
+    gpa: std.mem.Allocator,
+    theme: widgets_mod.Theme,
+    font: *font_mod.Font,
+    shm: *wl.Shm,
+    compositor: *wl.Compositor,
+    desktops: [MAX_OUTPUTS]Desktop = undefined,
+    desktop_count: usize = 0,
+    widgets: [MAX_WIDGETS]widgets_mod.Widget = undefined,
+    widget_rects: [MAX_WIDGETS]widgets_mod.Rect = undefined,
+    widget_count: usize = 0,
+    next_tick_ms: [MAX_WIDGETS]i64 = [_]i64{0} ** MAX_WIDGETS,
+    needs_repaint: bool = false,
+    /// Per-widget ARGB tile cache (allocated in initWidgets, freed in
+    /// main): a widget re-renders into its own tile only when its
+    /// `tile_dirty` bit is set, and every frame just composites the tiles
+    /// onto a fresh zero-filled surface. The watch's 6 Hz beat then costs
+    /// one 190x240 repaint instead of re-rastering every widget on every
+    /// output (measured: 12% -> ~3% of a core).
+    tiles: [MAX_WIDGETS]?[]u32 = [_]?[]u32{null} ** MAX_WIDGETS,
+    tile_dirty: u16 = 0xFFFF, // all dirty until first paint; MAX_WIDGETS ≤ 16
+    /// Per-widget zoomed fonts (corner resize scales content, not just the
+    /// card): slot i holds a face at the integer pixel size matching the
+    /// widget's current zoom, or null when it renders at base size / the
+    /// scaled load failed. Re-created only when the size bucket changes.
+    /// Note1 never zooms (it reflows) and always uses the shared font.
+    zoom_fonts: [MAX_WIDGETS]?font_mod.Font = [_]?font_mod.Font{null} ** MAX_WIDGETS,
+    zoom_px: [MAX_WIDGETS]u32 = [_]u32{0} ** MAX_WIDGETS,
+    hovered_index: ?usize = null,
+    pointer_desktop: ?usize = null,
+    pointer_x: i32 = 0,
+    pointer_y: i32 = 0,
+    // Sticky-note editing: the one note currently receiving keys via the
+    // compositor's on_demand keyboard grab. The host owns the slot (the
+    // widget owns text/caret) and the key-repeat clock.
+    edit_index: ?usize = null,
+    repeat_key: ?u32 = null,
+    repeat_next_ms: i64 = 0,
+    kb_rate: i32 = 0, // key auto-repeat from wl_keyboard.repeat_info (0 = off)
+    kb_delay: i32 = 400,
+    // Ctrl+drag state. A press is held pending until release so the Ctrl
+    // decision survives the focus-on-click ordering (the modifiers event can
+    // arrive just after the press): press+Ctrl becomes a drag, anything else
+    // becomes a click on release.
+    ctrl_down: bool = false,
+    left_down: bool = false,
+    press_index: ?usize = null,
+    drag_index: ?usize = null,
+    drag_off_x: i32 = 0,
+    drag_off_y: i32 = 0,
+    /// Corner-resize grab: press on a card's bottom-right grip starts a
+    /// live resize (top-left pinned) instead of a click or a move. Offsets
+    /// keep the grabbed corner under the pointer, mirroring drag_off_*.
+    resize_index: ?usize = null,
+    resize_off_x: i32 = 0,
+    resize_off_y: i32 = 0,
+    // Bezel-timer grab on the watch: press (no Ctrl) on the bezel ring
+    // starts a circular turn. Angles are pointer angles about the dial
+    // center (0 at 12, clockwise); the widget folds the swept angle into
+    // its resting offset.
+    bezel_index: ?usize = null,
+    bezel_base: u8 = 0,
+    bezel_last_a: f64 = 0,
+    bezel_accum: f64 = 0,
+    // Overview mode (Alt+W): a second layer surface on the overlay layer,
+    // created on open and destroyed on close. Null when construction
+    // failed — that degrades the feature, never the shell.
+    overview: ?*overview_mod.Overview = null,
+    /// True while pointer focus sits on the overview surface rather than a
+    /// desktop surface (routes motion/clicks there instead of widgets).
+    pointer_over_ov: bool = false,
+};
+
+fn initWidgets(host: *Host, cfg: ShellConfig) void {
+    for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
+        // Base size for the type, overridden by a persisted corner resize
+        // (clamped: never below the designed base, never absurd — a
+        // hand-edited monster still gets a tile).
+        const base = widgets_mod.cardSizeFor(wc.id, host.font);
+        var size = base;
+        if (wc.w != 0) size[0] = @max(wc.w, base[0]);
+        if (wc.h != 0) size[1] = @max(wc.h, base[1]);
+        size[0] = @min(size[0], 2048);
+        size[1] = @min(size[1], 2048);
+        host.widgets[host.widget_count] = switch (wc.id) {
+            .clock => .{ .clock = .{} },
+            .weather => .{ .weather = .{} },
+            .media => .{ .media = .{} },
+            .system => .{ .system = .{} },
+            .calendar => .{ .calendar = .{} },
+            .note1 => .{ .note1 = .{} },
+            .watch => .{ .watch = .{} },
+            .icons => .{ .icons = .{} },
+        };
+        if (wc.id == .calendar) {
+            host.widgets[host.widget_count].calendar.configure(
+                reminders_path,
+                cfg.holiday_country,
+                cfg.holiday_region,
+            );
+        } else switch (wc.id) {
+            // Sticky note loads its text (possibly empty) from disk.
+            .note1 => host.widgets[host.widget_count].note1.configure(notes_dir_path, 1),
+            // Desktop icons arm the inotify watch and take their first
+            // scan right away; sizing waits for the first paintDesktop.
+            .icons => host.widgets[host.widget_count].icons.configure(host.gpa, desktop_dir_path),
+            else => {},
+        }
+        host.widget_rects[host.widget_count] = .{
+            .x = wc.x,
+            .y = wc.y,
+            .w = size[0],
+            .h = size[1],
+        };
+        // Its private paint tile (see Host.tiles). OOM here can't be
+        // recovered from — the widget would have nowhere to draw — so log
+        // and leave the tile null; paintDesktop skips null tiles.
+        const n = host.widget_count;
+        host.tiles[n] = blk: {
+            const area: usize = @as(usize, size[0]) * @as(usize, size[1]);
+            break :blk host.gpa.alloc(u32, area) catch |err| {
+                logging.err("widgets: could not allocate {s} tile: {}", .{ @tagName(wc.id), err });
+                break :blk null;
+            };
+        };
+        host.widget_count += 1;
+    }
+}
+
+/// Restricts the desktop surface's input to the union of widget rects so the
+/// rest of the desktop passes clicks through to windows.
+fn setInputRegion(host: *Host, d: *Desktop) void {
+    const region = host.compositor.createRegion() catch return;
+    defer region.destroy();
+    for (0..host.widget_count) |i| {
+        const r = host.widget_rects[i];
+        region.add(r.x, r.y, @intCast(r.w), @intCast(r.h));
+    }
+    d.surface.setInputRegion(region);
+}
+
+/// Applies the (possibly moved) widget rects to every output's input region.
+fn refreshInputRegions(host: *Host) void {
+    for (0..host.desktop_count) |i| setInputRegion(host, &host.desktops[i]);
+}
+
+/// Escapes a string into a JSON double-quoted value body.
+fn jsonEscape(s: []const u8, out: []u8) ?[]const u8 {
+    var n: usize = 0;
+    for (s) |ch| {
+        if (ch == '"' or ch == '\\') {
+            if (n + 2 > out.len) return null;
+            out[n] = '\\';
+            out[n + 1] = ch;
+            n += 2;
+        } else if (ch >= 0x20) {
+            if (n + 1 > out.len) return null;
+            out[n] = ch;
+            n += 1;
+        }
+    }
+    return out[0..n];
+}
+
+/// Writes shell.json with the current widget positions (after a drag),
+/// round-tripping every other key from the config loaded at startup.
+/// Temp file + rename so a crash mid-write can't corrupt the config.
+fn saveConfig(host: *Host) void {
+    if (shell_config_path.len == 0) return;
+
+    const W = struct {
+        buf: []u8,
+        len: usize = 0,
+        fn append(self: *@This(), s: []const u8) bool {
+            if (self.len + s.len > self.buf.len) return false;
+            @memcpy(self.buf[self.len..][0..s.len], s);
+            self.len += s.len;
+            return true;
+        }
+        fn appendFmt(self: *@This(), comptime fmt: []const u8, args: anytype) bool {
+            const s = std.fmt.bufPrint(self.buf[self.len..], fmt, args) catch return false;
+            self.len += s.len;
+            return true;
+        }
+    };
+
+    var out: [8192]u8 = undefined;
+    var w = W{ .buf = &out };
+    // One scratch escape buffer, reused per field — each escaped value is
+    // appended (copied into `out`) before the next escape overwrites it.
+    var esc: [600]u8 = undefined;
+
+    const font_esc = jsonEscape(g_shell_cfg.font_path, &esc) orelse return;
+    if (!w.appendFmt(
+        "{{\n  \"font_path\": \"{s}\",\n  \"card_bg_opacity\": {d},\n  \"card_corner_radius\": {d},\n",
+        .{ font_esc, g_shell_cfg.card_bg_opacity, g_shell_cfg.corner_radius },
+    )) return;
+    const country_esc = jsonEscape(g_shell_cfg.holiday_country, &esc) orelse return;
+    if (!w.appendFmt("  \"holiday_country\": \"{s}\",\n", .{country_esc})) return;
+    const region_esc = jsonEscape(g_shell_cfg.holiday_region, &esc) orelse return;
+    if (!w.appendFmt("  \"holiday_region\": \"{s}\",\n", .{region_esc})) return;
+    // overview_favorites round-trips too — saveConfig must not drop keys it
+    // didn't just write (that's the whole round-trip contract here).
+    if (!w.append("  \"overview_favorites\": [")) return;
+    for (0..g_shell_cfg.fav_count) |i| {
+        const fav_esc = jsonEscape(g_shell_cfg.fav_cmds[i], &esc) orelse return;
+        const tail: []const u8 = if (i + 1 == g_shell_cfg.fav_count) "],\n" else ", ";
+        if (!w.appendFmt("\"{s}\"{s}", .{ fav_esc, tail })) return;
+    }
+    if (g_shell_cfg.fav_count == 0 and !w.append("],\n")) return;
+    if (!w.append("  \"widgets\": [\n")) return;
+    for (0..host.widget_count) |i| {
+        const id = std.meta.activeTag(host.widgets[i]);
+        const r = host.widget_rects[i];
+        const tail: []const u8 = if (i + 1 == host.widget_count) "\n" else ",\n";
+        if (!w.appendFmt(
+            "    {{ \"id\": \"{s}\", \"x\": {d}, \"y\": {d}, \"w\": {d}, \"h\": {d} }}{s}",
+            .{ @tagName(id), r.x, r.y, r.w, r.h, tail },
+        )) return;
+    }
+    if (!w.append("  ]\n}\n")) return;
+
+    var tmp_buf: [532]u8 = undefined;
+    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.tmp", .{shell_config_path}) catch return;
+    const raw_fd = posix.system.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
+    if (raw_fd < 0) {
+        logging.warn("config: could not write {s}", .{tmp});
+        return;
+    }
+    const fd: posix.fd_t = @intCast(raw_fd);
+    var off: usize = 0;
+    while (off < w.len) {
+        const n = std.c.write(fd, out[off..w.len].ptr, w.len - off);
+        if (n <= 0) break;
+        off += @intCast(n);
+    }
+    _ = posix.system.close(fd);
+    if (off != w.len) {
+        logging.warn("config: short write to {s}", .{tmp});
+        return;
+    }
+    if (std.c.rename(tmp.ptr, shell_config_path.ptr) != 0) {
+        logging.warn("config: could not rename {s} into place", .{tmp});
+        return;
+    }
+    logging.step("config: saved widget positions to {s}", .{shell_config_path});
+}
+
+fn paintDesktop(host: *Host, d: *Desktop) !void {
+    const stride = d.width * 4; // ARGB8888
+    const size: usize = @as(usize, stride) * d.height;
+    if (size == 0) return;
+
+    const fd = try posix.memfd_create("simpbar-shell-buffer", 0);
+    defer _ = posix.system.close(fd);
+    switch (posix.errno(posix.system.ftruncate(fd, @intCast(size)))) {
+        .SUCCESS => {},
+        else => return error.FTruncateFailed,
+    }
+    const data = try posix.mmap(
+        null,
+        size,
+        .{ .READ = true, .WRITE = true },
+        .{ .TYPE = .SHARED },
+        fd,
+        0,
+    );
+    defer posix.munmap(data);
+
+    const pixels: [*]u32 = @ptrCast(@alignCast(data.ptr));
+    // No explicit clear: a freshly ftruncate'd memfd reads as zeros, and
+    // every widget pixel below is blitted from its tile — the untouched
+    // background stays fully transparent.
+
+    // 0) Content-driven icons: the grid's tile grows/shrinks with the
+    //    scanned shortcut count before its dirty-bit tile renders.
+    applyIconsSize(host);
+
+    // 1) Re-render the tiles whose widgets asked for it (state change from
+    //    tick/onPipe/click, or a frame-wide hover/theme change). A tile is
+    //    widget-local: rect at (0, 0), so paint coordinates stay small.
+    for (0..host.widget_count) |i| {
+        const bit = @as(u16, 1) << @intCast(i);
+        if ((host.tile_dirty & bit) == 0) continue;
+        const tile = host.tiles[i] orelse continue;
+        // Fresh backdrop every re-render — cards and glyph edges alpha-
+        // blend, so leftover pixels from the previous render (or the
+        // allocator's 0xAA fill pattern) would bleed through. Same reason
+        // the old path memset the whole surface.
+        @memset(tile, 0);
+        const rect = host.widget_rects[i];
+        // Corner-resize zoom: content scales with the card (note1 reflows
+        // at base size instead). Font and layout zoom travel together via
+        // the swapped face + Canvas.zoom, so metrics never disagree.
+        const zoom = widgetZoom(host, i);
+        const tc = widgets_mod.Canvas{
+            .pixels = tile.ptr,
+            .width = rect.w,
+            .height = rect.h,
+            .font = zoomFontFor(host, i, zoom),
+            .theme = &host.theme,
+            .zoom = zoom,
+        };
+        const tr = widgets_mod.Rect{ .x = 0, .y = 0, .w = rect.w, .h = rect.h };
+        // The watch draws its own steel case — no frosted card behind it
+        // (the case and bracelet ARE the widget chrome). Same for the
+        // desktop-icon grid: bare glyphs over the wallpaper like a classic
+        // desktop. Cards never highlight on hover — the fill stays bg_color
+        // under the pointer; hover tracking itself (clicks, the weather
+        // condition-fx) is untouched, only the wash is gone.
+        switch (std.meta.activeTag(host.widgets[i])) {
+            .watch, .icons => {},
+            else => {
+                const fill = widgets_mod.withAlpha(
+                    host.theme.bg_color,
+                    host.theme.card_alpha,
+                );
+                tc.card(tr, fill, host.theme.border_color);
+            },
+        }
+        host.widgets[i].paint(tc, tr);
+        // Resize affordance over the content (tile-local): visible while
+        // hovered or grabbed, repainted away with the tile otherwise. The
+        // icons grid is content-sized, so it never shows the grip.
+        if ((host.hovered_index == i or host.resize_index == i) and
+            std.meta.activeTag(host.widgets[i]) != .icons)
+        {
+            drawResizeGrip(tc, tr);
+        }
+    }
+    host.tile_dirty = 0;
+
+    // 2) Composite every tile onto the fresh surface (positions come from
+    //    the current rects, so drags just move the blits).
+    for (0..host.widget_count) |i| {
+        const tile = host.tiles[i] orelse continue;
+        blitTile(pixels, d, host.widget_rects[i], tile);
+    }
+
+    const pool = try host.shm.createPool(fd, @intCast(size));
+    defer pool.destroy();
+    const buffer = try pool.createBuffer(
+        0,
+        @intCast(d.width),
+        @intCast(d.height),
+        @intCast(stride),
+        .argb8888,
+    );
+    defer buffer.destroy();
+
+    d.surface.attach(buffer, 0, 0);
+    d.surface.damageBuffer(0, 0, @intCast(d.width), @intCast(d.height));
+    d.surface.commit();
+}
+
+/// Row-wise copy of a widget's tile onto the surface, clipped to it (a
+/// widget may sit partially off-edge if an output shrinks under it).
+fn blitTile(pixels: [*]u32, d: *Desktop, r: widgets_mod.Rect, tile: []const u32) void {
+    const tw: i32 = @intCast(r.w);
+    const th: i32 = @intCast(r.h);
+    const sx0 = @max(0, -r.x);
+    const sy0 = @max(0, -r.y);
+    const sx1 = @min(tw, @as(i32, @intCast(d.width)) - r.x);
+    const sy1 = @min(th, @as(i32, @intCast(d.height)) - r.y);
+    if (sx1 <= sx0 or sy1 <= sy0) return;
+    const dst_x: usize = @intCast(@max(r.x, 0) + sx0);
+    const row_len: usize = @intCast(sx1 - sx0);
+    var sy: i32 = sy0;
+    while (sy < sy1) : (sy += 1) {
+        const dst_y: usize = @intCast(@max(r.y, 0) + sy);
+        const src_off: usize = @as(usize, @intCast(sy * tw)) + @as(usize, @intCast(sx0));
+        const dst_off = dst_y * d.width + dst_x;
+        @memcpy(pixels[dst_off .. dst_off + row_len], tile[src_off .. src_off + row_len]);
+    }
+}
+
+/// State inside widget `i` changed (tick / fetch / click) — its tile must
+/// re-render before the next frame.
+fn markDirty(host: *Host, i: usize) void {
+    host.needs_repaint = true;
+    host.tile_dirty |= @as(u16, 1) << @intCast(i);
+}
+
+/// A frame-wide factor changed (hover highlight): every tile is stale.
+fn markAllDirty(host: *Host) void {
+    host.needs_repaint = true;
+    host.tile_dirty = 0xFFFF;
+}
+
+/// Content-driven sizing for the desktop-icons grid: each scan changes the
+/// item count, so the widget's rect tracks the grid (zero = no grid at
+/// all). Runs at the top of paintDesktop so a resize lands before the tile
+/// renders; a rect change also re-establishes input regions immediately.
+fn applyIconsSize(host: *Host) void {
+    for (0..host.widget_count) |i| {
+        if (std.meta.activeTag(host.widgets[i]) != .icons) continue;
+        const want = widgets_mod.IconsWidget.gridSizeFor(host.widgets[i].icons.item_count);
+        const r = &host.widget_rects[i];
+        if (r.w == want[0] and r.h == want[1]) continue;
+        r.w = @intCast(want[0]);
+        r.h = @intCast(want[1]);
+        if (want[0] == 0 or want[1] == 0) {
+            // Empty folder: drop the tile; a zero rect paints and blits
+            // nothing and keeps no input region (initWidgets allocated a
+            // base-size tile for the first frame only).
+            if (host.tiles[i]) |t| host.gpa.free(t);
+            host.tiles[i] = null;
+            markDirty(host, i);
+        } else {
+            reallocTile(host, i); // frees, reallocs, marks dirty
+        }
+        refreshInputRegions(host);
+        host.needs_repaint = true;
+    }
+}
+
+/// Motion pass for the desktop icons (hover wash + popup rows). Returns
+/// repaint-need; `active` = the pointer currently sits on a desktop surface.
+fn iconsPointerChanged(host: *Host, active: bool) bool {
+    var changed = false;
+    for (0..host.widget_count) |i| {
+        if (std.meta.activeTag(host.widgets[i]) != .icons) continue;
+        if (host.widgets[i].icons.pointer(host.widget_rects[i], active, host.pointer_x, host.pointer_y)) {
+            markDirty(host, i);
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+/// Any open icons popup closes (a press landed elsewhere, or the pointer
+/// left the grid entirely).
+fn closeIconsMenus(host: *Host) void {
+    for (0..host.widget_count) |i| {
+        if (std.meta.activeTag(host.widgets[i]) != .icons) continue;
+        if (host.widgets[i].icons.menu_open) {
+            host.widgets[i].icons.closeMenu();
+            markDirty(host, i);
+        }
+    }
+}
+
+/// Right-button press routing: over the icons grid it opens the Open/Remove
+/// popup for the cell under the pointer; anywhere else it just dismisses
+/// an open popup. Driven through pointerButton like every other press, so
+/// the self-test exercises the same path.
+fn handleRightPress(host: *Host) void {
+    var hit: ?usize = null;
+    for (0..host.widget_count) |i| {
+        if (host.widget_rects[i].contains(host.pointer_x, host.pointer_y)) {
+            hit = i;
+            break;
+        }
+    }
+    if (hit) |i| {
+        if (std.meta.activeTag(host.widgets[i]) == .icons) {
+            host.widgets[i].icons.rightClick(host.widget_rects[i], host.pointer_x, host.pointer_y);
+            markDirty(host, i);
+            return;
+        }
+    }
+    closeIconsMenus(host);
+}
+
+fn layerSurfaceListener(_: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, d: *Desktop) void {
+    switch (event) {
+        .configure => |cfg| {
+            d.layer_surface.ackConfigure(cfg.serial);
+            if (cfg.width > 0) d.width = cfg.width;
+            if (cfg.height > 0) d.height = cfg.height;
+            if (!d.configured) {
+                d.configured = true;
+                setInputRegion(d.host, d);
+            }
+            paintDesktop(d.host, d) catch |err| {
+                logging.err("draw failed: {}", .{err});
+            };
+        },
+        .closed => std.process.exit(0),
+    }
+}
+
+/// Returns true if the hovered widget changed (caller should repaint).
+fn updateHover(host: *Host) bool {
+    var new_hover: ?usize = null;
+    for (0..host.widget_count) |i| {
+        if (host.widget_rects[i].contains(host.pointer_x, host.pointer_y)) {
+            new_hover = i;
+            break;
+        }
+    }
+    if (new_hover == host.hovered_index) return false;
+    host.hovered_index = new_hover;
+    return true;
+}
+
+fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
+    switch (event) {
+        .enter => |e| {
+            if (host.overview) |ov| {
+                if (ov.surface == e.surface) {
+                    host.pointer_over_ov = true;
+                    host.pointer_desktop = null;
+                    ov.motion(e.surface_x.toInt(), e.surface_y.toInt());
+                    return;
+                }
+            }
+            host.pointer_over_ov = false;
+            for (0..host.desktop_count) |i| {
+                if (host.desktops[i].surface == e.surface) {
+                    host.pointer_desktop = i;
+                    break;
+                }
+            }
+            host.pointer_x = e.surface_x.toInt();
+            host.pointer_y = e.surface_y.toInt();
+            if (updateHover(host)) markAllDirty(host);
+            _ = iconsPointerChanged(host, true);
+        },
+        .leave => {
+            if (host.pointer_over_ov) {
+                host.pointer_over_ov = false;
+                if (host.overview) |ov| ov.leave();
+                return;
+            }
+            host.pointer_desktop = null;
+            // While a button is held the implicit grab keeps events flowing,
+            // so a leave during a drag shouldn't (and normally can't) happen.
+            if (host.drag_index == null and host.hovered_index != null) {
+                host.hovered_index = null;
+                markAllDirty(host);
+            }
+            _ = iconsPointerChanged(host, false);
+        },
+        .motion => |e| {
+            if (host.pointer_over_ov) {
+                if (host.overview) |ov| ov.motion(e.surface_x.toInt(), e.surface_y.toInt());
+                return;
+            }
+            host.pointer_x = e.surface_x.toInt();
+            host.pointer_y = e.surface_y.toInt();
+            if (host.bezel_index) |i| {
+                // Bezel turn in progress: the insert follows the pointer
+                // around the dial. Tiles are position-independent here too —
+                // only the bezel offset changed, so just re-render it.
+                turnBezel(host, i);
+            } else if (host.resize_index) |i| {
+                // Corner resize in progress: grow/shrink the card live with
+                // the top-left pinned, reallocating the paint tile as the
+                // size changes (content re-renders from the new rect, so
+                // rect-relative widgets like weather fx and notes reflow).
+                const r = &host.widget_rects[i];
+                const base = widgets_mod.cardSizeFor(std.meta.activeTag(host.widgets[i]), host.font);
+                const d = &host.desktops[host.pointer_desktop orelse 0];
+                var nw = host.pointer_x - r.x + host.resize_off_x;
+                var nh = host.pointer_y - r.y + host.resize_off_y;
+                nw = std.math.clamp(nw, @as(i32, @intCast(base[0])), @as(i32, @intCast(d.width)));
+                nh = std.math.clamp(nh, @as(i32, @intCast(base[1])), @as(i32, @intCast(d.height)));
+                if (@as(i64, nw) != @as(i64, r.w) or @as(i64, nh) != @as(i64, r.h)) {
+                    r.w = @intCast(nw);
+                    r.h = @intCast(nh);
+                    clampWidget(host, i); // keep the grown card on its output
+                    reallocTile(host, i); // frees, reallocs, marks dirty
+                    host.hovered_index = i;
+                    host.needs_repaint = true;
+                }
+            } else if (host.drag_index) |i| {
+                // Ctrl+drag in progress: the card follows the pointer,
+                // clamped to the output it's being moved on. Tiles are
+                // position-independent — only the blit moves, so no
+                // re-render is needed, just a new frame.
+                const r = &host.widget_rects[i];
+                r.x = host.pointer_x - host.drag_off_x;
+                r.y = host.pointer_y - host.drag_off_y;
+                clampWidget(host, i);
+                host.hovered_index = i;
+                host.needs_repaint = true;
+            } else {
+                if (updateHover(host)) markAllDirty(host);
+                // Cell-level hover wash + popup row highlight (icons grid).
+                _ = iconsPointerChanged(host, true);
+            }
+        },
+        .button => |e| {
+            if (host.pointer_over_ov) {
+                if (host.overview) |ov| ov.button(e.button, e.state == .pressed);
+                return;
+            }
+            pointerButton(host, e.button, e.state == .pressed);
+        },
+        .frame => {},
+        .axis => {},
+        .axis_source => {},
+        .axis_stop => {},
+        .axis_discrete => {},
+    }
+}
+
+/// Left-button press/release over a widget — the body of the pointer
+/// listener's button arm, split out so the self-test can drive the exact
+/// same code path without synthesizing wl events. A press anywhere that
+/// isn't the note being edited commits that note first (Plasma-style: the
+/// focused-vs-clicking ordering can otherwise eat keystrokes).
+fn pointerButton(host: *Host, btn: u32, pressed: bool) void {
+    if (btn == BTN_RIGHT) {
+        if (pressed) handleRightPress(host);
+        return;
+    }
+    if (btn != BTN_LEFT) return;
+    if (pressed) {
+        host.left_down = true;
+        host.press_index = host.hovered_index;
+        // A press outside the desktop-icons widget closes its popup (a
+        // press inside routes through the click below, where the row acts).
+        if (host.hovered_index) |hi| {
+            if (std.meta.activeTag(host.widgets[hi]) != .icons) closeIconsMenus(host);
+        } else {
+            closeIconsMenus(host);
+        }
+        if (host.edit_index) |ei| {
+            const pi = host.press_index;
+            if (pi == null or pi != ei) endEdit(host);
+        }
+        // Bezel ring (no Ctrl) starts a timer turn; a corner grip starts a
+        // resize; anywhere else the press is a move when Ctrl is known (see
+        // tryStartDrag) or a click on release.
+        if (!tryStartBezel(host) and !tryStartResize(host)) tryStartDrag(host);
+        logging.step("ptr: press hovered={?} ctrl={}", .{ host.hovered_index, host.ctrl_down });
+    } else {
+        host.left_down = false;
+        if (host.drag_index != null) {
+            endDrag(host);
+        } else if (host.resize_index != null) {
+            endResize(host);
+        } else if (host.bezel_index) |i| {
+            host.bezel_index = null;
+            // Settle with the release point, then arm (or clear).
+            turnBezel(host, i);
+            host.widgets[i].watch.releaseBezel(nowMs());
+            markDirty(host, i);
+        } else if (host.press_index) |i| {
+            host.press_index = null;
+            // A click is press + release over the same widget.
+            if (host.widget_rects[i].contains(host.pointer_x, host.pointer_y)) {
+                host.widgets[i].click(zoomFontFor(host, i, widgetZoom(host, i)), widgetZoom(host, i), host.widget_rects[i], host.pointer_x, host.pointer_y);
+                // Clicking a note opens the single-edit slot: the card took
+                // on_demand keyboard focus, so the compositor will route key
+                // events here. The widget owns text/caret; the host owns the
+                // slot, the repeat clock, and the edit cadence.
+                if (widgets_mod.noteSlot(&host.widgets[i]) != null) {
+                    host.edit_index = i;
+                    reschedule(host, i);
+                }
+                logging.step("ptr: click idx={d} edit={?}", .{ i, host.edit_index });
+                markDirty(host, i); // widgets flip state on click
+            }
+        }
+    }
+}
+
+/// Press (no Ctrl) landed on the watch's bezel ring: start a circular
+/// turn for the hidden timer instead of a click or a move. The press is
+/// consumed — releasing arms the timer, it never reaches click().
+fn tryStartBezel(host: *Host) bool {
+    if (!host.left_down or host.ctrl_down) return false;
+    if (host.drag_index != null or host.bezel_index != null) return false;
+    const index = host.press_index orelse host.hovered_index orelse return false;
+    if (std.meta.activeTag(host.widgets[index]) != .watch) return false;
+    const r = host.widget_rects[index];
+    if (!widgets_mod.WatchWidget.bezelHit(r, widgetZoom(host, index), host.pointer_x, host.pointer_y)) return false;
+    host.bezel_index = index;
+    host.bezel_base = host.widgets[index].watch.bezel_min;
+    host.bezel_last_a = widgets_mod.WatchWidget.pointerAngle(r, host.pointer_x, host.pointer_y);
+    host.bezel_accum = 0;
+    host.press_index = null; // consumed: a turn is not a click
+    host.hovered_index = index;
+    host.needs_repaint = true;
+    return true;
+}
+
+/// Pointer moved mid bezel-turn: fold the swept angle into the widget's
+/// resting offset (1 minute per 6°, clamped 0..59 there).
+fn turnBezel(host: *Host, i: usize) void {
+    const W = widgets_mod.WatchWidget;
+    const r = host.widget_rects[i];
+    const ctr = W.dialCenter(r);
+    const dx = @as(f64, @floatFromInt(host.pointer_x)) - ctr[0];
+    const dy = @as(f64, @floatFromInt(host.pointer_y)) - ctr[1];
+    if (dx * dx + dy * dy < 16.0) return; // on the center pin — no angle
+    const a = W.pointerAngle(r, host.pointer_x, host.pointer_y);
+    var delta = a - host.bezel_last_a;
+    while (delta > std.math.pi) : (delta -= 2 * std.math.pi) {}
+    while (delta < -std.math.pi) : (delta += 2 * std.math.pi) {}
+    host.bezel_last_a = a;
+    host.bezel_accum += delta;
+    if (host.widgets[i].watch.turnBezel(host.bezel_base, host.bezel_accum)) {
+        markDirty(host, i);
+    }
+}
+
+/// True when a Ctrl+drag may begin: button down, Ctrl held, no drag yet,
+/// and the press landed on a widget. Never steals a bezel turn — Ctrl
+/// pressed mid-turn leaves the bezel alone.
+fn tryStartDrag(host: *Host) void {
+    if (!host.left_down or !host.ctrl_down or host.drag_index != null) return;
+    if (host.bezel_index != null) return;
+    const index = host.press_index orelse host.hovered_index orelse return;
+    const r = host.widget_rects[index];
+    host.drag_index = index;
+    host.drag_off_x = host.pointer_x - r.x;
+    host.drag_off_y = host.pointer_y - r.y;
+    host.press_index = null; // consumed: a drag is not a click
+    host.hovered_index = index;
+    markAllDirty(host); // hover highlight moved with the drag
+}
+
+/// Keeps widget `index` fully inside the output the pointer is on (surface
+/// coordinates — outputs all share one position set per widget).
+fn clampWidget(host: *Host, index: usize) void {
+    const d = &host.desktops[host.pointer_desktop orelse 0];
+    const r = &host.widget_rects[index];
+    const max_x: i32 = @max(@as(i32, @intCast(d.width)) - @as(i32, @intCast(r.w)), 0);
+    const max_y: i32 = @max(@as(i32, @intCast(d.height)) - @as(i32, @intCast(r.h)), 0);
+    r.x = std.math.clamp(r.x, 0, max_x);
+    r.y = std.math.clamp(r.y, 0, max_y);
+}
+
+/// Button released mid-drag: settle the position, re-arm the input regions
+/// (they still cover the pre-drag location), and persist to shell.json.
+fn endDrag(host: *Host) void {
+    const index = host.drag_index orelse return;
+    host.drag_index = null;
+    clampWidget(host, index);
+    host.needs_repaint = true;
+    refreshInputRegions(host);
+    saveConfig(host);
+}
+
+/// Corner grip side (px): press inside the card's bottom-right square
+/// starts a resize instead of a click.
+const RESIZE_GRIP: i64 = 16;
+
+fn resizeHit(r: widgets_mod.Rect, x: i32, y: i32) bool {
+    const rx: i64 = r.x;
+    const ry: i64 = r.y;
+    const rw: i64 = r.w;
+    const rh: i64 = r.h;
+    const px: i64 = x;
+    const py: i64 = y;
+    return px >= rx + rw - RESIZE_GRIP and px < rx + rw and py >= ry + rh - RESIZE_GRIP and py < ry + rh;
+}
+
+/// Press landed on a card's resize grip: start a corner resize instead of
+/// a click or a move. An explicit target beats modifiers — Ctrl+corner
+/// resizes, it doesn't move.
+fn tryStartResize(host: *Host) bool {
+    if (!host.left_down or host.resize_index != null) return false;
+    if (host.drag_index != null or host.bezel_index != null) return false;
+    const index = host.press_index orelse host.hovered_index orelse return false;
+    // The icons grid is content-sized — its corner grip does nothing.
+    if (std.meta.activeTag(host.widgets[index]) == .icons) return false;
+    const r = host.widget_rects[index];
+    if (!resizeHit(r, host.pointer_x, host.pointer_y)) return false;
+    host.resize_index = index;
+    host.resize_off_x = (r.x + @as(i32, @intCast(r.w))) - host.pointer_x;
+    host.resize_off_y = (r.y + @as(i32, @intCast(r.h))) - host.pointer_y;
+    host.press_index = null; // consumed: a resize is not a click
+    host.hovered_index = index;
+    markDirty(host, index); // repaint with the lit grip under the grab
+    return true;
+}
+
+/// Reallocate widget i's paint tile for its current rect (resize path).
+/// Refuses absurd areas instead of OOMing — paintDesktop skips null tiles,
+/// and the release re-clamps anyway.
+fn reallocTile(host: *Host, i: usize) void {
+    const r = host.widget_rects[i];
+    const area: usize = @as(usize, r.w) * @as(usize, r.h);
+    if (area == 0 or area > 16 * 1024 * 1024) {
+        logging.warn("widgets: refusing {d}x{d} tile", .{ r.w, r.h });
+        return;
+    }
+    if (host.tiles[i]) |old| host.gpa.free(old);
+    host.tiles[i] = host.gpa.alloc(u32, area) catch |err| {
+        logging.err("widgets: could not allocate {d}x{d} tile: {}", .{ r.w, r.h, err });
+        return;
+    };
+    markDirty(host, i);
+}
+
+/// Button released mid-resize: settle the size, re-arm the input regions
+/// (they still cover the pre-resize rect), and persist to shell.json.
+fn endResize(host: *Host) void {
+    const index = host.resize_index orelse return;
+    host.resize_index = null;
+    clampWidget(host, index);
+    host.needs_repaint = true;
+    refreshInputRegions(host);
+    saveConfig(host);
+    markDirty(host, index); // drop the lit grip
+}
+
+/// Resize affordance: three faint diagonal strokes in the card's
+/// bottom-right corner, painted into the tile while hovered or grabbed.
+fn drawResizeGrip(tc: widgets_mod.Canvas, r: widgets_mod.Rect) void {
+    const col = (@as(u32, 0x58) << 24) | (tc.theme.border_color & 0x00FFFFFF);
+    const w: i64 = r.w;
+    const h: i64 = r.h;
+    var k: i64 = 0;
+    while (k < 3) : (k += 1) {
+        var s: i64 = 0;
+        while (s < 5) : (s += 1) {
+            const x = w - 3 - k * 5 - s;
+            const y = h - 3 - (4 - s);
+            if (x < 0 or y < 0) continue;
+            const pxu: usize = @intCast(x);
+            const pyu: usize = @intCast(y);
+            if (pxu >= tc.width or pyu >= tc.height) continue;
+            tc.pixels[pyu * tc.width + pxu] = widgets_mod.Canvas.blendOver(tc.pixels[pyu * tc.width + pxu], col);
+        }
+    }
+}
+
+fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, host: *Host) void {
+    switch (event) {
+        .keymap => |e| {
+            logging.step("kb: keymap event format={s} size={d}", .{ @tagName(e.format), e.size });
+            // The keymap fd is ours to close once received (spec) — do that
+            // no matter how far decoding gets.
+            defer _ = posix.system.close(e.fd);
+            if (e.format != .xkb_v1) {
+                logging.warn("kb: keymap format {s} not xkb_v1 — ignoring", .{@tagName(e.format)});
+                return;
+            }
+            // The keymap fd shares its file offset with whoever else holds
+            // the description (the compositor just finished writing it), so
+            // it can arrive sitting at EOF — rewind before reading.
+            _ = std.c.lseek(e.fd, 0, 0); // SEEK_SET
+            const size: usize = e.size;
+            const buf = host.gpa.alloc(u8, size + 2) catch return;
+            defer host.gpa.free(buf);
+            var got: usize = 0;
+            while (got < size) {
+                const n = posix.read(e.fd, buf[got..size]) catch |rd_err| {
+                    logging.warn("kb: keymap read error: {}", .{rd_err});
+                    break;
+                };
+                if (n == 0) break;
+                got += n;
+            }
+            if (got == 0) {
+                const off = std.c.lseek(e.fd, 0, 1); // SEEK_CUR
+                logging.warn("kb: keymap read 0 bytes (fd={d} size={d} off={d})", .{ e.fd, e.size, off });
+                return;
+            }
+            buf[got] = 0; // xkb wants a NUL-terminated string
+            if (g_xkb_ctx == null) g_xkb_ctx = xkb.xkb_context_new(xkb.CONTEXT_NO_FLAGS);
+            const ctx = g_xkb_ctx orelse return;
+            const km = xkb.xkb_keymap_new_from_string(ctx, buf[0..got:0], xkb.KEYMAP_FORMAT_TEXT_V1, xkb.KEYMAP_COMPILE_NO_FLAGS) orelse {
+                logging.warn("kb: keymap parse failed ({d} bytes read)", .{got});
+                return;
+            };
+            const st = xkb.xkb_state_new(km) orelse {
+                xkb.xkb_keymap_unref(km);
+                return;
+            };
+            if (g_xkb_keymap) |old| xkb.xkb_keymap_unref(old);
+            if (g_xkb_state) |old| xkb.xkb_state_unref(old);
+            g_xkb_keymap = km;
+            g_xkb_state = st;
+            g_kb_ready = true;
+            logging.step("keyboard: xkb keymap live ({d} bytes)", .{got});
+        },
+        // The compositor always follows enter with a modifiers event, so
+        // focus changes need no handling of their own.
+        .enter => logging.step("kb: focus enter", .{}),
+        .leave => {
+            logging.step("kb: focus leave", .{});
+            host.ctrl_down = false;
+            host.repeat_key = null;
+            // Editing a note then clicking a window (our surface loses the
+            // on_demand focus) commits it, Plasma-style.
+            endEdit(host);
+        },
+        .key => |e| {
+            logging.step("kb: ev key={d} {s} edit={?}", .{ e.key, if (e.state == .pressed) "down" else "up", host.edit_index });
+            onKeyboardKey(host, e.key, e.state == .pressed);
+        },
+        .modifiers => |e| {
+            // Control is real-mod index 2 in the depressed mask.
+            const ctrl = e.mods_depressed & (1 << 2) != 0;
+            host.ctrl_down = ctrl;
+            // A press can precede this event (clicking takes focus first);
+            // the moment Ctrl is known and the button is down over a widget,
+            // turn the pending press into a drag.
+            if (ctrl) tryStartDrag(host);
+            // Keep xkb's modifier/group state in lockstep so UTF-32 decode
+            // honors the actual layout (Shift for caps, group for altgr).
+            if (g_xkb_state) |st| {
+                _ = xkb.xkb_state_update_mask(st, e.mods_depressed, e.mods_latched, e.mods_locked, 0, 0, e.group);
+            }
+        },
+        .repeat_info => |e| {
+            // The compositor's auto-repeat parameters; we synthesize repeats
+            // from them while editing (rate Hz, delay ms; rate 0 = no repeat).
+            host.kb_rate = e.rate;
+            host.kb_delay = e.delay;
+        },
+    }
+}
+
+fn onKeyboardKey(host: *Host, keycode: u32, pressed: bool) void {
+    if (pressed) keyPress(host, keycode) else keyRelease(host, keycode);
+}
+
+fn keyRelease(host: *Host, keycode: u32) void {
+    if (host.repeat_key == keycode) host.repeat_key = null;
+}
+
+/// True while a held key should keep synthesizing repeats: a note edit or
+/// the overview's search box currently owns the keyboard.
+fn repeatWanted(host: *Host) bool {
+    if (host.edit_index != null) return true;
+    if (host.overview) |ov| return ov.takesKeys();
+    return false;
+}
+
+/// Routes one keyboard press. The overview owns the keyboard while its
+/// surface is up (exclusive focus for search); otherwise nothing happens
+/// unless a note is being edited. The key is decoded through xkb into
+/// UTF-32 before handing it on.
+fn keyPress(host: *Host, keycode: u32) void {
+    if (host.overview) |ov| {
+        if (ov.takesKeys()) {
+            var ov_utf32: u32 = 0;
+            if (g_xkb_state) |st| ov_utf32 = xkb.xkb_state_key_get_utf32(st, keycode + 8);
+            const ov_handled = ov.keyPress(keycode, ov_utf32, host.ctrl_down);
+            logging.step("kb: ov key={d} U+{x:0>4} ctrl={} handled={}", .{ keycode, ov_utf32, host.ctrl_down, ov_handled });
+            if (ov_handled) armRepeat(host, keycode);
+            return;
+        }
+        if (ov.surface != null) {
+            logging.step("kb: ov drops key={d} (anim not taking keys)", .{keycode});
+        }
+    }
+    const i = host.edit_index orelse return;
+    // Ctrl chords are ignored while editing (no text shortcuts) — except
+    // Esc, which always commits.
+    if (keycode != widgets_mod.KEY_ESC and host.ctrl_down) return;
+    var utf32: u32 = 0;
+    if (g_xkb_state) |st| utf32 = xkb.xkb_state_key_get_utf32(st, keycode + 8);
+    const res = switch (host.widgets[i]) {
+        .note1 => |*n| n.keyPress(widgets_mod.FontMeasure{ .font = host.font }, noteMaxW(host, i), noteVisLines(host, i), keycode, utf32),
+        else => .ignored,
+    };
+    logging.step("kb: key={d} U+{x:0>4} edit={d} -> {s}", .{ keycode, utf32, i, @tagName(res) });
+    switch (res) {
+        .ignored => {},
+        .handled => {
+            markDirty(host, i);
+            armRepeat(host, keycode);
+            // The whole keystroke burst shouldn't wait out the idle cadence.
+            reschedule(host, i);
+        },
+        .exited => {
+            host.edit_index = null;
+            host.repeat_key = null;
+            host.repeat_next_ms = 0;
+            reschedule(host, i);
+            markDirty(host, i);
+        },
+    }
+}
+
+/// Content zoom for widget i: uniform min-ratio of its rect to the type's
+/// base size, never below 1 (cards can't shrink past base). Note1 is
+/// exempt — it reflows instead of zooming.
+fn widgetZoom(host: *Host, i: usize) f32 {
+    // Notes reflow at base size and the icons grid is content-sized —
+    // neither participates in corner-resize zoom.
+    if (std.meta.activeTag(host.widgets[i]) == .note1 or
+        std.meta.activeTag(host.widgets[i]) == .icons) return 1.0;
+    const base = widgets_mod.cardSizeFor(std.meta.activeTag(host.widgets[i]), host.font);
+    const zw = @as(f32, @floatFromInt(host.widget_rects[i].w)) / @as(f32, @floatFromInt(base[0]));
+    const zh = @as(f32, @floatFromInt(host.widget_rects[i].h)) / @as(f32, @floatFromInt(base[1]));
+    return @max(1.0, @min(zw, zh));
+}
+
+/// Scaled face for widget i's content zoom (integer pixel buckets — a new
+/// face loads only when the bucket changes, so live drags don't reload
+/// per motion). Falls back to the shared face on any failure. The caller
+/// sets Canvas.zoom to match; font metrics and layout scaling stay in
+/// sync by construction.
+fn zoomFontFor(host: *Host, i: usize, zoom: f32) *font_mod.Font {
+    if (std.meta.activeTag(host.widgets[i]) == .note1 or
+        std.meta.activeTag(host.widgets[i]) == .icons) return host.font;
+    const want: u32 = @max(1, @as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(host.font.pixel_size)) * zoom))));
+    if (host.zoom_fonts[i] == null or host.zoom_px[i] != want) {
+        if (host.zoom_fonts[i]) |*f| f.deinit();
+        host.zoom_fonts[i] = null;
+        var pbuf: [512]u8 = undefined;
+        if (fontPathZ(g_shell_cfg.font_path, &pbuf)) |path_z| {
+            if (font_mod.Font.init(host.gpa, path_z, want)) |f| {
+                host.zoom_fonts[i] = f;
+                host.zoom_px[i] = want;
+            } else |_| {}
+        }
+    }
+    if (host.zoom_fonts[i]) |*f| return f;
+    return host.font;
+}
+
+/// Text width available inside the note card (match NoteWidget.paint).
+fn noteMaxW(host: *Host, i: usize) i64 {
+    return @as(i64, @intCast(host.widget_rects[i].w)) - 2 * widgets_mod.CARD_PAD;
+}
+
+/// Visible note lines for widget i's current card height (reflows when
+/// corner-resized). Matches NoteWidget.paint's own computation.
+fn noteVisLines(host: *Host, i: usize) usize {
+    return widgets_mod.noteVisLines(@as(i64, @intCast(host.widget_rects[i].h)), widgets_mod.lineH(host.font));
+}
+
+/// Set up compositor-style auto-repeat (rate Hz, delay ms) for the key that
+/// just edited. Repeat fires through the poll deadline, not per event.
+fn armRepeat(host: *Host, keycode: u32) void {
+    if (host.kb_rate <= 0) return;
+    host.repeat_key = keycode;
+    host.repeat_next_ms = nowMs() + @max(host.kb_delay, 30);
+}
+
+/// Re-arm a widget's cadence from now (a note that starts editing, or gets
+/// a key, wants its 500 ms blink/autosave ticks immediately).
+fn reschedule(host: *Host, i: usize) void {
+    host.next_tick_ms[i] = nowMs() + host.widgets[i].intervalMs();
+}
+
+/// Stop editing the editing note: commit (Esc / focus-leave / click
+/// elsewhere) and hand the slot and key routing back.
+fn endEdit(host: *Host) void {
+    const i = host.edit_index orelse return;
+    host.edit_index = null;
+    host.repeat_key = null;
+    host.repeat_next_ms = 0;
+    switch (host.widgets[i]) {
+        .note1 => |*n| {
+            n.commit();
+            n.endEditing();
+        },
+        else => {},
+    }
+    reschedule(host, i);
+    markDirty(host, i);
+}
+
+/// Reaps finished detached children (weather/media fetches) so they don't
+/// pile up as zombies.
+fn reapChildren() void {
+    while (true) {
+        var status: c_int = undefined;
+        const pid = std.c.waitpid(-1, &status, std.c.W.NOHANG);
+        if (pid <= 0) break;
+    }
+}
+
+// --- sticky-note self-test (SIMPBAR_SELFTEST=1) -----------------------------
+// This box has no input-injection tool (wtype/ydotool/dotool absent,
+// /dev/uinput needs root), so with the env var set the shell drives note1
+// through the SAME pointer/keyboard code paths the compositor events take,
+// verifies the persisted file, then restores the note's original text.
+//   1. a synthetic press+release over note1 starts editing,
+//   2. evdev key codes go through onKeyboardKey → xkb decode → NoteWidget,
+//   3. Esc commits and note1.txt must contain exactly the typed text,
+//   4. the original note text is written back so nothing is left behind.
+var g_selftest = false;
+var g_st_done = false;
+var g_st_start_ms: i64 = 0;
+
+fn runSelfTest(host: *Host) void {
+    g_st_done = true;
+    var slot_idx: ?usize = null;
+    for (0..host.widget_count) |i| {
+        if (widgets_mod.noteSlot(&host.widgets[i]) == 1) {
+            slot_idx = i;
+            break;
+        }
+    }
+    const i = slot_idx orelse {
+        logging.warn("selftest: config has no note1 — SKIP", .{});
+        return;
+    };
+    const n = &host.widgets[i].note1;
+    const orig_len = n.text_len;
+    var orig_buf: [widgets_mod.NoteWidget.NOTE_MAX]u8 = undefined;
+    @memcpy(orig_buf[0..orig_len], n.text()[0..orig_len]);
+    const path = n.path();
+    var failures: usize = 0;
+
+    // Click into the note's first text line (question mark placement: the
+    // card rect is known, the pointer is fake).
+    const r = host.widget_rects[i];
+    host.pointer_x = r.x + 40;
+    host.pointer_y = r.y + 30;
+    _ = updateHover(host);
+    pointerButton(host, BTN_LEFT, true);
+    pointerButton(host, BTN_LEFT, false);
+    if (host.edit_index != i) {
+        failures += 1;
+        logging.err("selftest: click did not start editing (edit_index={?})", .{host.edit_index});
+    }
+
+    // Type "abc 123", backspace once, Enter, then Esc to commit. evdev key
+    // codes: a=30 b=48 c=46 space=57 1=2 2=3 3=4 backspace=14 enter=28 esc=1.
+    const seq = [_]u32{ 30, 48, 46, 57, 2, 3, 4, 14, 28, 1 };
+    for (seq) |code| {
+        onKeyboardKey(host, code, true);
+        onKeyboardKey(host, code, false);
+    }
+    if (host.edit_index != null) {
+        failures += 1;
+        logging.err("selftest: Esc did not close editing", .{});
+    }
+
+    const saved = readFileAlloc(host.gpa, path) catch null;
+    defer if (saved) |s| host.gpa.free(s);
+    const want = "abc 12\n";
+    if (saved) |s| {
+        if (!std.mem.eql(u8, s, want)) {
+            failures += 1;
+            logging.err("selftest: note1.txt = \"{s}\", want \"{s}\"", .{ s, want });
+        }
+    } else {
+        failures += 1;
+        logging.err("selftest: could not read back {s}", .{path});
+    }
+
+    // Restore the original note (content in memory + on disk) and release
+    // the edit slot so the desktop is exactly as it was.
+    n.text_len = orig_len;
+    @memcpy(n.text_buf[0..orig_len], orig_buf[0..orig_len]);
+    n.caret = orig_len;
+    n.scroll = 0;
+    n.editing = false;
+    n.dirty = false;
+    host.edit_index = null;
+    host.repeat_key = null;
+    _ = widgets_mod.writeFileAtomicZ(path, orig_buf[0..orig_len]);
+    reschedule(host, i);
+    markDirty(host, i);
+
+    if (failures == 0) {
+        logging.step("SELFTEST PASS — note edit→commit round-trip ok (\"{s}\" saved, original restored)", .{want});
+    } else {
+        logging.err("SELFTEST FAIL — {d} failure(s); note restored to original", .{failures});
+    }
+}
+
+// --- overview control socket (Alt+W) ---------------------------------------
+//
+// `simpbar-shell overview [toggle|open|close]` connects here. One daemon
+// per XDG_RUNTIME_DIR: a live socket makes the second instance exit
+// quietly (the bind probe below), stale files are unlinked and rebound.
+// Requests are one line ("overview toggle\n"), so accept + a bounded read +
+// reply all happen inside the poll loop — the daemon never blocks on a
+// client, and clients never need to know about Wayland.
+
+const IPC_PATH_LEN = 256;
+
+fn ipcSockPathZ(buf: []u8) ?[:0]const u8 {
+    const dir = std.mem.sliceTo(getenv("XDG_RUNTIME_DIR") orelse return null, 0);
+    return std.fmt.bufPrintZ(buf, "{s}/simpbar-shell.sock", .{dir}) catch null;
+}
+
+fn ipcUnixAddr(path: []const u8) !std.os.linux.sockaddr.un {
+    var addr: std.os.linux.sockaddr.un = .{ .path = undefined };
+    if (path.len >= addr.path.len) return error.PathTooLong;
+    @memset(&addr.path, 0);
+    @memcpy(addr.path[0..path.len], path);
+    return addr;
+}
+
+/// Creates (or takes over) the control socket. `error.AlreadyRunning` means
+/// a live daemon answered the connect probe — main exits 0 on it, which is
+/// what keeps autostart + the Alt+W bind from double-painting the desktop.
+fn ipcListen() !posix.fd_t {
+    var path_buf: [IPC_PATH_LEN]u8 = undefined;
+    const path = ipcSockPathZ(&path_buf) orelse return error.NoRuntimeDir;
+
+    const probe = std.c.socket(std.os.linux.AF.UNIX, std.os.linux.SOCK.STREAM | std.os.linux.SOCK.CLOEXEC, 0);
+    if (probe >= 0) {
+        const probe_fd: posix.fd_t = @intCast(probe);
+        const probe_addr = try ipcUnixAddr(path);
+        const alive = std.c.connect(probe_fd, @ptrCast(&probe_addr), @sizeOf(std.os.linux.sockaddr.un)) == 0;
+        _ = posix.system.close(probe_fd);
+        if (alive) return error.AlreadyRunning;
+    }
+
+    _ = std.c.unlink(path.ptr); // stale file from a crashed run
+    const raw = std.c.socket(std.os.linux.AF.UNIX, std.os.linux.SOCK.STREAM | std.os.linux.SOCK.CLOEXEC, 0);
+    if (raw < 0) return error.SocketCreateFailed;
+    const fd: posix.fd_t = @intCast(raw);
+    errdefer _ = posix.system.close(fd);
+    const addr = try ipcUnixAddr(path);
+    if (std.c.bind(fd, @ptrCast(&addr), @sizeOf(std.os.linux.sockaddr.un)) != 0) return error.BindFailed;
+    if (std.c.listen(fd, 4) != 0) return error.ListenFailed;
+    return fd;
+}
+
+/// Handle one control-socket connection: read the request (the client
+/// writes immediately after connect, but the wakeup and that write race —
+/// poll briefly first; requests are <64 bytes so one read is the whole
+/// message) and reply. Static replies, so the client can gate on "ok".
+fn ipcAccept(listen_fd: posix.fd_t, host: *Host) void {
+    const raw = std.c.accept4(
+        listen_fd,
+        null,
+        null,
+        std.os.linux.SOCK.CLOEXEC | std.os.linux.SOCK.NONBLOCK,
+    );
+    if (raw < 0) return;
+    const fd: posix.fd_t = @intCast(raw);
+    defer _ = posix.system.close(fd);
+
+    var pfds = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+    _ = posix.poll(&pfds, 200) catch 0;
+    if (pfds[0].revents & posix.POLL.IN == 0) return;
+
+    var buf: [256]u8 = undefined;
+    const n = std.c.read(fd, &buf, buf.len);
+    if (n <= 0) return;
+    const reply = ipcHandle(host, buf[0..@intCast(n)]);
+    _ = std.c.write(fd, reply.ptr, reply.len);
+}
+
+fn ipcHandle(host: *Host, data: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, data, " \t\r\n");
+    var it = std.mem.splitScalar(u8, trimmed, ' ');
+    const head = it.next() orelse return "err empty\n";
+    if (!std.mem.eql(u8, head, "overview")) return "err unknown command\n";
+    const verb = it.next() orelse "toggle";
+    const ov = host.overview orelse return "err overview unavailable\n";
+    if (std.mem.eql(u8, verb, "open")) {
+        return if (ov.open()) "ok\n" else "err open failed\n";
+    } else if (std.mem.eql(u8, verb, "close")) {
+        ov.close();
+        return "ok\n";
+    } else if (std.mem.eql(u8, verb, "toggle")) {
+        return if (ov.toggle()) "ok\n" else "err toggle failed\n";
+    }
+    return "err unknown action\n";
+}
+
+fn cliPrint(fd: c_int, msg: []const u8) void {
+    _ = std.c.write(fd, msg.ptr, msg.len);
+}
+
+/// Client side of the control socket: send, print the daemon's reply,
+/// exit 0 when it starts with "ok". Never returns.
+fn cliOverview(action: []const u8) noreturn {
+    if (!std.mem.eql(u8, action, "toggle") and
+        !std.mem.eql(u8, action, "open") and
+        !std.mem.eql(u8, action, "close"))
+    {
+        cliPrint(2, "usage: simpbar-shell overview [toggle|open|close]\n");
+        std.process.exit(2);
+    }
+    var path_buf: [IPC_PATH_LEN]u8 = undefined;
+    const path = ipcSockPathZ(&path_buf) orelse {
+        cliPrint(2, "simpbar-shell: XDG_RUNTIME_DIR not set\n");
+        std.process.exit(1);
+    };
+    const raw = std.c.socket(std.os.linux.AF.UNIX, std.os.linux.SOCK.STREAM | std.os.linux.SOCK.CLOEXEC, 0);
+    if (raw < 0) {
+        cliPrint(2, "simpbar-shell: socket() failed\n");
+        std.process.exit(1);
+    }
+    const fd: posix.fd_t = @intCast(raw);
+    const addr = ipcUnixAddr(path) catch {
+        _ = posix.system.close(fd);
+        cliPrint(2, "simpbar-shell: control path too long\n");
+        std.process.exit(1);
+    };
+    if (std.c.connect(fd, @ptrCast(&addr), @sizeOf(std.os.linux.sockaddr.un)) != 0) {
+        _ = posix.system.close(fd);
+        cliPrint(2, "simpbar-shell: no running instance (start simpbar-shell first)\n");
+        std.process.exit(1);
+    }
+
+    var msg_buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "overview {s}\n", .{action}) catch unreachable;
+    var off: usize = 0;
+    while (off < msg.len) {
+        const n = std.c.write(fd, msg[off..].ptr, msg.len - off);
+        if (n <= 0) break;
+        off += @intCast(n);
+    }
+
+    // The daemon replies then closes, so read until EOF (it always answers
+    // or drops the connection — no hang risk beyond the daemon's own).
+    var reply: [512]u8 = undefined;
+    var got: usize = 0;
+    while (got < reply.len) {
+        const n = std.c.read(fd, reply[got..].ptr, reply.len - got);
+        if (n <= 0) break;
+        got += @intCast(n);
+    }
+    _ = posix.system.close(fd);
+
+    if (got == 0) {
+        cliPrint(2, "simpbar-shell: no reply from the running instance\n");
+        std.process.exit(1);
+    }
+    const out: []const u8 = reply[0..got];
+    if (std.mem.startsWith(u8, out, "ok")) {
+        cliPrint(1, out);
+        std.process.exit(0);
+    }
+    cliPrint(2, out);
+    std.process.exit(1);
+}
+
+pub fn main(init: std.process.Init.Minimal) !void {
+    // Client mode: `simpbar-shell overview [toggle|open|close]` sends the
+    // verb to the running daemon over its control socket and prints the
+    // reply — this is exactly what Alt+W runs (see hyprland.lua). Anything
+    // else as a first argument is a typo, not a daemon start.
+    var args_it = std.process.Args.Iterator.init(init.args);
+    _ = args_it.next(); // argv[0]
+    if (args_it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "overview")) {
+            cliOverview(args_it.next() orelse "toggle");
+        }
+        var ubuf: [256]u8 = undefined;
+        const usage = std.fmt.bufPrint(
+            &ubuf,
+            "simpbar-shell: unknown command \"{s}\"\nusage: simpbar-shell [overview [toggle|open|close]]\n",
+            .{arg},
+        ) catch "simpbar-shell: unknown command\n";
+        cliPrint(2, usage);
+        std.process.exit(2);
+    }
+
+    logging.init("simpbar-shell");
+    defer logging.deinit();
+
+    // SIGUSR1 live-reload (g_reload_pending): matugen rewrites the palette
+    // file on every wallpaper change and signals both this shell and the bar
+    // so neither is left showing yesterday's colours.
+    {
+        const act = posix.Sigaction{
+            .handler = .{ .sigaction = reloadSignalHandler },
+            .mask = posix.sigemptyset(),
+            .flags = posix.SA.SIGINFO,
+        };
+        posix.sigaction(.USR1, &act, null);
+    }
+    // DebugAllocator does leak tracking and guard work on every allocation;
+    // keep it for Debug builds, but use libc's release allocator for the
+    // shipping builds. Both choices stay paired with every free below.
+    var gpa_state = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa_state.deinit();
+    const gpa: std.mem.Allocator = if (builtin.mode == .Debug)
+        gpa_state.allocator()
+    else
+        std.heap.c_allocator;
+
+    resolveConfigPaths();
+    var cfg = loadConfig(gpa);
+    // Per-widget kill switches (simpbar-config writes the disabled list):
+    // filter the startup copy, leaving g_shell_cfg (and shell.json positions)
+    // complete so re-enabling restores widgets where they were. Zero left
+    // means exit before touching Wayland — the autostart entries relaunch
+    // this binary every login, so this is what keeps "everything off" off
+    // across sessions without editing autostart files. `overview ...` client
+    // commands return before this point and are unaffected.
+    applyDisabledWidgets(gpa, &cfg);
+    if (cfg.widget_count == 0) {
+        logging.step("widgets: all widgets switched off — exiting", .{});
+        return;
+    }
+    var theme = widgets_mod.Theme{
+        .card_alpha = cfg.card_bg_opacity,
+        .radius_px = cfg.corner_radius,
+    };
+    if (tryApplyMatugenColors(gpa, &theme)) {
+        logging.step("theme: applied matugen colors", .{});
+    }
+
+    var font_path_buf: [512]u8 = undefined;
+    const font_path_z = fontPathZ(cfg.font_path, &font_path_buf) orelse font_mod.FONT_PATH;
+    var font = font_mod.Font.init(gpa, font_path_z, FONT_PIXEL_SIZE) catch |err| blk: {
+        logging.warn("font: could not load {s}: {} — falling back to {s}", .{ font_path_z, err, font_mod.FONT_PATH });
+        break :blk try font_mod.Font.init(gpa, font_mod.FONT_PATH, FONT_PIXEL_SIZE);
+    };
+    defer font.deinit();
+
+    const display = try wl.Display.connect(null);
+    defer display.disconnect();
+    setCloexec(display.getFd());
+
+    const registry = try display.getRegistry();
+    var globals = Globals{};
+    registry.setListener(*Globals, registryListener, &globals);
+    if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
+    if (display.roundtrip() != .SUCCESS) return error.RoundtripFailed;
+
+    const compositor = globals.compositor orelse return error.NoCompositor;
+    const shm = globals.shm orelse return error.NoShm;
+    const layer_shell = globals.layer_shell orelse return error.NoLayerShell;
+
+    if (globals.seat) |seat| {
+        _ = seat;
+    }
+
+    var host = Host{
+        .gpa = gpa,
+        .theme = theme,
+        .font = &font,
+        .shm = shm,
+        .compositor = compositor,
+    };
+    initWidgets(&host, cfg);
+    defer for (host.tiles) |t| if (t) |buf| gpa.free(buf); // leak-check clean
+    defer for (&host.zoom_fonts) |*slot| {
+        if (slot.*) |*f| f.deinit();
+        slot.* = null;
+    };
+    logging.step("widgets: {d} placed on {d} output(s)", .{ host.widget_count, globals.outputs.count });
+
+    // Overview mode (Alt+W): constructed once, surface created/destroyed
+    // per open. Every reference stays valid for the process lifetime (the
+    // Host, the font, the Globals), which the listeners rely on. Failure
+    // degrades to "no overview", never to a dead shell.
+    const ov_ptr = gpa.create(overview_mod.Overview) catch |err| blk: {
+        logging.err("overview: init failed: {}", .{err});
+        break :blk null;
+    };
+    if (ov_ptr) |ov| {
+        ov.* = .{
+            .gpa = gpa,
+            .font = &font,
+            .theme = &host.theme,
+            .compositor = compositor,
+            .shm = shm,
+            .layer_shell = layer_shell,
+            .screencopy = globals.screencopy,
+            .outputs = &globals.outputs,
+            .favs = cfg.fav_cmds[0..cfg.fav_count],
+        };
+        host.overview = ov;
+    }
+    defer if (host.overview) |ov| {
+        ov.deinit();
+        gpa.destroy(ov);
+    };
+
+    // One desktop layer surface per output (or a single compositor-picked
+    // surface if the registry reported none), anchored edge-to-edge on the
+    // bottom layer — above the wallpaper's background level, never below
+    // it. Same-level layers stack by map order, so a freshly restarted
+    // swaybg (every wallpaper change) would bury .background widgets under
+    // the new wallpaper surface; .bottom always composites above it while
+    // staying below windows and the bar.
+    const desktop_count: usize = if (globals.outputs.count > 0) globals.outputs.count else 1;
+    for (0..desktop_count) |i| {
+        const surface = compositor.createSurface() catch continue;
+        const output: ?*wl.Output = if (i < globals.outputs.count) globals.outputs.list[i] else null;
+        const layer_surface = layer_shell.getLayerSurface(
+            surface,
+            output,
+            .bottom,
+            "simpbar-shell",
+        ) catch {
+            surface.destroy();
+            continue;
+        };
+        layer_surface.setAnchor(.{ .top = true, .bottom = true, .left = true, .right = true });
+        layer_surface.setExclusiveZone(0);
+        // on_demand: clicking a card takes keyboard focus, which is the only
+        // way a client sees modifier state — Ctrl+drag needs it. Focus
+        // returns to the clicked window on its next click, like any other
+        // on_demand surface; keys are otherwise ignored.
+        layer_surface.setKeyboardInteractivity(.on_demand);
+        host.desktops[host.desktop_count] = .{
+            .host = &host,
+            .surface = surface,
+            .layer_surface = layer_surface,
+        };
+        host.desktop_count += 1;
+
+        // Initial empty commit so the compositor engages the layer role and
+        // sends the first configure (the bar relies on the same configure
+        // event to learn the surface size).
+        surface.commit();
+
+        const d = &host.desktops[host.desktop_count - 1];
+        layer_surface.setListener(*Desktop, layerSurfaceListener, d);
+    }
+    if (host.desktop_count == 0) return error.NoSurfaceCreated;
+
+    const pointer: ?*wl.Pointer = if (globals.seat) |seat|
+        (if (globals.seat_has_pointer) seat.getPointer() catch null else null)
+    else
+        null;
+    defer if (pointer) |p| p.release();
+    if (pointer) |p| p.setListener(*Host, pointerListener, &host);
+
+    // Keyboard exists purely for modifier state (Ctrl+drag); it gets focus
+    // on_demand when a card is clicked.
+    const keyboard: ?*wl.Keyboard = if (globals.seat) |seat|
+        (if (globals.seat_has_keyboard) seat.getKeyboard() catch null else null)
+    else
+        null;
+    defer if (keyboard) |kb| kb.release();
+    if (keyboard) |kb| kb.setListener(*Host, keyboardListener, &host);
+
+    g_selftest = getenv("SIMPBAR_SELFTEST") != null;
+    if (g_selftest) logging.warn("selftest: SIMPBAR_SELFTEST set — note1 will be driven at startup", .{});
+    g_st_start_ms = nowMs();
+
+    // Control socket for `simpbar-shell overview ...` (Alt+W). A live daemon
+    // answering the probe makes this a clean 0-exit; an unusable socket just
+    // logs — the widgets must outlive a broken /run. The selftest runs
+    // alongside a live daemon, so it skips the socket entirely.
+    const ipc_fd: posix.fd_t = if (g_selftest) -1 else ipcListen() catch |err| blk: {
+        if (err == error.AlreadyRunning) {
+            logging.step("ipc: another simpbar-shell holds the control socket — exiting", .{});
+            return;
+        }
+        logging.warn("ipc: no control socket (overview toggle dead): {}", .{err});
+        break :blk -1;
+    };
+
+    // Pidfile only once this instance actually owns the daemon slot (past the
+    // AlreadyRunning exit above, and never in selftest mode): the GUI's
+    // toggle-restart waits for this pidfile to change, which must mean "new
+    // instance fully up", and a zero-widget exit leaves no pidfile pointing
+    // at a dead process.
+    if (!g_selftest) writeShellPidfile();
+
+    // Slot 0: display fd, slot 1: control socket (fixed), slots 2+:
+    // widget fetch pipes (refreshed every loop).
+    var poll_fds = [_]posix.pollfd{
+        .{ .fd = display.getFd(), .events = posix.POLL.IN, .revents = 0 },
+        .{ .fd = ipc_fd, .events = posix.POLL.IN, .revents = 0 },
+    } ++ [_]posix.pollfd{.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }} ** MAX_WIDGETS;
+
+    while (true) {
+        // Refresh the pipe fds (they change across fetch cycles).
+        for (poll_fds[2..]) |*pf| pf.fd = -1;
+        for (0..host.widget_count) |i| {
+            const widget_fd = host.widgets[i].pollFd();
+            if (widget_fd < 0) continue;
+            for (poll_fds[2..]) |*pf| {
+                if (pf.fd < 0) {
+                    pf.fd = widget_fd;
+                    break;
+                }
+            }
+        }
+
+        _ = display.flush();
+
+        const now = nowMs();
+
+        // Poll with a timeout computed from the earliest widget cadence
+        // deadline — the "lazy repaint" schedule from the friend's shell.
+        var next_deadline: i64 = std.math.maxInt(i64);
+        for (0..host.widget_count) |i| {
+            next_deadline = @min(next_deadline, host.next_tick_ms[i]);
+        }
+        // A held key (note edit, overview search) needs its auto-repeat
+        // fired on schedule too.
+        if (host.repeat_key != null and repeatWanted(&host)) {
+            next_deadline = @min(next_deadline, host.repeat_next_ms);
+        }
+        // Capture in flight: the screencopy answer (or its timeout) must
+        // wake the loop even with no widget cadence pending.
+        if (host.overview) |ov| {
+            if (ov.deadline()) |d| next_deadline = @min(next_deadline, d);
+        }
+        const timeout: i32 = blk: {
+            if (next_deadline == std.math.maxInt(i64)) break :blk -1; // nothing to wake for; wait for events only
+            const rel = next_deadline - now;
+            break :blk @intCast(@max(@min(rel, std.math.maxInt(i32)), 0));
+        };
+
+        const ready = posix.poll(&poll_fds, timeout) catch 0;
+
+        // SIGUSR1 (matugen's post_hook) → re-read the palette. The signal
+        // interrupts poll() as well, which surfaces here as ready == 0, so a
+        // reload is picked up on this pass whether or not an event woke us —
+        // including when the loop was parked waiting for the next frame.
+        if (g_reload_pending.swap(false, .acquire)) reloadTheme(&host);
+
+        if (ready > 0) {
+            if (poll_fds[0].revents & posix.POLL.IN != 0) {
+                if (display.dispatch() != .SUCCESS) return error.DispatchFailed;
+            }
+            if (poll_fds[1].revents & posix.POLL.IN != 0) ipcAccept(ipc_fd, &host);
+            var pipe_ready = false;
+            for (poll_fds[2..]) |pf| {
+                if (pf.revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
+                    pipe_ready = true;
+                    break;
+                }
+            }
+            if (pipe_ready) {
+                for (0..host.widget_count) |i| {
+                    if (host.widgets[i].onPipe()) markDirty(&host, i);
+                }
+            }
+        }
+
+        reapChildren();
+
+        // Fire any widget cadences that came due.
+        const now2 = nowMs();
+
+        // Overview housekeeping: a screencopy that never answers must not
+        // leave Alt+W silently dead (maps with cards instead), and pointer
+        // focus needs hygiene once the surface is gone — a destroyed
+        // surface isn't guaranteed to produce a leave event, but the flag
+        // must not outlive it or desktop hover would stay routed to
+        // nowhere.
+        if (host.overview) |ov| {
+            ov.pollTimeout(now2);
+            if (ov.anim == .closed and host.pointer_over_ov) host.pointer_over_ov = false;
+        }
+
+        for (0..host.widget_count) |i| {
+            if (now2 >= host.next_tick_ms[i]) {
+                if (host.widgets[i].tick()) markDirty(&host, i);
+                host.next_tick_ms[i] = now2 + host.widgets[i].intervalMs();
+            }
+        }
+
+        // Hold-down auto-repeat while editing a note or the overview search
+        // — synthesized from the compositor's rate/delay so
+        // Backspace/arrows/repeated letters feel like a native editor
+        // instead of a per-event text widget.
+        if (host.repeat_key != null and repeatWanted(&host) and now2 >= host.repeat_next_ms) {
+            keyPress(&host, host.repeat_key.?);
+            host.repeat_next_ms = now2 + @max(@divTrunc(1000, @max(host.kb_rate, 1)), 10);
+        }
+
+        // Self-test: once the keymap is live, drive note1 through the exact
+        // pointer/key paths the compositor events use, then verify the file.
+        if (g_selftest and !g_st_done and g_kb_ready and now2 - g_st_start_ms > 800) {
+            runSelfTest(&host);
+        }
+
+        if (host.needs_repaint) {
+            host.needs_repaint = false;
+            for (0..host.desktop_count) |i| {
+                paintDesktop(&host, &host.desktops[i]) catch |err| {
+                    logging.err("draw failed: {}", .{err});
+                };
+            }
+        }
+    }
+}

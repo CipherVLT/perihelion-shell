@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Simpbar Config
+Comment=Configure simpbar's appearance, module layout, and desktop shortcuts
+Exec=simpbar-config
+Icon=simpbar-config
+Terminal=false
+Categories=Settings;
+StartupNotify=true
