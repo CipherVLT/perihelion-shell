@@ -1,10 +1,16 @@
-# Theming: Catppuccin matched to the wallpaper
+# Theming: colors matched to the wallpaper
 
-`perihelion-theme` (repo root) picks a Catppuccin flavor from how light the
-wallpaper is and three Catppuccin accents from its strongest colors, then
-writes them to the bar, the cava wave, the desktop widgets, the app drawer
-(nwg-drawer), fuzzel (launcher and power menu), Strata and Mango's borders.
-Every color is a real Catppuccin color; the wallpaper only chooses which.
+`perihelion-theme` (repo root) has two styles:
+
+- **Catppuccin** (default): a Catppuccin flavor from how light the wallpaper
+  is and three Catppuccin accents from its strongest colors. Every color is
+  a real Catppuccin color; the wallpaper only chooses which.
+- **Material You**: matugen (simpbar's own engine) makes Material Design 3
+  colors from the wallpaper, with its scheme types (tonal spot, vibrant, ...).
+
+Either way they go to the bar, the cava wave, the desktop widgets, the app
+drawer (nwg-drawer), fuzzel (launcher and power menu), Strata, Mango's
+borders and fastfetch (the distro logo, labels and values).
 
 | Key in `~/.config/simpbar/matugen.json` | Catppuccin color |
 |---|---|
@@ -24,9 +30,13 @@ Every color is a real Catppuccin color; the wallpaper only chooses which.
 Settings live in `~/.config/simpbar/theme`, written by Simpbar Config:
 
 ```
-flavor=auto        # auto, latte, frappe, macchiato, mocha
-accent=wallpaper   # wallpaper, or flavor (blue, pink, yellow)
+style=catppuccin           # catppuccin, or material
+flavor=auto                # Catppuccin: auto, latte, frappe, macchiato, mocha
+accent=wallpaper           # Catppuccin: wallpaper, or flavor (blue, pink, yellow)
+scheme=scheme-tonal-spot   # Material You: matugen's --type
 ```
+
+In Material You, accent 1 / 2 / 3 are primary / secondary / tertiary.
 
 - `presets/` are the four flavors as fixed simpbar palettes, from Mirrez's
   simpbar-catppuccin-matugen package. The test checks the script's palette

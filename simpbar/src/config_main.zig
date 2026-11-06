@@ -610,6 +610,8 @@ var live_empty_click_command: []const u8 = "";
 // Catppuccin flavor and accent source (one of THEME_FLAVOR_CHOICES /
 // THEME_ACCENT_CHOICES), always static literals like live_auto_theme above.
 // Loaded from ~/.config/simpbar/theme.
+var live_theme_style: []const u8 = "catppuccin";
+var live_theme_scheme: []const u8 = "scheme-tonal-spot";
 var live_theme_flavor: []const u8 = "auto";
 var live_theme_accent: []const u8 = "wallpaper";
 // Desktop widgets on/off, one bit per WIDGET_TABLE row below (bit i =
@@ -993,7 +995,15 @@ fn loadConfigFromDisk() void {
             const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
             const key = std.mem.trim(u8, line[0..eq], " \t\r");
             const value = std.mem.trim(u8, line[eq + 1 ..], " \t\r");
-            if (std.mem.eql(u8, key, "flavor")) {
+            if (std.mem.eql(u8, key, "style")) {
+                for (THEME_STYLE_CHOICES) |choice| {
+                    if (std.mem.eql(u8, choice, value)) live_theme_style = choice;
+                }
+            } else if (std.mem.eql(u8, key, "scheme")) {
+                for (MATUGEN_TYPE_CHOICES) |choice| {
+                    if (std.mem.eql(u8, choice, value)) live_theme_scheme = choice;
+                }
+            } else if (std.mem.eql(u8, key, "flavor")) {
                 for (THEME_FLAVOR_CHOICES) |choice| {
                     if (std.mem.eql(u8, choice, value)) live_theme_flavor = choice;
                 }
@@ -1525,8 +1535,8 @@ fn onAutoThemeChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) ca
 
 fn buildAutoThemeRow(group: *gtk.AdwPreferencesGroup) void {
     const row = gtk.adw_action_row_new();
-    gtk.adw_preferences_row_set_title(@ptrCast(row), "Catppuccin theme");
-    gtk.adw_action_row_set_subtitle(row, "Color the bar, widgets, app drawer, launcher, Strata and window borders with Catppuccin, matched to the wallpaper on every change. Turning this off uses the colors below instead.");
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Match the wallpaper");
+    gtk.adw_action_row_set_subtitle(row, "Color the bar, widgets, app drawer, launcher, Strata, window borders and fastfetch to match the wallpaper, on every change. Turning this off uses the colors below instead.");
     gtk.adw_action_row_set_icon_name(row, "applications-graphics-symbolic");
 
     const sw = gtk.gtk_switch_new();
@@ -1541,6 +1551,23 @@ fn buildAutoThemeRow(group: *gtk.AdwPreferencesGroup) void {
 // Perihelion: Catppuccin flavors, like Event Horizon's theme presets. "auto"
 // lets perihelion-theme pick from the wallpaper's lightness. Values must stay
 // in sync with perihelion-theme; labels are just what the user reads.
+const THEME_STYLE_CHOICES = [_][]const u8{ "catppuccin", "material" };
+const THEME_STYLE_LABELS = [_][*:0]const u8{
+    "Catppuccin", "Material You (matugen)",
+};
+// matugen's own `--type` values (from `matugen --help`'s possible values),
+// used by the Material You style. Values must stay byte-for-byte in sync
+// with matugen; labels are just what the user reads.
+const MATUGEN_TYPE_CHOICES = [_][]const u8{
+    "scheme-tonal-spot", "scheme-content",     "scheme-expressive", "scheme-fidelity",
+    "scheme-fruit-salad", "scheme-monochrome", "scheme-neutral",   "scheme-rainbow",
+    "scheme-vibrant",    "scheme-smart",
+};
+const MATUGEN_TYPE_LABELS = [_][*:0]const u8{
+    "Tonal spot (default)", "Content", "Expressive", "Fidelity",
+    "Fruit salad",          "Monochrome", "Neutral", "Rainbow",
+    "Vibrant",              "Smart",
+};
 const THEME_FLAVOR_CHOICES = [_][]const u8{ "auto", "latte", "frappe", "macchiato", "mocha" };
 const THEME_FLAVOR_LABELS = [_][*:0]const u8{
     "Auto (from the wallpaper)", "Latte (light)", "Frappé", "Macchiato", "Mocha (darkest)",
@@ -1553,13 +1580,27 @@ const THEME_ACCENT_LABELS = [_][*:0]const u8{
 /// Writes ~/.config/simpbar/theme and reruns perihelion-theme so the change
 /// shows up right away instead of at the next wallpaper switch.
 fn saveThemeSettings() void {
-    var buf: [96]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "flavor={s}\naccent={s}\n", .{ live_theme_flavor, live_theme_accent }) catch return;
+    var buf: [160]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "style={s}\nflavor={s}\naccent={s}\nscheme={s}\n", .{ live_theme_style, live_theme_flavor, live_theme_accent, live_theme_scheme }) catch return;
     if (writeFileAll(theme_path, text)) {
         launchDetached(&.{ "perihelion-theme", "--force" });
     } else {
         logging.err("config: could not write {s}", .{theme_path});
     }
+}
+
+fn onThemeStyleChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= THEME_STYLE_CHOICES.len) return;
+    live_theme_style = THEME_STYLE_CHOICES[idx];
+    saveThemeSettings();
+}
+
+fn onMatugenTypeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= MATUGEN_TYPE_CHOICES.len) return;
+    live_theme_scheme = MATUGEN_TYPE_CHOICES[idx];
+    saveThemeSettings();
 }
 
 fn onThemeFlavorChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
@@ -1605,8 +1646,10 @@ fn buildThemeComboRow(
 }
 
 fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
-    buildThemeComboRow(group, "Flavor", "Which Catppuccin flavor to use. Auto picks Latte for light wallpapers and Frappé, Macchiato or Mocha for darker ones.", &THEME_FLAVOR_LABELS, &THEME_FLAVOR_CHOICES, live_theme_flavor, &onThemeFlavorChanged);
-    buildThemeComboRow(group, "Accent colors", "The three Catppuccin accents for highlights and the visualizer wave: the ones closest to the wallpaper's colors, or Perihelion's blue, pink and yellow.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
+    buildThemeComboRow(group, "Style", "Catppuccin: real Catppuccin colors, the closest to the wallpaper. Material You: matugen's Material Design colors made from the wallpaper.", &THEME_STYLE_LABELS, &THEME_STYLE_CHOICES, live_theme_style, &onThemeStyleChanged);
+    buildThemeComboRow(group, "Flavor", "Catppuccin only: which flavor. Auto picks Latte for light wallpapers and Frappé, Macchiato or Mocha for darker ones.", &THEME_FLAVOR_LABELS, &THEME_FLAVOR_CHOICES, live_theme_flavor, &onThemeFlavorChanged);
+    buildThemeComboRow(group, "Accent colors", "Catppuccin only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or Perihelion's blue, pink and yellow.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
+    buildThemeComboRow(group, "Matugen color scheme", "Material You only: the palette matugen derives from the wallpaper.", &MATUGEN_TYPE_LABELS, &MATUGEN_TYPE_CHOICES, live_theme_scheme, &onMatugenTypeChanged);
 }
 
 /// Flips the hover/active-pill animation master switch

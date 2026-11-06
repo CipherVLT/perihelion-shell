@@ -1,34 +1,41 @@
 #!/usr/bin/python3 -I
-"""perihelion-theme: color the desktop with Catppuccin, matched to the wallpaper.
+"""perihelion-theme: color the desktop to match the wallpaper.
 
-Reads the wallpaper, picks a Catppuccin flavor (Latte, Frappé, Macchiato or
-Mocha) from how light it is, and three Catppuccin accents from its strongest
-colors. Then writes them everywhere the shell draws:
+Two styles. Catppuccin (the default) reads the wallpaper, picks a Catppuccin
+flavor (Latte, Frappé, Macchiato or Mocha) from how light it is, and three
+Catppuccin accents from its strongest colors: every color is a real
+Catppuccin color. Material You runs matugen, simpbar's own theming engine, for
+Material Design 3 colors made from the wallpaper (its scheme picker: tonal
+spot, vibrant, ...). Either way the colors go everywhere the shell draws:
 
   ~/.config/simpbar/matugen.json        the bar, the cava wave, desktop widgets
   ~/.config/nwg-drawer/drawer.css       the app drawer (Super+A)
   ~/.config/fuzzel/fuzzel.ini [colors]  the launcher and the power menu
   ~/.config/strata/themes/tokyo-night.toml   Strata, the file manager
   ~/.config/mango/colors.conf           Mango's window borders
+  ~/.config/fastfetch/config.jsonc      the distro logo and labels in the terminal
 
-and tells simpbar and simpbar-shell to reload (SIGUSR1). Every color is a
-real Catppuccin color: nothing is invented from the image, only chosen.
+and tells simpbar and simpbar-shell to reload (SIGUSR1).
 
 Settings, ~/.config/simpbar/theme (Simpbar Config writes it):
-  flavor=auto        auto (from the wallpaper), latte, frappe, macchiato, mocha
-  accent=wallpaper   wallpaper (picked from the image) or flavor (blue, pink,
-                     yellow: Perihelion's look)
+  style=catppuccin   catppuccin, or material (Material You, via matugen)
+  flavor=auto        Catppuccin: auto (from the wallpaper), latte, frappe,
+                     macchiato, mocha
+  accent=wallpaper   Catppuccin: wallpaper (picked from the image) or flavor
+                     (blue, pink, yellow: Perihelion's look)
+  scheme=scheme-tonal-spot   Material You: matugen's --type
 
-A file you edited by hand is left alone: the drawer CSS, fuzzel colors and
-Strata theme are only rewritten while they still hold Perihelion's defaults
-or this script's own output. Turning off "Catppuccin theme" in Simpbar
+A file you edited by hand is left alone: the drawer CSS, fuzzel colors,
+Strata theme and fastfetch colors are only rewritten while they still hold Perihelion's defaults
+or this script's own output. Turning off "Match the wallpaper" in Simpbar
 Config (auto_theme "manual") stops all of it.
 
 Usage:
   perihelion-theme                 theme from the current wallpaper
   perihelion-theme IMAGE           theme from IMAGE
   perihelion-theme --color '#RRGGBB'
-  options: --flavor F  --accent wallpaper|flavor  --force  --dry-run (print
+  options: --style catppuccin|material  --flavor F  --accent wallpaper|flavor
+           --scheme TYPE  --force  --dry-run (print
            the chosen palette as JSON, write nothing)
 """
 
@@ -96,7 +103,13 @@ PALETTES = {
     },
 }
 FLAVORS = ("latte", "frappe", "macchiato", "mocha")
-FLAVOR_NAMES = {"latte": "Latte", "frappe": "Frappé", "macchiato": "Macchiato", "mocha": "Mocha"}
+FLAVOR_NAMES = {"latte": "Catppuccin Latte", "frappe": "Catppuccin Frappé",
+                "macchiato": "Catppuccin Macchiato", "mocha": "Catppuccin Mocha",
+                "material": "Material You"}
+# matugen's --type values (simpbar's own list).
+MATUGEN_SCHEMES = ("scheme-tonal-spot", "scheme-content", "scheme-expressive", "scheme-fidelity",
+                   "scheme-fruit-salad", "scheme-monochrome", "scheme-neutral", "scheme-rainbow",
+                   "scheme-vibrant", "scheme-smart")
 ACCENTS = ("rosewater", "flamingo", "pink", "mauve", "red", "maroon", "peach",
            "yellow", "green", "teal", "sky", "sapphire", "blue", "lavender")
 # Perihelion's own look, and the order fallbacks are tried in when the
@@ -269,7 +282,7 @@ def rgba(h, alpha):
 def drawer_css(t):
     c = t["colors"]
     name = FLAVOR_NAMES[t["flavor"]]
-    return f"""/* Perihelion app drawer (nwg-drawer): Catppuccin {name}, accents {", ".join(t["accents"])}.
+    return f"""/* Perihelion app drawer (nwg-drawer): {name}, accents {", ".join(t["accents"])}.
  * Written by {MARKER} on every wallpaper change. To keep your own look,
  * delete this line and edit freely: the file won't be touched again. */
 
@@ -359,7 +372,7 @@ def strata_toml(t):
     c = t["colors"]
     return "\n".join([
         f"# {MARKER}: follows the wallpaper. Pick another theme in Strata's settings to stop.",
-        f'name = "Catppuccin {FLAVOR_NAMES[t["flavor"]]} (wallpaper)"',
+        f'name = "{FLAVOR_NAMES[t["flavor"]]} (wallpaper)"',
         f'background = "{c["base"]}"',
         f'surface = "{c["mantle"]}"',
         f'text = "{c["text"]}"',
@@ -377,8 +390,8 @@ def mango_conf(t):
     c = t["colors"]
     m = lambda v, a="ff": "0x" + v.lstrip("#") + a  # noqa: E731
     return "\n".join([
-        f"# Written by {MARKER} on every wallpaper change (Catppuccin "
-        f"{FLAVOR_NAMES[t['flavor']]}). config.conf sources it last.",
+        f"# Written by {MARKER} on every wallpaper change ({FLAVOR_NAMES[t['flavor']]}). "
+        "config.conf sources it last.",
         f"focus_color={m(t['accent'])}",
         f"border_color={m(c['surface1'])}",
         f"urgent_color={m(c['red'])}",
@@ -388,6 +401,137 @@ def mango_conf(t):
         f"root_color={m(c['base'])}",
         "",
     ])
+
+
+# --- Material You, through matugen ----------------------------------------
+def matugen_bin():
+    found = shutil.which("matugen")
+    if found:
+        return found
+    cargo = os.path.join(HOME, ".cargo", "bin", "matugen")
+    return cargo if os.access(cargo, os.X_OK) else None
+
+
+def _hex_of(v):
+    """A role's dark-scheme hex from any matugen JSON layout (2.x to 4.x)."""
+    if isinstance(v, str):
+        return v[:7].lower() if re.match(r"#[0-9A-Fa-f]{6}", v) else None
+    if isinstance(v, dict):
+        for k in ("dark", "default", "color", "hex"):
+            if k in v:
+                h = _hex_of(v[k])
+                if h:
+                    return h
+    return None
+
+
+def parse_matugen(text):
+    """{role: "#rrggbb"} for the dark scheme, from matugen's --json hex output."""
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError("no JSON in matugen's output")
+    data = json.loads(text[start:end + 1])
+    colors = data.get("colors", data)
+    if isinstance(colors.get("dark"), dict) and "primary" in colors["dark"]:
+        colors = colors["dark"]  # 2.x: colors.dark.<role>
+    out = {}
+    for role, v in colors.items():
+        h = _hex_of(v)
+        if h:
+            out[role] = h
+    missing = [r for r in ("primary", "secondary", "tertiary", "surface", "on_surface") if r not in out]
+    if missing:
+        raise ValueError("matugen's output has no " + ", ".join(missing))
+    return out
+
+
+def run_matugen(kind, value, scheme):
+    exe = matugen_bin()
+    if not exe:
+        raise RuntimeError("matugen isn't installed")
+    source = ["image", value] if kind == "image" else ["color", "hex", value]
+    base = [exe, *source, "-t", scheme, "-m", "dark", "--dry-run", "--json", "hex"]
+    # --source-color-index 0 picks the most dominant color without the
+    # interactive prompt matugen 4 otherwise shows; older matugen lacks the
+    # flag (and never prompted), so retry without it.
+    for extra in (["--source-color-index", "0"], []):
+        try:
+            r = subprocess.run(base + extra, capture_output=True, text=True, timeout=60,
+                               stdin=subprocess.DEVNULL, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise RuntimeError(f"matugen failed: {e}") from e
+        if r.returncode == 0:
+            return parse_matugen(r.stdout)
+        if extra and "source-color-index" in (r.stderr or ""):
+            continue
+        last = ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1]
+        raise RuntimeError(f"matugen failed: {last}")
+    raise RuntimeError("matugen failed")
+
+
+def build_material(md):
+    """Material Design 3 roles in the palette shape every writer uses."""
+    bg, fg = md["surface"], md["on_surface"]
+
+    def g(*names, blend):
+        """The first role matugen gave, else a surface/on_surface blend."""
+        return next((md[n] for n in names if n in md), None) or mix(bg, fg, blend)
+    colors = {
+        "base": bg,
+        "mantle": g("surface_container_low", "surface_dim", blend=0.03),
+        "crust": g("surface_container_lowest", blend=0.0),
+        "surface0": g("surface_container", "surface_variant", blend=0.08),
+        "surface1": g("surface_container_high", blend=0.13),
+        "surface2": g("surface_container_highest", blend=0.18),
+        "overlay0": g("outline_variant", blend=0.35),
+        "overlay1": g("outline", "on_surface_variant", blend=0.55),
+        "text": fg,
+        "red": md.get("error") or md["primary"],
+    }
+    return {
+        "flavor": "material",
+        "accents": ["primary", "secondary", "tertiary"],
+        "colors": colors,
+        "accent": md["primary"], "accent2": md["secondary"], "accent3": md["tertiary"],
+    }
+
+
+# --- fastfetch: the distro logo and labels in the terminal -------------------
+def ansi(h, bold=False):
+    r, g, b = hex_rgb(h.lstrip("#"))
+    return ("1;" if bold else "") + f"38;2;{r};{g};{b}"
+
+
+FASTFETCH_OS_MODULES = ("os", "kernel", "packages", "shell")
+FASTFETCH_NOTE = f"// {MARKER}: these colors follow the wallpaper; delete this line to keep your own"
+
+
+def update_fastfetch(path, t, default_path):
+    """Recolor Perihelion's fastfetch layout in place: the logo (Fedora's blue
+    and its white "f") takes accents 1 and 3, the OS labels accent 2, the other
+    labels accent 3, values accent 1. Only while the file is still ours."""
+    cur = read(path)
+    if cur is None:
+        return False
+    default = read(default_path) if default_path else None
+    if MARKER not in cur and cur != default:
+        return False
+    c = t["colors"]
+    new = re.sub(r'"color": \{ "1": "[^"]*", "2": "[^"]*" \}',
+                 f'"color": {{ "1": "{ansi(t["accent"])}", "2": "{ansi(t["accent3"])}" }}', cur)
+    new = re.sub(r'"color": \{ "title": "[^"]*", "output": "[^"]*", "separator": "[^"]*" \}',
+                 f'"color": {{ "title": "{ansi(t["accent"], True)}", "output": "{ansi(t["accent"])}", '
+                 f'"separator": "{ansi(c["overlay1"])}" }}', new)
+
+    def module(m):
+        block = m.group(0)
+        kind = re.search(r'"type": "([^"]+)"', block).group(1)
+        color = ansi(t["accent2"] if kind in FASTFETCH_OS_MODULES else t["accent3"], True)
+        return re.sub(r'"keyColor": "[^"]*"', f'"keyColor": "{color}"', block)
+    new = re.sub(r'\{[^{}]*"type": "[^"]+"[^{}]*"keyColor": "[^"]*"[^{}]*\}', module, new)
+    if MARKER not in new:
+        new = FASTFETCH_NOTE + "\n" + new
+    return write(path, new)
 
 
 # --- writing ------------------------------------------------------------------
@@ -482,7 +626,8 @@ def signal_procs(names, sig):
 
 # --- settings and inputs ---------------------------------------------------
 def read_settings():
-    s = {"flavor": "auto", "accent": "wallpaper"}
+    s = {"style": "catppuccin", "flavor": "auto", "accent": "wallpaper",
+         "scheme": "scheme-tonal-spot"}
     text = read(os.path.join(SIMPBAR, "theme")) or ""
     for line in text.splitlines():
         k, sep, v = line.partition("=")
@@ -493,6 +638,10 @@ def read_settings():
             s["flavor"] = v
         elif k == "accent" and v in ("wallpaper", "flavor"):
             s["accent"] = v
+        elif k == "style" and v in ("catppuccin", "material"):
+            s["style"] = v
+        elif k == "scheme" and v in MATUGEN_SCHEMES:
+            s["scheme"] = v
     return s
 
 
@@ -530,17 +679,21 @@ def main(argv=None):
     ap.add_argument("--color")
     ap.add_argument("--flavor", choices=("auto",) + FLAVORS)
     ap.add_argument("--accent", choices=("wallpaper", "flavor"))
+    ap.add_argument("--style", choices=("catppuccin", "material"))
+    ap.add_argument("--scheme", choices=MATUGEN_SCHEMES)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
     if not args.dry_run and auto_theme_off():
-        print("perihelion-theme: Catppuccin theme is off in Simpbar Config; nothing to do")
+        print("perihelion-theme: "Match the wallpaper" is off in Simpbar Config; nothing to do")
         return 0
 
     settings = read_settings()
     flavor_setting = args.flavor or settings["flavor"]
     accent_setting = args.accent or settings["accent"]
+    style = args.style or settings["style"]
+    scheme = args.scheme or settings["scheme"]
 
     if args.color:
         if not re.fullmatch(r"#?[0-9A-Fa-f]{6}", args.color):
@@ -554,7 +707,7 @@ def main(argv=None):
         kind, value = current_wallpaper()
 
     # Skip the work when nothing changed since the last run (login restores).
-    stamp_src = f"{kind}|{value}|{flavor_setting}|{accent_setting}|6"
+    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|7"
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
@@ -566,7 +719,18 @@ def main(argv=None):
             and os.path.isfile(os.path.join(SIMPBAR, "matugen.json")):
         return 0
 
-    if kind == "image":
+    theme = None
+    if style == "material" and kind:
+        try:
+            theme = build_material(run_matugen(kind, value, scheme))
+            accents, votes = theme["accents"], {}
+            flavor = "material"
+        except (RuntimeError, ValueError) as e:
+            print(f"perihelion-theme: {e}; using Catppuccin instead", file=sys.stderr)
+
+    if theme is not None:
+        pixels = []
+    elif kind == "image":
         try:
             pixels = load_pixels(value)
         except Exception as e:  # an image format with no loader installed, a broken file
@@ -578,15 +742,16 @@ def main(argv=None):
     else:
         pixels = []
 
-    flavor = pick_flavor(pixels) if flavor_setting == "auto" else flavor_setting
-    if accent_setting == "wallpaper" and pixels:
-        accents, votes = pick_accents(pixels, flavor)
-    else:
-        accents, votes = list(DEFAULT_ACCENTS[:3]), {}
-    theme = build_theme(flavor, accents)
+    if theme is None:
+        flavor = pick_flavor(pixels) if flavor_setting == "auto" else flavor_setting
+        if accent_setting == "wallpaper" and pixels:
+            accents, votes = pick_accents(pixels, flavor)
+        else:
+            accents, votes = list(DEFAULT_ACCENTS[:3]), {}
+        theme = build_theme(flavor, accents)
 
     if args.dry_run:
-        print(json.dumps({"source": value, "flavor": flavor, "accents": accents,
+        print(json.dumps({"source": value, "style": style, "flavor": flavor, "accents": accents,
                           "votes": {k: round(v, 2) for k, v in votes.items() if v},
                           "matugen": matugen_json(theme)}, indent=2, ensure_ascii=False))
         return 0
@@ -625,9 +790,13 @@ def main(argv=None):
                 except (OSError, subprocess.SubprocessError):
                     pass
 
+    if update_fastfetch(os.path.join(CONFIG, "fastfetch", "config.jsonc"), theme,
+                        os.path.join(SHARE, "fastfetch", "config.jsonc")):
+        changed.append("fastfetch")
+
     signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
-    print(f"perihelion-theme: Catppuccin {FLAVOR_NAMES[flavor]}, accents "
+    print(f"perihelion-theme: {FLAVOR_NAMES[flavor]}, accents "
           f"{', '.join(accents)}" + (f" ({', '.join(changed)} updated)" if changed else ""))
     return 0
 
