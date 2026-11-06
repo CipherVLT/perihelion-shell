@@ -11,7 +11,7 @@
 Either way they go to the bar, the cava wave, the desktop widgets, the app
 drawer (nwg-drawer), fuzzel (launcher and power menu), Strata, Mango's
 borders, fastfetch (the distro logo, labels and values), the terminal cava,
-btop and cmatrix.
+btop, cmatrix and notifications (mako).
 
 | Key in `~/.config/simpbar/matugen.json` | Catppuccin color |
 |---|---|

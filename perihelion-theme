@@ -17,6 +17,7 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
   ~/.config/cava/config                 terminal cava's gradient (live, SIGUSR2)
   ~/.config/btop/themes/perihelion.theme   btop (btop.conf picks "perihelion")
   ~/.config/perihelion/cmatrix-color    cmatrix's color (Perihelion's wrapper)
+  ~/.config/mako/config                 notifications (Mango), reloaded live
 
 and tells simpbar and simpbar-shell to reload (SIGUSR1).
 
@@ -597,6 +598,35 @@ def cmatrix_color(t):
     return min(CMATRIX_HUES, key=lambda n: hue_gap(H, n[1]))[0]
 
 
+def mako_config(t):
+    c = t["colors"]
+    return "\n".join([
+        f"# Notifications (mako), written by {MARKER} on every wallpaper change",
+        f"# ({FLAVOR_NAMES[t['flavor']]}). Delete this line to keep your own; it won't be touched.",
+        "font=Noto Sans 11",
+        f"background-color={c['base']}ee",
+        f"text-color={c['text']}",
+        f"border-color={t['accent']}",
+        f"progress-color=over {c['surface1']}",
+        "border-size=2",
+        "border-radius=10",
+        "padding=10",
+        "margin=12",
+        "width=360",
+        "max-icon-size=48",
+        "default-timeout=6000",
+        "anchor=top-right",
+        "",
+        "[urgency=low]",
+        f"border-color={c['overlay0']}",
+        "",
+        "[urgency=high]",
+        f"border-color={c['red']}",
+        "default-timeout=0",
+        "",
+    ])
+
+
 # --- writing ------------------------------------------------------------------
 def read(path):
     try:
@@ -770,7 +800,7 @@ def main(argv=None):
         kind, value = current_wallpaper()
 
     # Skip the work when nothing changed since the last run (login restores).
-    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|8"
+    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|9"
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
@@ -866,6 +896,17 @@ def main(argv=None):
         changed.append("btop")
     if write(os.path.join(CONFIG, "perihelion", "cmatrix-color"), cmatrix_color(theme) + "\n"):
         changed.append("cmatrix")
+
+    mako = os.path.join(CONFIG, "mako", "config")
+    cur = read(mako)
+    if shutil.which("mako") and (cur is None or f"written by {MARKER}" in cur):
+        if write(mako, mako_config(theme)):
+            changed.append("notifications")
+            if running("mako") and shutil.which("makoctl"):
+                try:
+                    subprocess.run(["makoctl", "reload"], capture_output=True, timeout=5, check=False)
+                except (OSError, subprocess.SubprocessError):
+                    pass
 
     signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
