@@ -1,0 +1,28 @@
+# Temporary: facts about Fedora 45 for Perihelion's Wine and package audit.
+name: Probe Fedora
+on:
+  push:
+    paths: [.github/workflows/probe-fedora.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:45
+    steps:
+      - run: |
+          q() { dnf5 -q repoquery "$@" 2>/dev/null; }
+          echo "== wine stack requires (resolved, x86_64)"
+          q --requires --resolve --qf '%{name}\n' wine-core.x86_64 wine-pulseaudio.x86_64 wine-alsa.x86_64 \
+            wine-cms.x86_64 wine-ldap.x86_64 wine-twain.x86_64 wine-opencl.x86_64 wine-openal.x86_64 \
+            wine-fonts wine-common | grep -v '^wine' | sort -u | tr '\n' ' '; echo
+          echo "== wine recommends/suggests"; q --recommends --suggests --qf '%{name}\n' wine wine-core.x86_64 | sort -u | tr '\n' ' '; echo
+          echo "== winetricks requires"; q --requires winetricks | tr '\n' ' '; echo
+          echo "== winetricks recommends"; q --recommends winetricks | tr '\n' ' '; echo
+          echo "== ntsync in kernel"; q -l kernel-modules-core kernel-modules kernel-core | grep -i ntsync
+          echo "== udev rules mentioning ntsync"; dnf5 -q install -y systemd-udev >/dev/null 2>&1; grep -rn ntsync /usr/lib/udev/rules.d/ || echo none
+          echo "== @hardware-support"; dnf5 -q group info hardware-support 2>/dev/null | sed -n '/Mandatory\|Default\|Optional/,$p' | head -60
+          echo "== @core"; dnf5 -q group info core 2>/dev/null | grep -iE 'zram|firmware|fwupd|unzip|tar|which|sudo' 
+          for p in alsa-sof-firmware linux-firmware zram-generator-defaults fwupd udisks2 gvfs-mtp exfatprogs ntfs-3g ntfsprogs unzip p7zip p7zip-plugins cabextract mpv pavucontrol blueman google-noto-sans-cjk-vf-fonts google-noto-sans-cjk-fonts gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free mozilla-openh264 openh264 ffmpeg-free gamemode mangohud swayidle swaync mako cups system-config-printer file-roller tuned-ppd sdl2-compat samba-winbind-clients; do
+            printf '%-32s %s\n' "$p" "$(q --qf '%{evr} %{repoid}\n' --latest-limit 1 "$p" | head -1)"; done
+          echo "== repos"; dnf5 -q repolist --all | head -20
