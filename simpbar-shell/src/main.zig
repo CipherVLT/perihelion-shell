@@ -591,6 +591,10 @@ const Host = struct {
     // arrive just after the press): press+Ctrl becomes a drag, anything else
     // becomes a click on release.
     ctrl_down: bool = false,
+    // Perihelion: Alt + right-click removes a widget. The right press is held
+    // here until the modifiers event (which can follow the press) says Alt.
+    alt_down: bool = false,
+    pending_right: ?usize = null,
     left_down: bool = false,
     press_index: ?usize = null,
     drag_index: ?usize = null,
@@ -1001,6 +1005,11 @@ fn handleRightPress(host: *Host) void {
         }
     }
     if (hit) |i| {
+        if (host.alt_down) {
+            removeWidget(host, i);
+            return;
+        }
+        host.pending_right = i;
         if (std.meta.activeTag(host.widgets[i]) == .icons) {
             host.widgets[i].icons.rightClick(host.widget_rects[i], host.pointer_x, host.pointer_y);
             markDirty(host, i);
@@ -1008,6 +1017,40 @@ fn handleRightPress(host: *Host) void {
         }
     }
     closeIconsMenus(host);
+}
+
+/// Perihelion: hides widget `i` for good (Alt + right-click). Adds its id
+/// to widgets-disabled, the same file simpbar-config's switches write, then
+/// restarts the shell so the desktop redraws without it. The last widget
+/// stays: with none left the shell exits, and Alt+W's overview with it.
+fn removeWidget(host: *Host, i: usize) void {
+    host.pending_right = null;
+    if (host.widget_count <= 1) {
+        logging.warn("widgets: keeping the last widget (the overview needs simpbar-shell running)", .{});
+        return;
+    }
+    if (widgets_disabled_path.len == 0) return;
+    const id = @tagName(std.meta.activeTag(host.widgets[i]));
+    const raw_fd = posix.system.open(widgets_disabled_path.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }, @as(posix.mode_t, 0o644));
+    if (raw_fd < 0) return;
+    const fd: posix.fd_t = @intCast(raw_fd);
+    var buf: [64]u8 = undefined;
+    // Leading newline: the file may not end in one; blank lines are skipped.
+    const text = std.fmt.bufPrint(&buf, "\n{s}\n", .{id}) catch {
+        _ = posix.system.close(fd);
+        return;
+    };
+    var off: usize = 0;
+    while (off < text.len) {
+        const n = posix.system.write(fd, text[off..].ptr, text.len - off);
+        if (n <= 0) break;
+        off += @intCast(n);
+    }
+    _ = posix.system.close(fd);
+    logging.step("widgets: {s} removed (Alt + right-click) — restarting", .{id});
+    endEdit(host); // save a note being typed before going away
+    widgets_mod.spawnDetached("sleep 0.4; exec simpbar-shell");
+    std.process.exit(0);
 }
 
 fn layerSurfaceListener(_: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Event, d: *Desktop) void {
@@ -1151,7 +1194,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
 /// focused-vs-clicking ordering can otherwise eat keystrokes).
 fn pointerButton(host: *Host, btn: u32, pressed: bool) void {
     if (btn == BTN_RIGHT) {
-        if (pressed) handleRightPress(host);
+        if (pressed) handleRightPress(host) else host.pending_right = null;
         return;
     }
     if (btn != BTN_LEFT) return;
@@ -1425,6 +1468,8 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, host: *Host) void
         .leave => {
             logging.step("kb: focus leave", .{});
             host.ctrl_down = false;
+            host.alt_down = false;
+            host.pending_right = null;
             host.repeat_key = null;
             // Editing a note then clicking a window (our surface loses the
             // on_demand focus) commits it, Plasma-style.
@@ -1438,6 +1483,11 @@ fn keyboardListener(_: *wl.Keyboard, event: wl.Keyboard.Event, host: *Host) void
             // Control is real-mod index 2 in the depressed mask.
             const ctrl = e.mods_depressed & (1 << 2) != 0;
             host.ctrl_down = ctrl;
+            // Perihelion: Alt is real-mod index 3 (Mod1).
+            host.alt_down = e.mods_depressed & (1 << 3) != 0;
+            if (host.alt_down) {
+                if (host.pending_right) |pi| removeWidget(host, pi);
+            }
             // A press can precede this event (clicking takes focus first);
             // the moment Ctrl is known and the button is down over a widget,
             // turn the pending press into a drag.
