@@ -135,7 +135,9 @@ fn reserveRightCell(pen: i64, content_w: i64, limit_left: i64) CellPlacement {
 // how TrayItem keeps its icons — no heap churn on every draw, and the frame
 // presenter uploads the finished frame just like any other pixel.
 const MAX_LAUNCHERS: usize = 32;
-const LAUNCHER_ICON_SIZE: u32 = 16;
+// Perihelion: 22 px app icons for pinned launchers and the taskbar (16 was
+// hard to see); slot widths and centering are derived from this.
+const LAUNCHER_ICON_SIZE: u32 = 22;
 const LAUNCHER_ICON_TEXT_GAP: i64 = 5;
 
 const LauncherIconCache = struct {
