@@ -31,7 +31,7 @@ btop, cmatrix and notifications (mako).
 Settings live in `~/.config/simpbar/theme`, written by Simpbar Config:
 
 ```
-style=catppuccin           # catppuccin, or material
+style=catppuccin           # catppuccin (a palette), or material
 flavor=auto                # Catppuccin: auto, latte, frappe, macchiato, mocha
 accent=wallpaper           # Catppuccin: wallpaper, or flavor (blue, pink, yellow)
 scheme=scheme-tonal-spot   # Material You: matugen's --type

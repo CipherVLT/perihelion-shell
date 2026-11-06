@@ -111,11 +111,12 @@ try:
         with open(os.path.join(cfg, rel), "w", encoding="utf-8") as f:
             f.write(text)
     os.makedirs(os.path.join(cfg, "mango"))
+    os.makedirs(os.path.join(cfg, "kitty"))
     with open(os.path.join(cfg, "mango", "config.conf"), "w", encoding="utf-8") as f:
         f.write("focus_color=0x8aadf4ff\n")
     os.makedirs(os.path.join(cfg, "simpbar"))
     with open(os.path.join(cfg, "simpbar", "theme"), "w", encoding="utf-8") as f:
-        f.write("flavor=macchiato\naccent=wallpaper\n")
+        f.write("flavor=macchiato\naccent=wallpaper\ntint=off\n")
 
     r = run(home, img("green-purple.png"))
     check(r.returncode == 0, "full run succeeds" + ("" if r.returncode == 0 else ": " + r.stderr))
@@ -163,11 +164,11 @@ try:
 {
     "logo": {
         "padding": { "top": 3 },
-        "color": { "1": "38;2;138;173;244", "2": "38;2;238;212;159" }
+        "color": { "1": "38;2;95;117;166", "2": "38;2;138;173;244" }
     },
     "display": {
           "separator": " ➜  ",
-          "color": { "title": "1;38;2;138;173;244", "output": "38;2;138;173;244", "separator": "38;2;128;135;162" }
+          "color": { "title": "1;38;2;138;173;244", "output": "38;2;194;206;245", "separator": "38;2;128;135;162" }
     },
     "modules": [
          {
@@ -175,12 +176,24 @@ try:
             "key": "OS   ",
             "keyColor": "1;38;2;245;189;230",  // = color1
         },
+        "break",
         {
             "type": "wm",
             "key": "WM   ",
+            "keyColor": "1;38;2;138;173;244",
+        },
+        "break",
+        {
+            "type": "host",
+            "format": "{5} {1} Type {2}",
+            "key": "PC   ",
             "keyColor": "1;38;2;238;212;159",
         },
-        "break"
+        {
+            "type": "command",
+            "format": "OS Age: {result}",
+            "keyColor": "1;38;2;238;212;159",
+        }
     ]
 }
 """
@@ -188,7 +201,7 @@ try:
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "config.jsonc"), "w", encoding="utf-8") as f:
             f.write(ff_default)
-    run(home, "--color", "#24273a", "--flavor", "macchiato", "--accent", "flavor", "--force")
+    run(home, "--color", "#24273a", "--flavor", "macchiato", "--accent", "flavor", "--tint", "off", "--force")
     ff = pt.read(os.path.join(cfg, "fastfetch", "config.jsonc"))
     check(ff.split("\n", 1)[1] == ff_default and ff.startswith("// perihelion-theme"),
           "fastfetch: Macchiato defaults reproduce the shipped colors exactly")
@@ -196,9 +209,16 @@ try:
     ff = pt.read(os.path.join(cfg, "fastfetch", "config.jsonc"))
     with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
         mj = json.load(f)
-    check('"1": "' + pt.ansi(mj["bezel_color"]) + '"' in ff, "fastfetch: logo takes accent 1")
-    check('"2": "' + pt.ansi(mj["matrix_color"]) + '"' in ff, "fastfetch: logo's second color takes accent 3")
-    check('"keyColor": "' + pt.ansi(mj["cava_color"], True) + '",  // = color1' in ff, "fastfetch: OS labels take accent 2")
+    check('"2": "' + pt.ansi(mj["bezel_color"]) + '"' in ff, "fastfetch: logo highlight takes accent 1")
+    check('"1": "38;2;' not in ff or '"1": "' + pt.ansi(mj["bezel_color"]) + '"' not in ff,
+          "fastfetch: logo body is a darker shade, not accent 1 itself")
+    check('"keyColor": "' + pt.ansi(mj["cava_color"], True) + '",  // = color1' in ff, "fastfetch: OS section takes accent 2")
+    check('"key": "WM   ",\n            "keyColor": "' + pt.ansi(mj["bezel_color"], True) + '"' in ff,
+          "fastfetch: WM section takes accent 1")
+    pc = re.search(r'"key": "PC   ",\s*"keyColor": "([^"]*)"', ff).group(1)
+    check(pc == pt.ansi(mj["matrix_color"], True), "fastfetch: PC header (format with {braces}) takes accent 3")
+    age = re.search(r'"format": "OS Age: \{result\}",\s*"keyColor": "([^"]*)"', ff).group(1)
+    check(age == pc, "fastfetch: OS Age line follows its section")
     check(ff.count("perihelion-theme") == 1, "fastfetch: one note line")
     check(json.loads(re.sub(r"//[^\n]*", "", ff).replace(",\n        }", "\n        }").replace(",\n         }", "\n         }"))
           if False else True, "fastfetch: still parses")  # (layout untouched; JSONC)
@@ -228,6 +248,34 @@ try:
     mk = pt.mako_config(pt.build_theme("macchiato", ["blue", "pink", "yellow"]))
     check("border-color=#8aadf4" in mk and "background-color=#24273aee" in mk and "[urgency=high]" in mk,
           "mako: notification colors from the palette")
+
+    # 6c. Wallpaper tint: backgrounds take the wallpaper's hue
+    for name, rgb, lo, hi in (("purple", (150, 60, 210), 280, 330), ("green", (40, 190, 80), 120, 170)):
+        png(img(name + ".png"), lambda x, y, rgb=rgb: rgb if (x + y) % 3 else (30, 30, 36))
+        d = dry(home, img(name + ".png"), "--flavor", "macchiato", "--tint", "on")
+        L, C, H = pt.lch(pt.hex_rgb(d["matugen"]["bg_color"].lstrip("#")))
+        check(lo <= H <= hi and C > 0.02, f"tint: {name} wallpaper -> {name} bar background (hue {H:.0f})")
+        base_L = pt.lch(pt.hex_rgb("24273a"))[0]
+        check(abs(L - base_L) < 0.01, f"tint: {name} keeps Macchiato's lightness")
+    d = dry(home, img("purple.png"), "--flavor", "macchiato", "--tint", "off")
+    check(d["matugen"]["bg_color"] == "#24273a", "tint off: Macchiato's own base")
+    d = dry(home, img("grey.png"), "--flavor", "macchiato", "--tint", "on")
+    check(d["matugen"]["bg_color"] == "#24273a", "grey wallpaper: nothing to tint with")
+
+    # 6d. Other palettes
+    for pal in pt.PALETTE_CHOICES:
+        d = dry(home, img("green-purple.png"), "--palette", pal)
+        ok = len(set(d["accents"])) == 3 and all(
+            re.fullmatch(r"#[0-9a-f]{6}", v) for v in d["matugen"].values())
+        check(ok, f"palette {pal}: {d['palette']}, accents {d['accents']}")
+    check(dry(home, img("light.png"), "--palette", "gruvbox-auto")["palette"] == "gruvbox-light",
+          "gruvbox-auto: light wallpaper -> Gruvbox Light")
+    check(dry(home, img("dark-red.png"), "--palette", "rose-pine-auto")["palette"] == "rose-pine",
+          "rose-pine-auto: dark wallpaper -> Rosé Pine")
+
+    # 6e. kitty
+    kc = pt.read(os.path.join(cfg, "kitty", "perihelion-colors.conf"))
+    check(kc and "background" in kc and kc.count("\ncolor") == 16, "kitty: background and 16 colors written")
 
     # 7. Material You through matugen (a stand-in when matugen isn't installed).
     fake_bin = os.path.join(tmp, "bin")
