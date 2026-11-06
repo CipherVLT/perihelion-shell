@@ -1,0 +1,158 @@
+"""Tests for perihelion-theme. Run: python3 -I theme/test-perihelion-theme.py
+
+Builds small PNGs (no image libraries needed to make them), runs the script
+in a throwaway home folder and checks what it picks and what it writes."""
+
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import zlib
+from importlib.machinery import SourceFileLoader
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SCRIPT = os.path.join(ROOT, "perihelion-theme")
+pt = SourceFileLoader("perihelion_theme", SCRIPT).load_module()
+failures = 0
+
+
+def check(cond, what):
+    global failures
+    print(("ok   " if cond else "FAIL ") + what)
+    if not cond:
+        failures += 1
+
+
+def png(path, pixel_fn, w=64, h=64):
+    raw = b"".join(b"\x00" + b"".join(bytes(pixel_fn(x, y)) for x in range(w)) for y in range(h))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+def run(home, *args):
+    env = dict(os.environ, HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config"),
+               XDG_CACHE_HOME=os.path.join(home, ".cache"),
+               PERIHELION_THEME_SHARE=os.path.join(home, "share"))
+    env.pop("MANGO_INSTANCE_SIGNATURE", None)
+    return subprocess.run([sys.executable, "-I", SCRIPT, *args], env=env,
+                          capture_output=True, text=True, check=False)
+
+
+def dry(home, *args):
+    r = run(home, "--dry-run", *args)
+    if r.returncode != 0:
+        print(r.stderr)
+    return json.loads(r.stdout)
+
+
+# 1. The palette matches the four presets shipped in theme/presets.
+for flavor in pt.FLAVORS:
+    with open(os.path.join(ROOT, "theme", "presets", flavor + ".json"), encoding="utf-8") as f:
+        preset = json.load(f)
+    vals = set(pt.PALETTES[flavor].values())
+    check(all(v.lstrip("#").lower() in vals for v in preset.values()),
+          f"{flavor}: every preset color is a Catppuccin {flavor} color")
+    check(len(pt.PALETTES[flavor]) == 26, f"{flavor}: all 26 colors")
+
+tmp = tempfile.mkdtemp()
+try:
+    home = os.path.join(tmp, "home")
+    os.makedirs(home)
+    img = lambda n: os.path.join(tmp, n)  # noqa: E731
+
+    # 2. Picking.
+    png(img("dark-red.png"), lambda x, y: (200, 30, 40) if x < 20 else (18, 18, 24))
+    d = dry(home, img("dark-red.png"))
+    check(d["flavor"] == "mocha", f"dark picture -> mocha ({d['flavor']})")
+    check(d["accents"][0] in ("red", "maroon", "flamingo"), f"red streak -> red accent ({d['accents'][0]})")
+    check(len(set(d["accents"])) == 3, "three different accents")
+
+    png(img("light.png"), lambda x, y: (235, 238, 245) if y > 10 else (40, 110, 230))
+    d = dry(home, img("light.png"))
+    check(d["flavor"] == "latte", f"light picture -> latte ({d['flavor']})")
+    check(d["accents"][0] in ("blue", "sapphire", "sky", "lavender"), f"blue band -> blue accent ({d['accents'][0]})")
+
+    png(img("grey.png"), lambda x, y: ((x * 3) % 200,) * 3)
+    d = dry(home, img("grey.png"))
+    check(d["accents"] == ["blue", "pink", "yellow"], f"grey picture -> Perihelion's accents ({d['accents']})")
+
+    png(img("green-purple.png"), lambda x, y: (60, 170, 70) if x < 32 else (140, 70, 200))
+    d = dry(home, img("green-purple.png"), "--flavor", "macchiato")
+    check(d["flavor"] == "macchiato", "--flavor is honored")
+    check({"green"} <= set(d["accents"]) and ({"mauve", "lavender"} & set(d["accents"])),
+          f"green and purple both picked ({d['accents']})")
+    d = dry(home, img("green-purple.png"), "--accent", "flavor")
+    check(d["accents"] == ["blue", "pink", "yellow"], "--accent flavor -> blue, pink, yellow")
+    d = dry(home, "--color", "#24273a")
+    check(d["flavor"] in ("mocha", "macchiato"), f"plain dark color -> dark flavor ({d['flavor']})")
+
+    # 3. Writing, in a home laid out like a fresh Perihelion install.
+    cfg = os.path.join(home, ".config")
+    share = os.path.join(home, "share")
+    os.makedirs(os.path.join(share, "nwg-drawer"))
+    os.makedirs(os.path.join(share, "fuzzel"))
+    shipped_drawer = "/* shipped drawer */\nwindow { color: #cad3f5; }\n"
+    shipped_fuzzel = "[main]\nfont=Noto Sans:size=12\n\n[colors]\nbackground=24273add\ntext=cad3f5ff\n\n[border]\nwidth=2\n"
+    for rel, text in (("nwg-drawer/drawer.css", shipped_drawer), ("fuzzel/fuzzel.ini", shipped_fuzzel)):
+        with open(os.path.join(share, rel), "w", encoding="utf-8") as f:
+            f.write(text)
+        os.makedirs(os.path.dirname(os.path.join(cfg, rel)), exist_ok=True)
+        with open(os.path.join(cfg, rel), "w", encoding="utf-8") as f:
+            f.write(text)
+    os.makedirs(os.path.join(cfg, "mango"))
+    with open(os.path.join(cfg, "mango", "config.conf"), "w", encoding="utf-8") as f:
+        f.write("focus_color=0x8aadf4ff\n")
+    os.makedirs(os.path.join(cfg, "simpbar"))
+    with open(os.path.join(cfg, "simpbar", "theme"), "w", encoding="utf-8") as f:
+        f.write("flavor=macchiato\naccent=wallpaper\n")
+
+    r = run(home, img("green-purple.png"))
+    check(r.returncode == 0, "full run succeeds" + ("" if r.returncode == 0 else ": " + r.stderr))
+    with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
+        mj = json.load(f)
+    check(len(mj) == 15 and mj["bg_color"] == "#24273a", "matugen.json: 15 keys, Macchiato base (theme file honored)")
+    check(mj["bezel_color"] != mj["cava_color"] != mj["matrix_color"], "wave gradient gets three colors")
+    drawer = pt.read(os.path.join(cfg, "nwg-drawer", "drawer.css"))
+    check("Written by perihelion-theme" in drawer and mj["border_color"] in drawer, "drawer.css replaced the shipped default")
+    fz = pt.read(os.path.join(cfg, "fuzzel", "fuzzel.ini"))
+    check("[main]\nfont=Noto Sans:size=12" in fz and "[border]\nwidth=2" in fz, "fuzzel.ini: other sections untouched")
+    check("border=" + mj["border_color"].lstrip("#") + "ff" in fz, "fuzzel.ini: colors follow the accent")
+    st = pt.read(os.path.join(cfg, "strata", "themes", "tokyo-night.toml"))
+    check(st and 'accent = "' + mj["border_color"] + '"' in st, "Strata theme written")
+    mc = pt.read(os.path.join(cfg, "mango", "config.conf"))
+    check(mc.count("source_optional=~/.config/mango/colors.conf") == 1, "Mango config sources colors.conf")
+    check("focus_color=0x" + mj["border_color"].lstrip("#") in pt.read(os.path.join(cfg, "mango", "colors.conf")),
+          "Mango border follows the accent")
+
+    # 4. Second run: nothing changes; a different wallpaper changes everything.
+    before = {p: pt.read(os.path.join(cfg, p)) for p in ("simpbar/matugen.json", "mango/config.conf")}
+    run(home, img("green-purple.png"), "--force")
+    check(all(pt.read(os.path.join(cfg, p)) == t for p, t in before.items()), "same wallpaper: same files, source line not repeated")
+    run(home, img("dark-red.png"))
+    check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) != before["simpbar/matugen.json"], "new wallpaper: new colors")
+
+    # 5. Hand-edited files are left alone; "manual" turns it all off.
+    with open(os.path.join(cfg, "nwg-drawer", "drawer.css"), "w", encoding="utf-8") as f:
+        f.write("/* mine */\n")
+    with open(os.path.join(cfg, "fuzzel", "fuzzel.ini"), "w", encoding="utf-8") as f:
+        f.write("[colors]\nbackground=000000ff\n")
+    run(home, img("light.png"))
+    check(pt.read(os.path.join(cfg, "nwg-drawer", "drawer.css")) == "/* mine */\n", "edited drawer.css kept")
+    check(pt.read(os.path.join(cfg, "fuzzel", "fuzzel.ini")) == "[colors]\nbackground=000000ff\n", "edited fuzzel colors kept")
+    with open(os.path.join(cfg, "simpbar", "config.json"), "w", encoding="utf-8") as f:
+        json.dump({"appearance": {"auto_theme": "manual"}}, f)
+    snap = pt.read(os.path.join(cfg, "simpbar", "matugen.json"))
+    r = run(home, img("green-purple.png"), "--force")
+    check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) == snap and "off" in r.stdout, "auto_theme manual: nothing written")
+finally:
+    shutil.rmtree(tmp)
+
+print(f"\n{failures} failure(s)")
+sys.exit(1 if failures else 0)
