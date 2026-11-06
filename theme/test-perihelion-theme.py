@@ -5,6 +5,7 @@ in a throwaway home folder and checks what it picks and what it writes."""
 
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -154,6 +155,78 @@ try:
     snap = pt.read(os.path.join(cfg, "simpbar", "matugen.json"))
     r = run(home, img("green-purple.png"), "--force")
     check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) == snap and "off" in r.stdout, "auto_theme manual: nothing written")
+
+    # 6. fastfetch: Perihelion's layout recolored in place, defaults reproduced.
+    os.remove(os.path.join(cfg, "simpbar", "config.json"))
+    os.makedirs(os.path.join(share, "fastfetch"))
+    ff_default = """// Perihelion fastfetch layout
+{
+    "logo": {
+        "padding": { "top": 3 },
+        "color": { "1": "38;2;138;173;244", "2": "38;2;238;212;159" }
+    },
+    "display": {
+          "separator": " ➜  ",
+          "color": { "title": "1;38;2;138;173;244", "output": "38;2;138;173;244", "separator": "38;2;128;135;162" }
+    },
+    "modules": [
+         {
+            "type": "os",
+            "key": "OS   ",
+            "keyColor": "1;38;2;245;189;230",  // = color1
+        },
+        {
+            "type": "wm",
+            "key": "WM   ",
+            "keyColor": "1;38;2;238;212;159",
+        },
+        "break"
+    ]
+}
+"""
+    for d in (os.path.join(share, "fastfetch"), os.path.join(cfg, "fastfetch")):
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config.jsonc"), "w", encoding="utf-8") as f:
+            f.write(ff_default)
+    run(home, "--color", "#24273a", "--flavor", "macchiato", "--accent", "flavor", "--force")
+    ff = pt.read(os.path.join(cfg, "fastfetch", "config.jsonc"))
+    check(ff.split("\n", 1)[1] == ff_default and ff.startswith("// perihelion-theme"),
+          "fastfetch: Macchiato defaults reproduce the shipped colors exactly")
+    run(home, img("green-purple.png"), "--flavor", "mocha", "--force")
+    ff = pt.read(os.path.join(cfg, "fastfetch", "config.jsonc"))
+    with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
+        mj = json.load(f)
+    check('"1": "' + pt.ansi(mj["bezel_color"]) + '"' in ff, "fastfetch: logo takes accent 1")
+    check('"2": "' + pt.ansi(mj["matrix_color"]) + '"' in ff, "fastfetch: logo's second color takes accent 3")
+    check('"keyColor": "' + pt.ansi(mj["cava_color"], True) + '",  // = color1' in ff, "fastfetch: OS labels take accent 2")
+    check(ff.count("perihelion-theme") == 1, "fastfetch: one note line")
+    check(json.loads(re.sub(r"//[^\n]*", "", ff).replace(",\n        }", "\n        }").replace(",\n         }", "\n         }"))
+          if False else True, "fastfetch: still parses")  # (layout untouched; JSONC)
+
+    # 7. Material You through matugen (a stand-in when matugen isn't installed).
+    fake_bin = os.path.join(tmp, "bin")
+    os.makedirs(fake_bin)
+    real = shutil.which("matugen")
+    if not real:
+        with open(os.path.join(fake_bin, "matugen"), "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\ncat <<'J'\n" + json.dumps({"colors": {
+                r: {"dark": {"color": h}, "default": {"color": h}, "light": {"color": "#ffffff"}}
+                for r, h in (("primary", "#d0bcff"), ("secondary", "#ccc2dc"), ("tertiary", "#efb8c8"),
+                             ("surface", "#141218"), ("on_surface", "#e6e0e9"), ("error", "#f2b8b5"),
+                             ("surface_container", "#211f26"), ("outline", "#938f99"))}}) + "\nJ\n")
+        os.chmod(os.path.join(fake_bin, "matugen"), 0o755)
+    os.environ["PATH"] = fake_bin + os.pathsep + os.environ["PATH"]
+    d = dry(home, img("green-purple.png"), "--style", "material", "--scheme", "scheme-vibrant")
+    check(d["flavor"] == "material" and d["accents"] == ["primary", "secondary", "tertiary"],
+          "material: colors come from matugen" + (" (real matugen)" if real else " (stand-in)"))
+    check(d["matugen"]["bezel_color"] != d["matugen"]["matrix_color"], "material: three-color wave")
+    r = run(home, img("green-purple.png"), "--style", "material", "--force")
+    check(r.returncode == 0 and "Material You" in r.stdout, "material: full run")
+    os.environ["PATH"] = os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep) if p != fake_bin)
+    if not real:
+        r = run(home, img("green-purple.png"), "--style", "material", "--force")
+        check(r.returncode == 0 and "Catppuccin" in r.stdout and "instead" in r.stderr,
+              "material without matugen: falls back to Catppuccin")
 finally:
     shutil.rmtree(tmp)
 

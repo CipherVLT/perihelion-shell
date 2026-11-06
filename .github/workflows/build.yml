@@ -25,6 +25,9 @@ jobs:
             wayland-devel wayland-protocols-devel freetype-devel gdk-pixbuf2-devel libxkbcommon-devel \
             gtk4-devel libadwaita-devel glib2-devel \
             python3 python3-gobject gdk-pixbuf2 ShellCheck
+          # matugen for the Material You style, from Terra like Perihelion's ISO
+          dnf5 install -y --setopt=install_weak_deps=False \
+            --repofrompath "terra,https://repos.fyralabs.com/terra45" --setopt=terra.gpgcheck=0 matugen
       - uses: actions/checkout@v4
       - name: Cache Zig
         uses: actions/cache@v4
