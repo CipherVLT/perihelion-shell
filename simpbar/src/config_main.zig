@@ -5385,6 +5385,8 @@ fn onReloadMangoClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     mango_pages.reload();
 }
 
+const perihelion_bar_pages_only = true;
+
 fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     hypr_pages.init();
     if (hypr_pages.g_mango) {
@@ -5422,13 +5424,18 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     for (0..BAR_COUNT) |i| {
         addSidebarRow(sidebar_list, PAGE_NAMES[i], PAGE_ICONS[i], true, i);
     }
-    addSidebarRow(sidebar_list, section_title, "", false, SB_COUNT);
-    for (BAR_COUNT..BOOT_PAGE_INDEX) |i| {
-        addSidebarRow(sidebar_list, g_sb_names[i], g_sb_icons[i], true, i);
+    // Perihelion: only the Bar pages. Its Mango config lives in
+    // ~/.config/mango/config.conf (not cfg/), it boots with GRUB and logs in
+    // with SDDM, so the Mango and System pages would edit files nothing reads.
+    if (!perihelion_bar_pages_only) {
+        addSidebarRow(sidebar_list, section_title, "", false, SB_COUNT);
+        for (BAR_COUNT..BOOT_PAGE_INDEX) |i| {
+            addSidebarRow(sidebar_list, g_sb_names[i], g_sb_icons[i], true, i);
+        }
+        addSidebarRow(sidebar_list, "System", "", false, SB_COUNT);
+        addSidebarRow(sidebar_list, g_sb_names[BOOT_PAGE_INDEX], g_sb_icons[BOOT_PAGE_INDEX], true, BOOT_PAGE_INDEX);
+        addSidebarRow(sidebar_list, g_sb_names[LY_PAGE_INDEX], g_sb_icons[LY_PAGE_INDEX], true, LY_PAGE_INDEX);
     }
-    addSidebarRow(sidebar_list, "System", "", false, SB_COUNT);
-    addSidebarRow(sidebar_list, g_sb_names[BOOT_PAGE_INDEX], g_sb_icons[BOOT_PAGE_INDEX], true, BOOT_PAGE_INDEX);
-    addSidebarRow(sidebar_list, g_sb_names[LY_PAGE_INDEX], g_sb_icons[LY_PAGE_INDEX], true, LY_PAGE_INDEX);
 
     const sec_widgets = if (hypr_pages.g_mango) mango_pages.pages.widgets() else hypr_pages.pages.widgets();
     var page_widgets: [SB_COUNT]*gtk.GtkBox = undefined;
