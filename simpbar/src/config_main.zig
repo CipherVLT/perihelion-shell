@@ -319,16 +319,15 @@ const JsonConfig = struct {
 
 var config_json_path_buf: [512]u8 = undefined;
 var pidfile_path_buf: [512]u8 = undefined;
-var matugen_type_path_buf: [512]u8 = undefined;
+var theme_path_buf: [512]u8 = undefined;
 var widgets_disabled_path_buf: [512]u8 = undefined;
 var shell_pidfile_path_buf: [512]u8 = undefined;
 var config_json_path: [:0]const u8 = "";
 var pidfile_path: [:0]const u8 = "";
-// simpbar owns this small state file (NOT matugen's config.toml — matugen
-// 4.2.0 ignores a `type` key there): the chosen scheme is read by
-// /usr/bin/simpbar-matugen and passed to matugen as `--type`. See
-// MATUGEN_TYPE_CHOICES below.
-var matugen_type_path: [:0]const u8 = "";
+// Perihelion: the Catppuccin theme settings (~/.config/simpbar/theme),
+// "flavor=<auto|latte|frappe|macchiato|mocha>" and "accent=<wallpaper|flavor>"
+// lines, read by perihelion-theme. See THEME_FLAVOR_CHOICES below.
+var theme_path: [:0]const u8 = "";
 // Per-widget on/off list (one widget id per line), written by the Appearance
 // page's Desktop Widgets switches and read by simpbar-shell at startup.
 // Missing file means all enabled. The GUI owns this file outright (unlike
@@ -346,7 +345,7 @@ fn resolvePaths() void {
     _ = mkdir(dir.ptr, 0o755);
     config_json_path = std.fmt.bufPrintZ(&config_json_path_buf, "{s}/config.json", .{dir}) catch "";
     pidfile_path = std.fmt.bufPrintZ(&pidfile_path_buf, "{s}/simpbar.pid", .{dir}) catch "";
-    matugen_type_path = std.fmt.bufPrintZ(&matugen_type_path_buf, "{s}/matugen-type", .{dir}) catch "";
+    theme_path = std.fmt.bufPrintZ(&theme_path_buf, "{s}/theme", .{dir}) catch "";
     widgets_disabled_path = std.fmt.bufPrintZ(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}) catch "";
     shell_pidfile_path = std.fmt.bufPrintZ(&shell_pidfile_path_buf, "{s}/simpbar-shell.pid", .{dir}) catch "";
 }
@@ -608,10 +607,11 @@ var live_pill_borders: bool = true;
 // parsed value) — so assigning it outright on load is safe. No widget edits
 // it; it's carried through saves untouched.
 var live_empty_click_command: []const u8 = "";
-// matugen scheme type (one of MATUGEN_TYPE_CHOICES), always a static literal
-// like live_auto_theme above. Loaded from ~/.config/simpbar/matugen-type;
-// defaults to matugen's own default when that file is absent.
-var live_matugen_type: []const u8 = "scheme-tonal-spot";
+// Catppuccin flavor and accent source (one of THEME_FLAVOR_CHOICES /
+// THEME_ACCENT_CHOICES), always static literals like live_auto_theme above.
+// Loaded from ~/.config/simpbar/theme.
+var live_theme_flavor: []const u8 = "auto";
+var live_theme_accent: []const u8 = "wallpaper";
 // Desktop widgets on/off, one bit per WIDGET_TABLE row below (bit i =
 // row i). Lives outside config.json in the widgets-disabled file; default
 // zero (missing file means all enabled).
@@ -984,16 +984,23 @@ fn loadConfigFromDisk() void {
     live_module_border_width = @min(j.module_border_width, 8);
     live_module_pills = j.module_pills;
     live_pill_borders = j.pill_borders;
-    // Scheme type lives in its own simpbar-owned file (not config.json, not
-    // matugen's config.toml — see matugen_type_path). Ignore anything that
-    // isn't a known matugen --type value rather than handing matugen junk.
-    if (readFileAll(matugen_type_path)) |raw| {
+    // Theme settings live in their own small file (see theme_path), shared
+    // with perihelion-theme. Unknown values are ignored, keeping the defaults.
+    if (readFileAll(theme_path)) |raw| {
         defer gpa.free(raw);
-        const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-        for (MATUGEN_TYPE_CHOICES) |choice| {
-            if (std.mem.eql(u8, choice, trimmed)) {
-                live_matugen_type = choice;
-                break;
+        var lines = std.mem.splitScalar(u8, raw, '\n');
+        while (lines.next()) |line| {
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            const key = std.mem.trim(u8, line[0..eq], " \t\r");
+            const value = std.mem.trim(u8, line[eq + 1 ..], " \t\r");
+            if (std.mem.eql(u8, key, "flavor")) {
+                for (THEME_FLAVOR_CHOICES) |choice| {
+                    if (std.mem.eql(u8, choice, value)) live_theme_flavor = choice;
+                }
+            } else if (std.mem.eql(u8, key, "accent")) {
+                for (THEME_ACCENT_CHOICES) |choice| {
+                    if (std.mem.eql(u8, choice, value)) live_theme_accent = choice;
+                }
             }
         }
     }
@@ -1512,12 +1519,14 @@ fn onClockFormatChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaqu
 fn onAutoThemeChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     live_auto_theme = if (gtk.gtk_switch_get_active(sw) != 0) "matugen" else "manual";
     saveAndSignal();
+    // Perihelion: recolor right away from the current wallpaper.
+    if (std.mem.eql(u8, live_auto_theme, "matugen")) launchDetached(&.{ "perihelion-theme", "--force" });
 }
 
 fn buildAutoThemeRow(group: *gtk.AdwPreferencesGroup) void {
     const row = gtk.adw_action_row_new();
-    gtk.adw_preferences_row_set_title(@ptrCast(row), "Auto-theme with matugen");
-    gtk.adw_action_row_set_subtitle(row, "Recolor the bar from the wallpaper via matugen as soon as it generates a scheme (and on every wallpaper change). Turning this off uses the colors below instead.");
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Catppuccin theme");
+    gtk.adw_action_row_set_subtitle(row, "Color the bar, widgets, app drawer, launcher, Strata and window borders with Catppuccin, matched to the wallpaper on every change. Turning this off uses the colors below instead.");
     gtk.adw_action_row_set_icon_name(row, "applications-graphics-symbolic");
 
     const sw = gtk.gtk_switch_new();
@@ -1529,56 +1538,75 @@ fn buildAutoThemeRow(group: *gtk.AdwPreferencesGroup) void {
     gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
-// matugen's own `--type` values (from `matugen --help`'s possible values).
-// The bar never interprets these — simpbar-matugen passes the chosen one to
-// matugen, which derives the palette the bar then merges in. Values must stay
-// byte-for-byte in sync with matugen; labels are just what the user reads.
-const MATUGEN_TYPE_CHOICES = [_][]const u8{
-    "scheme-tonal-spot", "scheme-content",     "scheme-expressive", "scheme-fidelity",
-    "scheme-fruit-salad", "scheme-monochrome", "scheme-neutral",   "scheme-rainbow",
-    "scheme-vibrant",    "scheme-smart",
+// Perihelion: Catppuccin flavors, like Event Horizon's theme presets. "auto"
+// lets perihelion-theme pick from the wallpaper's lightness. Values must stay
+// in sync with perihelion-theme; labels are just what the user reads.
+const THEME_FLAVOR_CHOICES = [_][]const u8{ "auto", "latte", "frappe", "macchiato", "mocha" };
+const THEME_FLAVOR_LABELS = [_][*:0]const u8{
+    "Auto (from the wallpaper)", "Latte (light)", "Frappé", "Macchiato", "Mocha (darkest)",
 };
-const MATUGEN_TYPE_LABELS = [_][*:0]const u8{
-    "Tonal spot (default)", "Content", "Expressive", "Fidelity",
-    "Fruit salad",          "Monochrome", "Neutral", "Rainbow",
-    "Vibrant",              "Smart",
+const THEME_ACCENT_CHOICES = [_][]const u8{ "wallpaper", "flavor" };
+const THEME_ACCENT_LABELS = [_][*:0]const u8{
+    "From the wallpaper", "Blue, pink and yellow",
 };
 
-/// Persists the chosen scheme to ~/.config/simpbar/matugen-type and runs the
-/// helper (which re-renders matugen.json with `matugen --type <scheme>` and
-/// SIGUSR1-reloads the bar via matugen's post_hook) so the change shows up
-/// right away instead of waiting for the next wallpaper switch. Independent
-/// of the auto-theme switch: it only visibly matters while that's ON, but
-/// picking a scheme needn't flip it.
-fn onMatugenTypeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    const idx = gtk.adw_combo_row_get_selected(row);
-    if (idx >= MATUGEN_TYPE_CHOICES.len) return;
-    live_matugen_type = MATUGEN_TYPE_CHOICES[idx];
-    if (writeFileAll(matugen_type_path, live_matugen_type)) {
-        launchDetached(&.{"simpbar-matugen"});
+/// Writes ~/.config/simpbar/theme and reruns perihelion-theme so the change
+/// shows up right away instead of at the next wallpaper switch.
+fn saveThemeSettings() void {
+    var buf: [96]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "flavor={s}\naccent={s}\n", .{ live_theme_flavor, live_theme_accent }) catch return;
+    if (writeFileAll(theme_path, text)) {
+        launchDetached(&.{ "perihelion-theme", "--force" });
     } else {
-        logging.err("config: could not write {s}", .{matugen_type_path});
+        logging.err("config: could not write {s}", .{theme_path});
     }
 }
 
-fn buildMatugenTypeRow(group: *gtk.AdwPreferencesGroup) void {
-    const row = gtk.adw_combo_row_new();
-    gtk.adw_preferences_row_set_title(@ptrCast(row), "Matugen color scheme");
-    gtk.adw_action_row_set_subtitle(@ptrCast(row), "The Material You palette matugen derives from the wallpaper. Changing this regenerates the scheme immediately.");
+fn onThemeFlavorChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= THEME_FLAVOR_CHOICES.len) return;
+    live_theme_flavor = THEME_FLAVOR_CHOICES[idx];
+    saveThemeSettings();
+}
 
-    var buf: [MATUGEN_TYPE_LABELS.len + 1]?[*:0]const u8 = undefined;
-    for (MATUGEN_TYPE_LABELS, 0..) |label, i| buf[i] = label;
-    buf[MATUGEN_TYPE_LABELS.len] = null;
+fn onThemeAccentChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= THEME_ACCENT_CHOICES.len) return;
+    live_theme_accent = THEME_ACCENT_CHOICES[idx];
+    saveThemeSettings();
+}
+
+fn buildThemeComboRow(
+    group: *gtk.AdwPreferencesGroup,
+    title: [*:0]const u8,
+    subtitle: [*:0]const u8,
+    comptime labels: []const [*:0]const u8,
+    choices: []const []const u8,
+    current: []const u8,
+    handler: *const fn (*gtk.AdwComboRow, *gtk.GParamSpec, ?*anyopaque) callconv(.c) void,
+) void {
+    const row = gtk.adw_combo_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), title);
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), subtitle);
+
+    var buf: [labels.len + 1]?[*:0]const u8 = undefined;
+    for (labels, 0..) |label, i| buf[i] = label;
+    buf[labels.len] = null;
     gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&buf))));
 
     var selected_idx: c_uint = 0;
-    for (MATUGEN_TYPE_CHOICES, 0..) |choice, i| {
-        if (std.mem.eql(u8, choice, live_matugen_type)) selected_idx = @intCast(i);
+    for (choices, 0..) |choice, i| {
+        if (std.mem.eql(u8, choice, current)) selected_idx = @intCast(i);
     }
     gtk.adw_combo_row_set_selected(row, selected_idx);
-    _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onMatugenTypeChanged), null, null, 0);
+    _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(handler), null, null, 0);
 
     gtk.adw_preferences_group_add(group, @ptrCast(row));
+}
+
+fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
+    buildThemeComboRow(group, "Flavor", "Which Catppuccin flavor to use. Auto picks Latte for light wallpapers and Frappé, Macchiato or Mocha for darker ones.", &THEME_FLAVOR_LABELS, &THEME_FLAVOR_CHOICES, live_theme_flavor, &onThemeFlavorChanged);
+    buildThemeComboRow(group, "Accent colors", "The three Catppuccin accents for highlights and the visualizer wave: the ones closest to the wallpaper's colors, or Perihelion's blue, pink and yellow.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
 }
 
 /// Flips the hover/active-pill animation master switch
@@ -2617,7 +2645,7 @@ fn buildAppearancePage() *gtk.GtkBox {
     const theming_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(theming_group, "Theming");
     buildAutoThemeRow(theming_group);
-    buildMatugenTypeRow(theming_group);
+    buildThemeRows(theming_group);
     gtk.gtk_box_append(outer, @ptrCast(theming_group));
 
     const animation_group = gtk.adw_preferences_group_new();
