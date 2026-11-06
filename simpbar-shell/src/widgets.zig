@@ -718,18 +718,9 @@ fn drawWeatherFxCard(c: Canvas, r: Rect, wttr: u32, nf: u32, frame: u32, tint: u
                 }
             }
         },
-        .clear => {
-            const sy = y0 + @mod(fi * 2, h + 8) - 4;
-            var yy = sy - 1;
-            while (yy <= sy + 1) : (yy += 1) {
-                const d: f32 = @floatFromInt(@abs(yy - sy));
-                const a: u8 = @intFromFloat(30.0 * (1.0 - d / 3.0));
-                var xx = x0;
-                while (xx < x0 + w) : (xx += 1) {
-                    putCardFx(c, r, xx, yy, 0xFFE9A8, a);
-                }
-            }
-        },
+        // Perihelion: no sweeping highlight line on clear skies (it read as a
+        // flickering grey line across the card); the sun glow stays.
+        .clear => {},
         .cloud => {
             var i: i64 = 0;
             while (i < 4) : (i += 1) {
@@ -832,6 +823,9 @@ pub const Fetcher = struct {
     read_buf: [10240]u8 = undefined,
     read_len: usize = 0,
     pending_fd: posix.fd_t = -1,
+    // Perihelion: set at EOF, so a fetch that ended with no output can be told
+    // apart from one still in flight (onReadable returns 0 for both).
+    eof: bool = false,
 
     pub fn busy(self: *const Fetcher) bool {
         return self.pending_fd >= 0;
@@ -846,6 +840,7 @@ pub const Fetcher = struct {
     pub fn start(self: *Fetcher, path: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) void {
         if (self.pending_fd >= 0) return;
         self.read_len = 0;
+        self.eof = false;
 
         var pipe_fds: [2]posix.fd_t = undefined;
         if (std.c.pipe(&pipe_fds) != 0) return;
@@ -877,6 +872,7 @@ pub const Fetcher = struct {
         var chunk: [256]u8 = undefined;
         const n = posix.read(self.pending_fd, &chunk) catch return 0;
         if (n == 0) {
+            self.eof = true;
             const trimmed = std.mem.trim(u8, self.read_buf[0..self.read_len], " \t\r\n");
             const copy_len = @min(trimmed.len, out.len);
             @memcpy(out[0..copy_len], trimmed[0..copy_len]);
@@ -1020,6 +1016,15 @@ pub const ClockWidget = struct {
 // |-separated fields, so the card can show condition + details and not just
 // a number. The bar keeps format=1 (it only ever draws icon + temp).
 const WEATHER_URL = "https://wttr.in/?format=%c|%t|%h|%w";
+// Perihelion: wttr.in guesses the place from the internet address, which a VPN
+// or ISP routing can put in another city. A city or ZIP code on the first line
+// of ~/.config/simpbar/weather-location pins it. Sunrise, sunset and local time
+// (%S|%s|%T) come along so clear nights show a moon instead of the sun.
+// A perihelion-weather on PATH (Open-Meteo, more accurate) is used when present.
+const WEATHER_CMD =
+    "if command -v perihelion-weather >/dev/null 2>&1; then exec perihelion-weather; fi; " ++
+    "loc=$(head -n 1 \"$HOME/.config/simpbar/weather-location\" 2>/dev/null | tr -d '\\r' | sed 's/^ *//; s/ *$//; s/ /+/g'); " ++
+    "exec curl -s \"https://wttr.in/${loc}?format=%c|%t|%h|%w|%S|%s|%T\"";
 
 pub const WeatherWidget = struct {
     icon_buf: [8]u8 = undefined,
@@ -1049,8 +1054,8 @@ pub const WeatherWidget = struct {
 
     pub fn refresh(self: *WeatherWidget) void {
         if (self.fetch.busy()) return;
-        var argv = [_:null]?[*:0]const u8{ "env", "curl", "-s", WEATHER_URL, null };
-        self.fetch.start("/usr/bin/env", &argv);
+        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", WEATHER_CMD, null };
+        self.fetch.start("/bin/sh", &argv);
     }
 
     /// Call when the fetch pipe is readable. Returns true when the fetch
@@ -1058,16 +1063,24 @@ pub const WeatherWidget = struct {
     pub fn onPipe(self: *WeatherWidget) bool {
         var out: [160]u8 = undefined;
         const n = self.fetch.onReadable(&out);
-        if (n == 0) return false;
+        // Perihelion: an empty answer at EOF must still close the fetch, or
+        // it stays busy and the card never fetches again.
+        if (n == 0 and !self.fetch.eof) return false;
         self.fetch.closeFd();
         const trimmed = std.mem.trim(u8, out[0..n], " \t\r\n");
-        self.fetched = trimmed.len > 0;
-        if (!self.fetched) return true;
+        // Perihelion: an empty answer (offline at login, a slow service)
+        // keeps the last reading on the card and retries in 30 s instead of
+        // waiting out the 20-minute cadence.
+        if (trimmed.len == 0) {
+            self.last_fetch_ms -= interval_ms - 30_000;
+            return self.fetched;
+        }
+        self.fetched = true;
 
         // Four |-separated fields (see WEATHER_URL): emoji, temp, humidity,
         // wind. Any field may be missing on a weird response — parse resolve
         // what's there and leave the rest blank rather than failing.
-        var fields: [4][]const u8 = .{ "", "", "", "" };
+        var fields: [7][]const u8 = .{ "", "", "", "", "", "", "" };
         var fi: usize = 0;
         var it = std.mem.splitScalar(u8, trimmed, '|');
         while (it.next()) |f| {
@@ -1101,6 +1114,17 @@ pub const WeatherWidget = struct {
             self.icon_color = cc;
         } else {
             self.icon_color = 0;
+        }
+        // Perihelion: after sunset (or before sunrise) a clear sky is a moon,
+        // not a glowing sun. "HH:MM" strings compare correctly as text.
+        if (cp == 0x2600 and fields[4].len >= 5 and fields[5].len >= 5 and fields[6].len >= 5) {
+            const now = fields[6][0..5];
+            if (std.mem.order(u8, now, fields[4][0..5]) == .lt or std.mem.order(u8, now, fields[5][0..5]) != .lt) {
+                self.wttr_cp = 0x1F319; // crescent moon: no sun glow, no sun fx
+                self.icon_cp = 0xE32B; // nf-weather-night_clear
+                self.icon_len = utf8Encode(0xE32B, &self.icon_buf);
+                self.icon_color = 0xFFB7BDF8; // Catppuccin lavender
+            }
         }
         const cl = wttrConditionFor(cp);
         @memcpy(self.cond_buf[0..cl.len], cl);
@@ -1204,9 +1228,8 @@ pub const WeatherWidget = struct {
 
     pub fn click(self: *const WeatherWidget) void {
         _ = self;
-        var url_buf: [64]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&url_buf, "xdg-open https://wttr.in/", .{}) catch return;
-        spawnDetached(cmd);
+        // Perihelion: the forecast page for the same place the card shows.
+        spawnDetached("if command -v perihelion-weather >/dev/null 2>&1; then exec perihelion-weather --open; fi; exec xdg-open https://wttr.in/");
     }
 };
 
