@@ -107,6 +107,8 @@ const RIGHT_MODULE_KINDS = [_]ModuleKind{
     .power, .drawer_toggle, .volume, .pacman, .tray,
     .weather, .cpu, .ram, .network, .disk,
     .battery, .custom_script, .cpu_temp, .cava, .layout,
+    // Perihelion: the clock can sit on the right too (superdock style).
+    .clock,
 };
 
 // The kind set shared by the Left and Center groups. main.zig now draws
@@ -122,6 +124,10 @@ const RIGHT_MODULE_KINDS = [_]ModuleKind{
 const LEFT_CENTER_MODULE_KINDS = [_]ModuleKind{
     .workspaces, .mpris, .clock, .launchers,
 };
+
+// Perihelion: the Left group also draws cava (as a waveform), so its list
+// carries a cava row of its own. That lets cava be on at both ends at once.
+const LEFT_MODULE_KINDS = LEFT_CENTER_MODULE_KINDS ++ [_]ModuleKind{.cava};
 
 const ModuleEntry = struct {
     kind: ModuleKind,
@@ -998,7 +1004,7 @@ fn loadConfigFromDisk() void {
     live_left.load(parsed.modules.left);
     live_center.load(parsed.modules.center);
     live_right.load(parsed.modules.right);
-    live_left.ensureKindsPresent(&LEFT_CENTER_MODULE_KINDS);
+    live_left.ensureKindsPresent(&LEFT_MODULE_KINDS);
     live_center.ensureKindsPresent(&LEFT_CENTER_MODULE_KINDS);
     live_right.ensureKindsPresent(&RIGHT_MODULE_KINDS);
     // Drop tombstoned entries (see ModuleKind.waypaper): the bar skips them
@@ -3554,7 +3560,7 @@ fn buildModulesPage() *gtk.GtkBox {
     gtk.gtk_widget_set_margin_start(@ptrCast(outer), 24);
     gtk.gtk_widget_set_margin_end(@ptrCast(outer), 24);
 
-    addModuleGroupSection(outer, "Left", &live_left, &left_ctx, &LEFT_CENTER_MODULE_KINDS, .all, null);
+    addModuleGroupSection(outer, "Left", &live_left, &left_ctx, &LEFT_MODULE_KINDS, .all, null);
     addModuleGroupSection(outer, "Center", &live_center, &center_ctx, &LEFT_CENTER_MODULE_KINDS, .all, null);
     addModuleGroupSection(outer, "Right", &live_right, &right_ctx, &RIGHT_MODULE_KINDS, .right_bar, "Modules pinned to the bar's right edge, always visible.");
     addModuleGroupSection(outer, "Drawer", &live_right, &drawer_ctx, &RIGHT_MODULE_KINDS, .drawer, "The toggle button plus modules that appear when it opens. Drag modules between Right and Drawer to assign them.");
