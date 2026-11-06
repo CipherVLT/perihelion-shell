@@ -11,11 +11,14 @@ import subprocess
 import sys
 import tempfile
 import zlib
+import importlib.util
 from importlib.machinery import SourceFileLoader
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "perihelion-theme")
-pt = SourceFileLoader("perihelion_theme", SCRIPT).load_module()
+_loader = SourceFileLoader("perihelion_theme", SCRIPT)
+pt = importlib.util.module_from_spec(importlib.util.spec_from_loader("perihelion_theme", _loader))
+_loader.exec_module(pt)
 failures = 0
 
 
