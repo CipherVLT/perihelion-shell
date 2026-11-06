@@ -160,7 +160,9 @@ fn searchIconPathIn(home: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
     // this resolves exactly as before.
     const picked = configuredTheme();
     if (picked.len != 0) {
-        const picked_sizes = [_][]const u8{ "scalable", "symbolic", "256x256", "128x128", "64x64", "48x48", "32x32", "24x24", "22x22", "16x16" };
+        // Perihelion: also the bare-number size dirs (48, 48@2x, ...) that themes
+        // like Numix-Circle use instead of 48x48.
+        const picked_sizes = [_][]const u8{ "scalable", "symbolic", "256x256", "128x128", "64x64", "48x48", "48@2x", "48", "64", "128", "256", "32x32", "32", "24x24", "24@2x", "24", "22x22", "22@2x", "22", "16x16", "16@2x", "16" };
         const picked_ctxs = [_][]const u8{ "apps", "status", "actions", "devices" };
         const picked_exts = [_][]const u8{ ".svg", ".png" };
         var hbuf: [512]u8 = undefined;
