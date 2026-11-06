@@ -10,7 +10,8 @@
 
 Either way they go to the bar, the cava wave, the desktop widgets, the app
 drawer (nwg-drawer), fuzzel (launcher and power menu), Strata, Mango's
-borders and fastfetch (the distro logo, labels and values).
+borders, fastfetch (the distro logo, labels and values), the terminal cava,
+btop and cmatrix.
 
 | Key in `~/.config/simpbar/matugen.json` | Catppuccin color |
 |---|---|

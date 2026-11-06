@@ -203,6 +203,28 @@ try:
     check(json.loads(re.sub(r"//[^\n]*", "", ff).replace(",\n        }", "\n        }").replace(",\n         }", "\n         }"))
           if False else True, "fastfetch: still parses")  # (layout untouched; JSONC)
 
+    # 6b. terminal cava, btop, cmatrix
+    cava_default = "[color]\ngradient = 1\ngradient_count = 3\ngradient_color_1 = '#8aadf4'\ngradient_color_2 = '#f5bde6'\ngradient_color_3 = '#eed49f'\n"
+    for d in (os.path.join(share, "cava"), os.path.join(cfg, "cava")):
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "config"), "w", encoding="utf-8") as f:
+            f.write(cava_default)
+    run(home, img("green-purple.png"), "--flavor", "mocha", "--force")
+    with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
+        mj = json.load(f)
+    cv = pt.read(os.path.join(cfg, "cava", "config"))
+    check(f"gradient_color_1 = '{mj['bezel_color']}'" in cv and f"gradient_color_3 = '{mj['matrix_color']}'" in cv,
+          "cava: terminal gradient = the bar wave's accents")
+    check(cv.count("perihelion-theme") == 1 and cv.startswith("[color]"), "cava: one note line, rest kept")
+    bt = pt.read(os.path.join(cfg, "btop", "themes", "perihelion.theme"))
+    check(bt and f'theme[main_bg]="{mj["bg_color"]}"' in bt and f'theme[hi_fg]="{mj["bezel_color"]}"' in bt,
+          "btop: theme follows the palette")
+    check(len(re.findall(r'^theme\[\w+\]="#[0-9a-f]{6}"$', bt, re.M)) == 42, "btop: 42 well-formed theme keys")
+    cm = pt.read(os.path.join(cfg, "perihelion", "cmatrix-color")).strip()
+    check(cm in ("red", "yellow", "green", "cyan", "blue", "magenta", "white"), f"cmatrix: named color ({cm})")
+    check(pt.cmatrix_color(pt.build_theme("macchiato", ["blue", "pink", "yellow"])) == "blue", "cmatrix: blue accent -> blue")
+    check(pt.cmatrix_color(pt.build_theme("macchiato", ["green", "pink", "yellow"])) == "green", "cmatrix: green accent -> green")
+
     # 7. Material You through matugen (a stand-in when matugen isn't installed).
     fake_bin = os.path.join(tmp, "bin")
     os.makedirs(fake_bin)
