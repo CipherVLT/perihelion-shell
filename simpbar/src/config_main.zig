@@ -326,7 +326,7 @@ var config_json_path: [:0]const u8 = "";
 var pidfile_path: [:0]const u8 = "";
 // Perihelion: the Catppuccin theme settings (~/.config/simpbar/theme),
 // "flavor=<auto|latte|frappe|macchiato|mocha>" and "accent=<wallpaper|flavor>"
-// lines, read by perihelion-theme. See THEME_FLAVOR_CHOICES below.
+// lines, read by perihelion-theme. See THEME_PALETTE_CHOICES below.
 var theme_path: [:0]const u8 = "";
 // Per-widget on/off list (one widget id per line), written by the Appearance
 // page's Desktop Widgets switches and read by simpbar-shell at startup.
@@ -607,12 +607,14 @@ var live_pill_borders: bool = true;
 // parsed value) — so assigning it outright on load is safe. No widget edits
 // it; it's carried through saves untouched.
 var live_empty_click_command: []const u8 = "";
-// Catppuccin flavor and accent source (one of THEME_FLAVOR_CHOICES /
+// Catppuccin flavor and accent source (THEME_PALETTE_CHOICES and
 // THEME_ACCENT_CHOICES), always static literals like live_auto_theme above.
 // Loaded from ~/.config/simpbar/theme.
 var live_theme_style: []const u8 = "catppuccin";
 var live_theme_scheme: []const u8 = "scheme-tonal-spot";
-var live_theme_flavor: []const u8 = "auto";
+var live_theme_palette: []const u8 = "catppuccin-auto";
+var live_theme_tint: bool = true;
+var live_theme_mode: []const u8 = "dark";
 var live_theme_accent: []const u8 = "wallpaper";
 // Desktop widgets on/off, one bit per WIDGET_TABLE row below (bit i =
 // row i). Lives outside config.json in the widgets-disabled file; default
@@ -1003,9 +1005,21 @@ fn loadConfigFromDisk() void {
                 for (MATUGEN_TYPE_CHOICES) |choice| {
                     if (std.mem.eql(u8, choice, value)) live_theme_scheme = choice;
                 }
+            } else if (std.mem.eql(u8, key, "palette")) {
+                for (THEME_PALETTE_CHOICES) |choice| {
+                    if (std.mem.eql(u8, choice, value)) live_theme_palette = choice;
+                }
             } else if (std.mem.eql(u8, key, "flavor")) {
-                for (THEME_FLAVOR_CHOICES) |choice| {
-                    if (std.mem.eql(u8, choice, value)) live_theme_flavor = choice;
+                // Older theme files: flavor=<auto|latte|...> is the Catppuccin palette.
+                for (THEME_PALETTE_CHOICES) |choice| {
+                    if (std.mem.startsWith(u8, choice, "catppuccin-") and
+                        std.mem.eql(u8, choice["catppuccin-".len..], value)) live_theme_palette = choice;
+                }
+            } else if (std.mem.eql(u8, key, "tint")) {
+                live_theme_tint = !std.mem.eql(u8, value, "off");
+            } else if (std.mem.eql(u8, key, "mode")) {
+                for (THEME_MODE_CHOICES) |choice| {
+                    if (std.mem.eql(u8, choice, value)) live_theme_mode = choice;
                 }
             } else if (std.mem.eql(u8, key, "accent")) {
                 for (THEME_ACCENT_CHOICES) |choice| {
@@ -1553,8 +1567,23 @@ fn buildAutoThemeRow(group: *gtk.AdwPreferencesGroup) void {
 // in sync with perihelion-theme; labels are just what the user reads.
 const THEME_STYLE_CHOICES = [_][]const u8{ "catppuccin", "material" };
 const THEME_STYLE_LABELS = [_][*:0]const u8{
-    "Catppuccin", "Material You (matugen)",
+    "Palette (matched to the wallpaper)", "Material You (matugen)",
 };
+// Values must stay in sync with perihelion-theme's PALETTE_CHOICES.
+const THEME_PALETTE_CHOICES = [_][]const u8{
+    "catppuccin-auto", "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato",
+    "catppuccin-mocha", "gruvbox-auto",     "gruvbox-dark",      "gruvbox-light",
+    "rose-pine-auto",  "rose-pine",        "rose-pine-moon",    "rose-pine-dawn",
+    "nord",            "tokyo-night",
+};
+const THEME_PALETTE_LABELS = [_][*:0]const u8{
+    "Catppuccin (auto from the wallpaper)", "Catppuccin Latte", "Catppuccin Frappé", "Catppuccin Macchiato",
+    "Catppuccin Mocha",                     "Gruvbox (auto)",   "Gruvbox Dark",      "Gruvbox Light",
+    "Rosé Pine (auto)",                     "Rosé Pine",        "Rosé Pine Moon",    "Rosé Pine Dawn",
+    "Nord",                                 "Tokyo Night",
+};
+const THEME_MODE_CHOICES = [_][]const u8{ "dark", "light", "auto" };
+const THEME_MODE_LABELS = [_][*:0]const u8{ "Dark", "Light", "Auto (from the wallpaper)" };
 // matugen's own `--type` values (from `matugen --help`'s possible values),
 // used by the Material You style. Values must stay byte-for-byte in sync
 // with matugen; labels are just what the user reads.
@@ -1568,20 +1597,19 @@ const MATUGEN_TYPE_LABELS = [_][*:0]const u8{
     "Fruit salad",          "Monochrome", "Neutral", "Rainbow",
     "Vibrant",              "Smart",
 };
-const THEME_FLAVOR_CHOICES = [_][]const u8{ "auto", "latte", "frappe", "macchiato", "mocha" };
-const THEME_FLAVOR_LABELS = [_][*:0]const u8{
-    "Auto (from the wallpaper)", "Latte (light)", "Frappé", "Macchiato", "Mocha (darkest)",
-};
 const THEME_ACCENT_CHOICES = [_][]const u8{ "wallpaper", "flavor" };
 const THEME_ACCENT_LABELS = [_][*:0]const u8{
-    "From the wallpaper", "Blue, pink and yellow",
+    "From the wallpaper", "The palette's own",
 };
 
 /// Writes ~/.config/simpbar/theme and reruns perihelion-theme so the change
 /// shows up right away instead of at the next wallpaper switch.
 fn saveThemeSettings() void {
-    var buf: [160]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "style={s}\nflavor={s}\naccent={s}\nscheme={s}\n", .{ live_theme_style, live_theme_flavor, live_theme_accent, live_theme_scheme }) catch return;
+    var buf: [256]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "style={s}\npalette={s}\ntint={s}\naccent={s}\nscheme={s}\nmode={s}\n", .{
+        live_theme_style,  live_theme_palette, if (live_theme_tint) "on" else "off",
+        live_theme_accent, live_theme_scheme,  live_theme_mode,
+    }) catch return;
     if (writeFileAll(theme_path, text)) {
         launchDetached(&.{ "perihelion-theme", "--force" });
     } else {
@@ -1603,11 +1631,35 @@ fn onMatugenTypeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaqu
     saveThemeSettings();
 }
 
-fn onThemeFlavorChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+fn onThemePaletteChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     const idx = gtk.adw_combo_row_get_selected(row);
-    if (idx >= THEME_FLAVOR_CHOICES.len) return;
-    live_theme_flavor = THEME_FLAVOR_CHOICES[idx];
+    if (idx >= THEME_PALETTE_CHOICES.len) return;
+    live_theme_palette = THEME_PALETTE_CHOICES[idx];
     saveThemeSettings();
+}
+
+fn onThemeModeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= THEME_MODE_CHOICES.len) return;
+    live_theme_mode = THEME_MODE_CHOICES[idx];
+    saveThemeSettings();
+}
+
+fn onThemeTintChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_theme_tint = gtk.gtk_switch_get_active(sw) != 0;
+    saveThemeSettings();
+}
+
+fn buildThemeTintRow(group: *gtk.AdwPreferencesGroup) void {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Wallpaper tint");
+    gtk.adw_action_row_set_subtitle(row, "Palette only: give the bar, widgets, terminal and popups a dark shade of the wallpaper's main color instead of the palette's own background.");
+    const sw = gtk.gtk_switch_new();
+    gtk.gtk_switch_set_active(sw, if (live_theme_tint) 1 else 0);
+    gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onThemeTintChanged), null, null, 0);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
 fn onThemeAccentChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
@@ -1646,10 +1698,12 @@ fn buildThemeComboRow(
 }
 
 fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
-    buildThemeComboRow(group, "Style", "Catppuccin: real Catppuccin colors, the closest to the wallpaper. Material You: matugen's Material Design colors made from the wallpaper.", &THEME_STYLE_LABELS, &THEME_STYLE_CHOICES, live_theme_style, &onThemeStyleChanged);
-    buildThemeComboRow(group, "Flavor", "Catppuccin only: which flavor. Auto picks Latte for light wallpapers and Frappé, Macchiato or Mocha for darker ones.", &THEME_FLAVOR_LABELS, &THEME_FLAVOR_CHOICES, live_theme_flavor, &onThemeFlavorChanged);
-    buildThemeComboRow(group, "Accent colors", "Catppuccin only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or Perihelion's blue, pink and yellow.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
+    buildThemeComboRow(group, "Style", "Palette: a color scheme below, its accents picked from the wallpaper. Material You: matugen's Material Design colors made from the wallpaper.", &THEME_STYLE_LABELS, &THEME_STYLE_CHOICES, live_theme_style, &onThemeStyleChanged);
+    buildThemeComboRow(group, "Palette", "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night. Auto picks a light variant for light wallpapers and a darker one otherwise.", &THEME_PALETTE_LABELS, &THEME_PALETTE_CHOICES, live_theme_palette, &onThemePaletteChanged);
+    buildThemeTintRow(group);
+    buildThemeComboRow(group, "Accent colors", "Palette only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or the palette's own.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
     buildThemeComboRow(group, "Matugen color scheme", "Material You only: the palette matugen derives from the wallpaper.", &MATUGEN_TYPE_LABELS, &MATUGEN_TYPE_CHOICES, live_theme_scheme, &onMatugenTypeChanged);
+    buildThemeComboRow(group, "Theme mode", "Material You only: dark, light, or picked from how light the wallpaper is.", &THEME_MODE_LABELS, &THEME_MODE_CHOICES, live_theme_mode, &onThemeModeChanged);
 }
 
 /// Flips the hover/active-pill animation master switch

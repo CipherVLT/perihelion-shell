@@ -13,7 +13,8 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
   ~/.config/fuzzel/fuzzel.ini [colors]  the launcher and the power menu
   ~/.config/strata/themes/tokyo-night.toml   Strata, the file manager
   ~/.config/mango/colors.conf           Mango's window borders
-  ~/.config/fastfetch/config.jsonc      the distro logo and labels in the terminal
+  ~/.config/fastfetch/config.jsonc      the distro logo, section headers and values
+  ~/.config/kitty/perihelion-colors.conf   the terminal itself (live, SIGUSR1)
   ~/.config/cava/config                 terminal cava's gradient (live, SIGUSR2)
   ~/.config/btop/themes/perihelion.theme   btop (btop.conf picks "perihelion")
   ~/.config/perihelion/cmatrix-color    cmatrix's color (Perihelion's wrapper)
@@ -23,12 +24,18 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
 and tells simpbar and simpbar-shell to reload (SIGUSR1).
 
 Settings, ~/.config/simpbar/theme (Simpbar Config writes it):
-  style=catppuccin   catppuccin, or material (Material You, via matugen)
-  flavor=auto        Catppuccin: auto (from the wallpaper), latte, frappe,
-                     macchiato, mocha
-  accent=wallpaper   Catppuccin: wallpaper (picked from the image) or flavor
-                     (blue, pink, yellow: Perihelion's look)
+  style=catppuccin   catppuccin (a palette, matched to the wallpaper), or
+                     material (Material You, via matugen)
+  palette=catppuccin-auto   catppuccin-auto|-latte|-frappe|-macchiato|-mocha,
+                     gruvbox-auto|-dark|-light, rose-pine-auto, rose-pine,
+                     rose-pine-moon, rose-pine-dawn, nord, tokyo-night
+  tint=on            Wallpaper tint: the palette's backgrounds, surfaces and
+                     text take a dark shade of the wallpaper's main hue (its
+                     lightness steps stay the palette's)
+  accent=wallpaper   wallpaper (the palette's accents nearest the image's
+                     colors) or flavor (the palette's own defaults)
   scheme=scheme-tonal-spot   Material You: matugen's --type
+  mode=dark          Material You: dark, light or auto
 
 A file you edited by hand is left alone: the drawer CSS, fuzzel colors,
 Strata theme and fastfetch colors are only rewritten while they still hold Perihelion's defaults
@@ -126,6 +133,100 @@ MIN_HUE_GAP = 35.0
 NEAR_HUE_GAP = 20.0
 
 
+# --- presets: Catppuccin plus other well-known palettes ----------------------
+# Each preset names its dark (or light) neutral steps, its accents, which
+# accents the terminal's six ANSI colors are, and Perihelion's three default
+# accents for it. Values are the palettes' published hex codes.
+def _catppuccin(flavor, name):
+    p = PALETTES[flavor]
+    return {
+        "name": name, "light": flavor == "latte",
+        "neutrals": {k: p[k] for k in ("crust", "mantle", "base", "surface0", "surface1",
+                                       "surface2", "overlay0", "overlay1", "overlay2",
+                                       "subtext0", "subtext1", "text")},
+        "accents": {a: p[a] for a in ACCENTS},
+        "ansi": ("red", "green", "yellow", "blue", "pink", "teal"),
+        "default": DEFAULT_ACCENTS,
+    }
+
+
+def _preset(name, light, neutrals, accents, ansi, default):
+    return {"name": name, "light": light, "neutrals": neutrals, "accents": accents,
+            "ansi": ansi, "default": default}
+
+
+_GRUVBOX_DARK_ACCENTS = {"red": "fb4934", "green": "b8bb26", "yellow": "fabd2f", "blue": "83a598",
+                         "purple": "d3869b", "aqua": "8ec07c", "orange": "fe8019"}
+_GRUVBOX_LIGHT_ACCENTS = {"red": "9d0006", "green": "79740e", "yellow": "b57614", "blue": "076678",
+                          "purple": "8f3f71", "aqua": "427b58", "orange": "af3a03"}
+_ROSE_ACCENTS = {"love": "eb6f92", "gold": "f6c177", "rose": "ebbcba", "pine": "31748f",
+                 "foam": "9ccfd8", "iris": "c4a7e7"}
+
+PRESETS = {
+    "catppuccin-latte": _catppuccin("latte", "Catppuccin Latte"),
+    "catppuccin-frappe": _catppuccin("frappe", "Catppuccin Frappé"),
+    "catppuccin-macchiato": _catppuccin("macchiato", "Catppuccin Macchiato"),
+    "catppuccin-mocha": _catppuccin("mocha", "Catppuccin Mocha"),
+    # Gruvbox, https://github.com/morhetz/gruvbox (MIT)
+    "gruvbox-dark": _preset("Gruvbox Dark", False, {
+        "crust": "1d2021", "mantle": "1d2021", "base": "282828", "surface0": "3c3836",
+        "surface1": "504945", "surface2": "665c54", "overlay0": "7c6f64", "overlay1": "928374",
+        "overlay2": "a89984", "subtext0": "bdae93", "subtext1": "d5c4a1", "text": "ebdbb2"},
+        _GRUVBOX_DARK_ACCENTS, ("red", "green", "yellow", "blue", "purple", "aqua"),
+        ("orange", "aqua", "yellow", "blue", "purple", "green")),
+    "gruvbox-light": _preset("Gruvbox Light", True, {
+        "crust": "ebdbb2", "mantle": "f2e5bc", "base": "fbf1c7", "surface0": "ebdbb2",
+        "surface1": "d5c4a1", "surface2": "bdae93", "overlay0": "a89984", "overlay1": "928374",
+        "overlay2": "7c6f64", "subtext0": "665c54", "subtext1": "504945", "text": "3c3836"},
+        _GRUVBOX_LIGHT_ACCENTS, ("red", "green", "yellow", "blue", "purple", "aqua"),
+        ("orange", "aqua", "yellow", "blue", "purple", "green")),
+    # Rosé Pine, https://rosepinetheme.com (MIT)
+    "rose-pine": _preset("Rosé Pine", False, {
+        "crust": "191724", "mantle": "1f1d2e", "base": "191724", "surface0": "26233a",
+        "surface1": "403d52", "surface2": "524f67", "overlay0": "6e6a86", "overlay1": "908caa",
+        "overlay2": "908caa", "subtext0": "908caa", "subtext1": "e0def4", "text": "e0def4"},
+        _ROSE_ACCENTS, ("love", "pine", "gold", "foam", "iris", "rose"),
+        ("iris", "rose", "gold", "foam", "pine", "love")),
+    "rose-pine-moon": _preset("Rosé Pine Moon", False, {
+        "crust": "232136", "mantle": "2a273f", "base": "232136", "surface0": "393552",
+        "surface1": "44415a", "surface2": "56526e", "overlay0": "6e6a86", "overlay1": "908caa",
+        "overlay2": "908caa", "subtext0": "908caa", "subtext1": "e0def4", "text": "e0def4"},
+        dict(_ROSE_ACCENTS, rose="ea9a97", pine="3e8fb0"),
+        ("love", "pine", "gold", "foam", "iris", "rose"), ("iris", "rose", "gold", "foam", "pine", "love")),
+    "rose-pine-dawn": _preset("Rosé Pine Dawn", True, {
+        "crust": "f2e9e1", "mantle": "fffaf3", "base": "faf4ed", "surface0": "f2e9e1",
+        "surface1": "dfdad9", "surface2": "cecacd", "overlay0": "9893a5", "overlay1": "797593",
+        "overlay2": "797593", "subtext0": "797593", "subtext1": "575279", "text": "575279"},
+        {"love": "b4637a", "gold": "ea9d34", "rose": "d7827e", "pine": "286983",
+         "foam": "56949f", "iris": "907aa9"},
+        ("love", "pine", "gold", "foam", "iris", "rose"), ("iris", "rose", "gold", "foam", "pine", "love")),
+    # Nord, https://www.nordtheme.com (MIT)
+    "nord": _preset("Nord", False, {
+        "crust": "242933", "mantle": "292e39", "base": "2e3440", "surface0": "3b4252",
+        "surface1": "434c5e", "surface2": "4c566a", "overlay0": "616e88", "overlay1": "7b88a1",
+        "overlay2": "9aa5ba", "subtext0": "d8dee9", "subtext1": "e5e9f0", "text": "eceff4"},
+        {"frost1": "8fbcbb", "frost2": "88c0d0", "frost3": "81a1c1", "frost4": "5e81ac",
+         "red": "bf616a", "orange": "d08770", "yellow": "ebcb8b", "green": "a3be8c", "purple": "b48ead"},
+        ("red", "green", "yellow", "frost3", "purple", "frost2"),
+        ("frost2", "purple", "yellow", "green", "orange", "frost4")),
+    # Tokyo Night, https://github.com/folke/tokyonight.nvim (Apache-2.0)
+    "tokyo-night": _preset("Tokyo Night", False, {
+        "crust": "16161e", "mantle": "16161e", "base": "1a1b26", "surface0": "292e42",
+        "surface1": "3b4261", "surface2": "414868", "overlay0": "545c7e", "overlay1": "565f89",
+        "overlay2": "737aa2", "subtext0": "a9b1d6", "subtext1": "c0caf5", "text": "c0caf5"},
+        {"red": "f7768e", "orange": "ff9e64", "yellow": "e0af68", "green": "9ece6a", "teal": "1abc9c",
+         "cyan": "7dcfff", "blue": "7aa2f7", "blue1": "2ac3de", "magenta": "bb9af7", "purple": "9d7cd8"},
+        ("red", "green", "yellow", "blue", "magenta", "cyan"),
+        ("blue", "magenta", "yellow", "cyan", "green", "orange")),
+}
+# The palette choices Simpbar Config offers; "-auto" picks a variant from how
+# light the wallpaper is.
+PALETTE_CHOICES = ("catppuccin-auto", "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato",
+                   "catppuccin-mocha", "gruvbox-auto", "gruvbox-dark", "gruvbox-light",
+                   "rose-pine-auto", "rose-pine", "rose-pine-moon", "rose-pine-dawn",
+                   "nord", "tokyo-night")
+
+
 # --- color math (OKLab: perceptual, so "closest" means what eyes see) --------
 def hex_rgb(h):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
@@ -150,6 +251,29 @@ def oklab(rgb):
 def lch(rgb):
     L, a, b = oklab(rgb)
     return L, math.hypot(a, b), math.degrees(math.atan2(b, a)) % 360
+
+
+def _delin(c):
+    c = 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return c
+
+
+def oklch_hex(L, C, H):
+    """OKLCh to "#rrggbb", lowering chroma until the color fits in sRGB."""
+    for _ in range(40):
+        a, b = C * math.cos(math.radians(H)), C * math.sin(math.radians(H))
+        l_ = L + 0.3963377774 * a + 0.2158037573 * b
+        m_ = L - 0.1055613458 * a - 0.0638541728 * b
+        s_ = L - 0.0894841775 * a - 1.2914855480 * b
+        l, m, s = l_ ** 3, m_ ** 3, s_ ** 3
+        rgb = (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+               -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+               -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+        if all(-0.0005 <= x <= 1.0005 for x in rgb):
+            break
+        C *= 0.9
+    return "#" + "".join(f"{round(min(1.0, max(0.0, _delin(min(1.0, max(0.0, x))))) * 255):02x}"
+                         for x in rgb)
 
 
 def hue_gap(h1, h2):
@@ -188,11 +312,27 @@ def load_pixels(path, size=96):
         return [p[:3] for p in list(im.getdata()) if p[3] >= 128]
 
 
+def mean_lightness(pixels):
+    return sum(oklab(p)[0] for p in pixels) / len(pixels) if pixels else 0.3
+
+
+def resolve_palette(choice, pixels):
+    """A PALETTE_CHOICES value → a PRESETS id ("-auto" goes by lightness)."""
+    if choice in PRESETS:
+        return choice
+    L = mean_lightness(pixels)
+    if choice == "gruvbox-auto":
+        return "gruvbox-light" if L >= 0.76 else "gruvbox-dark"
+    if choice == "rose-pine-auto":
+        return "rose-pine-dawn" if L >= 0.76 else ("rose-pine-moon" if L >= 0.45 else "rose-pine")
+    return "catppuccin-" + pick_flavor(pixels)
+
+
 def pick_flavor(pixels):
     """Lightness of the whole picture → the flavor that sits on it best."""
     if not pixels:
         return "macchiato"
-    mean_l = sum(oklab(p)[0] for p in pixels) / len(pixels)
+    mean_l = mean_lightness(pixels)
     if mean_l >= 0.76:
         return "latte"
     if mean_l >= 0.58:
@@ -203,17 +343,27 @@ def pick_flavor(pixels):
 
 
 def pick_accents(pixels, flavor):
+    """Catppuccin wrapper kept for callers that name a flavor."""
+    chosen, votes, _ = pick_preset_accents(pixels, "catppuccin-" + flavor)
+    return chosen, votes
+
+
+def pick_preset_accents(pixels, preset_id):
     """The three Catppuccin accents the wallpaper's colors land on most.
 
     Each colorful pixel votes for the accent with the nearest hue, weighted
     by how colorful it is, so a vivid streak beats a large dull area. Grey
     pixels don't vote. Picks are kept at least MIN_HUE_GAP apart so the
     wave's gradient has three colors you can tell apart."""
-    pal = PALETTES[flavor]
-    accent_lch = {a: lch(hex_rgb(pal[a])) for a in ACCENTS}
+    preset = PRESETS[preset_id]
+    names = tuple(preset["accents"])
+    accent_lch = {a: lch(hex_rgb(preset["accents"][a])) for a in names}
     max_c = max(v[1] for v in accent_lch.values())
-    rel = {a: accent_lch[a][1] / max_c for a in ACCENTS}
-    votes = dict.fromkeys(ACCENTS, 0.0)
+    rel = {a: accent_lch[a][1] / max_c for a in names}
+    votes = dict.fromkeys(names, 0.0)
+    # Circular mean of the hue each accent's voters really have: the tint
+    # follows the wallpaper itself, not the palette's nearest accent.
+    hue_sum = {a: [0.0, 0.0] for a in names}
     for p in pixels:
         L, C, H = lch(p)
         if C < 0.045 or L < 0.12 or L > 0.98:
@@ -225,37 +375,79 @@ def pick_accents(pixels, flavor):
         def distance(a):
             return (hue_gap(H, accent_lch[a][2]) + 40 * max(0.0, c - rel[a])
                     + 10 * max(0.0, rel[a] - c))
-        votes[min(ACCENTS, key=distance)] += C
+        won = min(names, key=distance)
+        votes[won] += C
+        hue_sum[won][0] += C * math.cos(math.radians(H))
+        hue_sum[won][1] += C * math.sin(math.radians(H))
     total = sum(votes.values())
-    ranked = [a for a in sorted(ACCENTS, key=votes.get, reverse=True)
+    ranked = [a for a in sorted(names, key=votes.get, reverse=True)
               if votes[a] > 0 and votes[a] >= 0.04 * total]
     if total < 0.004 * len(pixels):  # hardly any color: a grey wallpaper
         ranked = []
+    # The wallpaper's main hue and how colorful it is, for the tint.
+    tint = None
+    if ranked:
+        x, y = hue_sum[ranked[0]]
+        strength = min(1.0, (total / max(1, len(pixels))) / 0.03)
+        tint = (math.degrees(math.atan2(y, x)) % 360, strength)
 
     # The wallpaper's own colors first, well apart; then its colors that sit
     # closer together (pink beside mauve); only then Perihelion's defaults.
     chosen = []
+    default = [a for a in preset["default"] if a in names] + list(names)
     for pool, gap in ((ranked, MIN_HUE_GAP), (ranked, NEAR_HUE_GAP),
-                      (DEFAULT_ACCENTS, MIN_HUE_GAP), (DEFAULT_ACCENTS, 0)):
+                      (default, MIN_HUE_GAP), (default, 0)):
         for a in pool:
             if len(chosen) == 3:
-                return chosen, votes
+                return chosen, votes, tint
             if a not in chosen and all(
                     hue_gap(accent_lch[a][2], accent_lch[c][2]) >= gap for c in chosen):
                 chosen.append(a)
-    return chosen, votes
+    return chosen, votes, tint
 
 
 # --- the palette every target is drawn from ---------------------------------
-def build_theme(flavor, accents):
-    p = PALETTES[flavor]
+def build_theme(preset_id, accents, tint=None):
+    """The palette every writer draws from. tint=(hue, strength) moves the
+    neutral steps (backgrounds, surfaces, text) onto the wallpaper's hue."""
+    if preset_id in PALETTES:  # a bare Catppuccin flavor name
+        preset_id = "catppuccin-" + preset_id
+    pre = PRESETS[preset_id]
+    acc = pre["accents"]
     a1, a2, a3 = accents
+    colors = {k: "#" + v for k, v in pre["neutrals"].items()}
+    colors.update({k: "#" + v for k, v in acc.items()})
+    red, green, yellow, blue, magenta, cyan = (acc[n] for n in pre["ansi"])
+    colors.update({"red": "#" + red, "ansi_green": "#" + green, "ansi_yellow": "#" + yellow,
+                   "ansi_blue": "#" + blue, "ansi_magenta": "#" + magenta, "ansi_cyan": "#" + cyan})
+    if tint:
+        colors.update(tinted_neutrals(colors, tint, pre["light"]))
     return {
-        "flavor": flavor,
+        "flavor": preset_id, "name": pre["name"], "light": pre["light"], "tint": tint,
         "accents": list(accents),
-        "colors": {k: "#" + v for k, v in p.items()},
-        "accent": "#" + p[a1], "accent2": "#" + p[a2], "accent3": "#" + p[a3],
+        "colors": colors,
+        "accent": "#" + acc[a1], "accent2": "#" + acc[a2], "accent3": "#" + acc[a3],
     }
+
+
+# Chroma each neutral step gets when tinted: enough that a purple wallpaper
+# gives a dark purple bar and a green one a dark green bar, while staying a
+# background (like Material You's surfaces, or pywal's color0).
+TINT_CHROMA = {"crust": 0.030, "mantle": 0.032, "base": 0.036, "surface0": 0.042,
+               "surface1": 0.045, "surface2": 0.045, "overlay0": 0.040, "overlay1": 0.036,
+               "overlay2": 0.032, "subtext0": 0.026, "subtext1": 0.022, "text": 0.018}
+
+
+def tinted_neutrals(colors, tint, light):
+    hue, strength = tint
+    out = {}
+    for role, c_target in TINT_CHROMA.items():
+        if role not in colors:
+            continue
+        L, C, _ = lch(hex_rgb(colors[role].lstrip("#")))
+        c = c_target * (0.7 if light else 1.0) * (0.45 + 0.55 * strength)
+        out[role] = oklch_hex(L, max(c, min(C, c)), hue)
+    return out
 
 
 def matugen_json(t):
@@ -286,7 +478,7 @@ def rgba(h, alpha):
 
 def drawer_css(t):
     c = t["colors"]
-    name = FLAVOR_NAMES[t["flavor"]]
+    name = t["name"]
     return f"""/* Perihelion app drawer (nwg-drawer): {name}, accents {", ".join(t["accents"])}.
  * Written by {MARKER} on every wallpaper change. To keep your own look,
  * delete this line and edit freely: the file won't be touched again. */
@@ -377,7 +569,7 @@ def strata_toml(t):
     c = t["colors"]
     return "\n".join([
         f"# {MARKER}: follows the wallpaper. Pick another theme in Strata's settings to stop.",
-        f'name = "{FLAVOR_NAMES[t["flavor"]]} (wallpaper)"',
+        f'name = "{t["name"]} (wallpaper)"',
         f'background = "{c["base"]}"',
         f'surface = "{c["mantle"]}"',
         f'text = "{c["text"]}"',
@@ -395,7 +587,7 @@ def mango_conf(t):
     c = t["colors"]
     m = lambda v, a="ff": "0x" + v.lstrip("#") + a  # noqa: E731
     return "\n".join([
-        f"# Written by {MARKER} on every wallpaper change ({FLAVOR_NAMES[t['flavor']]}). "
+        f"# Written by {MARKER} on every wallpaper change ({t['name']}). "
         "config.conf sources it last.",
         f"focus_color={m(t['accent'])}",
         f"border_color={m(c['surface1'])}",
@@ -430,18 +622,18 @@ def _hex_of(v):
     return None
 
 
-def parse_matugen(text):
-    """{role: "#rrggbb"} for the dark scheme, from matugen's --json hex output."""
+def parse_matugen(text, mode="dark"):
+    """{role: "#rrggbb"} for the dark (or light) scheme, from matugen's --json hex output."""
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < start:
         raise ValueError("no JSON in matugen's output")
     data = json.loads(text[start:end + 1])
     colors = data.get("colors", data)
-    if isinstance(colors.get("dark"), dict) and "primary" in colors["dark"]:
-        colors = colors["dark"]  # 2.x: colors.dark.<role>
+    if isinstance(colors.get(mode), dict) and "primary" in colors[mode]:
+        colors = colors[mode]  # 2.x: colors.dark.<role>
     out = {}
     for role, v in colors.items():
-        h = _hex_of(v)
+        h = _hex_of(v[mode] if isinstance(v, dict) and mode in v else v)
         if h:
             out[role] = h
     missing = [r for r in ("primary", "secondary", "tertiary", "surface", "on_surface") if r not in out]
@@ -450,12 +642,12 @@ def parse_matugen(text):
     return out
 
 
-def run_matugen(kind, value, scheme):
+def run_matugen(kind, value, scheme, mode="dark"):
     exe = matugen_bin()
     if not exe:
         raise RuntimeError("matugen isn't installed")
     source = ["image", value] if kind == "image" else ["color", "hex", value]
-    base = [exe, *source, "-t", scheme, "-m", "dark", "--dry-run", "--json", "hex"]
+    base = [exe, *source, "-t", scheme, "-m", mode, "--dry-run", "--json", "hex"]
     # --source-color-index 0 picks the most dominant color without the
     # interactive prompt matugen 4 otherwise shows; older matugen lacks the
     # flag (and never prompted), so retry without it.
@@ -466,7 +658,7 @@ def run_matugen(kind, value, scheme):
         except (OSError, subprocess.SubprocessError) as e:
             raise RuntimeError(f"matugen failed: {e}") from e
         if r.returncode == 0:
-            return parse_matugen(r.stdout)
+            return parse_matugen(r.stdout, mode)
         if extra and "source-color-index" in (r.stderr or ""):
             continue
         last = ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1]
@@ -474,7 +666,7 @@ def run_matugen(kind, value, scheme):
     raise RuntimeError("matugen failed")
 
 
-def build_material(md):
+def build_material(md, light=False):
     """Material Design 3 roles in the palette shape every writer uses."""
     bg, fg = md["surface"], md["on_surface"]
 
@@ -493,8 +685,17 @@ def build_material(md):
         "text": fg,
         "red": md.get("error") or md["primary"],
     }
+    # Material roles have no fixed red/green/...; the terminal keeps
+    # Catppuccin's (Mocha on dark, Latte on light) so `ls` colors still read.
+    ref = PALETTES["latte" if light else "mocha"]
+    for role, name in (("ansi_green", "green"), ("ansi_yellow", "yellow"), ("ansi_blue", "blue"),
+                       ("ansi_magenta", "pink"), ("ansi_cyan", "teal")):
+        colors[role] = "#" + ref[name]
+    colors["overlay2"] = colors["overlay1"]
+    colors["subtext0"] = mix(colors["text"], colors["overlay1"], 0.35)
+    colors["subtext1"] = mix(colors["text"], colors["overlay1"], 0.2)
     return {
-        "flavor": "material",
+        "flavor": "material", "name": "Material You", "light": light, "tint": None,
         "accents": ["primary", "secondary", "tertiary"],
         "colors": colors,
         "accent": md["primary"], "accent2": md["secondary"], "accent3": md["tertiary"],
@@ -511,32 +712,95 @@ FASTFETCH_OS_MODULES = ("os", "kernel", "packages", "shell")
 FASTFETCH_NOTE = f"// {MARKER}: these colors follow the wallpaper; delete this line to keep your own"
 
 
+def fastfetch_colors(t):
+    """What each part of Perihelion's fastfetch layout gets, like Event
+    Horizon's and pywal's terminals: the logo a darker shade of the main
+    color with its highlight in the main color, one accent per section
+    header (OS, WM, PC), values in text lightly tinted toward the main color."""
+    c = t["colors"]
+    a1 = t["accent"]
+    shade = mix(a1, c["text"], 0.25) if t.get("light") else mix(a1, c["crust"], 0.38)
+    return {
+        "logo1": ansi(shade), "logo2": ansi(a1),
+        "title": ansi(a1, True), "output": ansi(mix(c["text"], a1, 0.12)),
+        "separator": ansi(c["overlay1"]),
+        "sections": (ansi(t["accent2"], True), ansi(a1, True), ansi(t["accent3"], True)),
+    }
+
+
+# A module object: braces inside its strings ("format": "{5} {1}") included.
+_FF_OBJECT = r'\{(?:[^{}"]|"(?:[^"\\]|\\.)*")*\}'
+
+
 def update_fastfetch(path, t, default_path):
-    """Recolor Perihelion's fastfetch layout in place: the logo (Fedora's blue
-    and its white "f") takes accents 1 and 3, the OS labels accent 2, the other
-    labels accent 3, values accent 1. Only while the file is still ours."""
+    """Recolor Perihelion's fastfetch layout in place (see fastfetch_colors).
+    Sections are counted by the "break"s between modules. Only while the
+    file is still ours."""
     cur = read(path)
     if cur is None:
         return False
     default = read(default_path) if default_path else None
     if MARKER not in cur and cur != default:
         return False
-    c = t["colors"]
+    f = fastfetch_colors(t)
     new = re.sub(r'"color": \{ "1": "[^"]*", "2": "[^"]*" \}',
-                 f'"color": {{ "1": "{ansi(t["accent"])}", "2": "{ansi(t["accent3"])}" }}', cur)
+                 f'"color": {{ "1": "{f["logo1"]}", "2": "{f["logo2"]}" }}', cur)
     new = re.sub(r'"color": \{ "title": "[^"]*", "output": "[^"]*", "separator": "[^"]*" \}',
-                 f'"color": {{ "title": "{ansi(t["accent"], True)}", "output": "{ansi(t["accent"])}", '
-                 f'"separator": "{ansi(c["overlay1"])}" }}', new)
-
-    def module(m):
-        block = m.group(0)
-        kind = re.search(r'"type": "([^"]+)"', block).group(1)
-        color = ansi(t["accent2"] if kind in FASTFETCH_OS_MODULES else t["accent3"], True)
-        return re.sub(r'"keyColor": "[^"]*"', f'"keyColor": "{color}"', block)
-    new = re.sub(r'\{[^{}]*"type": "[^"]+"[^{}]*"keyColor": "[^"]*"[^{}]*\}', module, new)
+                 f'"color": {{ "title": "{f["title"]}", "output": "{f["output"]}", '
+                 f'"separator": "{f["separator"]}" }}', new)
+    start = new.find('"modules"')
+    if start >= 0:
+        section = 0
+        out = [new[:start]]
+        pos = start
+        for m in re.finditer(r'"break"|' + _FF_OBJECT, new[start:]):
+            out.append(new[pos:start + m.start()])
+            token = m.group(0)
+            if token == '"break"':
+                section += 1
+            elif '"keyColor"' in token:
+                color = f["sections"][min(section, len(f["sections"]) - 1)]
+                token = re.sub(r'"keyColor": "[^"]*"', f'"keyColor": "{color}"', token)
+            out.append(token)
+            pos = start + m.end()
+        out.append(new[pos:])
+        new = "".join(out)
     if MARKER not in new:
         new = FASTFETCH_NOTE + "\n" + new
     return write(path, new)
+
+
+# --- kitty: the terminal's own colors ----------------------------------------
+def kitty_colors(t):
+    """kitty's background, text and 16 colors: the theme's tinted darkest
+    shade behind, and the palette's red/green/yellow/blue/magenta/cyan."""
+    c = t["colors"]
+    a1, a2, a3 = t["accent"], t["accent2"], t["accent3"]
+    bg = c["base"] if t.get("light") else c["crust"]
+    rows = [
+        ("foreground", c["text"]), ("background", bg),
+        ("selection_foreground", c["base"]), ("selection_background", a1),
+        ("cursor", a1), ("cursor_text_color", c["base"]), ("url_color", a1),
+        ("active_border_color", a1), ("inactive_border_color", c["overlay0"]),
+        ("bell_border_color", a3),
+        ("active_tab_foreground", c["crust"]), ("active_tab_background", a1),
+        ("inactive_tab_foreground", c["text"]), ("inactive_tab_background", c["mantle"]),
+        ("tab_bar_background", c["crust"]),
+        ("mark1_foreground", c["base"]), ("mark1_background", a1),
+        ("mark2_foreground", c["base"]), ("mark2_background", a2),
+        ("mark3_foreground", c["base"]), ("mark3_background", a3),
+        ("color0", c["surface1"]), ("color8", c["surface2"]),
+        ("color1", c["red"]), ("color9", c["red"]),
+        ("color2", c["ansi_green"]), ("color10", c["ansi_green"]),
+        ("color3", c["ansi_yellow"]), ("color11", c["ansi_yellow"]),
+        ("color4", c["ansi_blue"]), ("color12", c["ansi_blue"]),
+        ("color5", c["ansi_magenta"]), ("color13", c["ansi_magenta"]),
+        ("color6", c["ansi_cyan"]), ("color14", c["ansi_cyan"]),
+        ("color7", c["subtext1"]), ("color15", c["subtext0"]),
+    ]
+    head = [f"# kitty colors written by {MARKER} on every wallpaper change ({t['name']}).",
+            "# kitty.conf includes this file; remove that line to keep your own colors."]
+    return "\n".join(head + [f"{k:<24}{v}" for k, v in rows]) + "\n"
 
 
 # --- terminal apps: cava, btop, cmatrix --------------------------------------
@@ -580,7 +844,7 @@ def btop_theme(t):
         ("upload_start", a3), ("upload_mid", mix(a3, a2, 0.5)), ("upload_end", a2),
         ("process_start", a1), ("process_mid", a2), ("process_end", a3),
     ]
-    head = [f"# btop theme written by {MARKER} ({FLAVOR_NAMES[t['flavor']]}), "
+    head = [f"# btop theme written by {MARKER} ({t['name']}), "
             "rewritten on every wallpaper change.",
             "# Pick another theme in btop's options (Esc > Options) to keep your own."]
     return "\n".join(head + [f'theme[{k}]="{v}"' for k, v in rows]) + "\n"
@@ -603,7 +867,7 @@ def mako_config(t):
     c = t["colors"]
     return "\n".join([
         f"# Notifications (mako), written by {MARKER} on every wallpaper change",
-        f"# ({FLAVOR_NAMES[t['flavor']]}). Delete this line to keep your own; it won't be touched.",
+        f"# ({t['name']}). Delete this line to keep your own; it won't be touched.",
         "font=Noto Sans 11",
         f"background-color={c['base']}ee",
         f"text-color={c['text']}",
@@ -720,22 +984,29 @@ def signal_procs(names, sig):
 
 # --- settings and inputs ---------------------------------------------------
 def read_settings():
-    s = {"style": "catppuccin", "flavor": "auto", "accent": "wallpaper",
-         "scheme": "scheme-tonal-spot"}
+    s = {"style": "catppuccin", "palette": "catppuccin-auto", "tint": True,
+         "accent": "wallpaper", "scheme": "scheme-tonal-spot", "mode": "dark"}
     text = read(os.path.join(SIMPBAR, "theme")) or ""
     for line in text.splitlines():
         k, sep, v = line.partition("=")
         k, v = k.strip(), v.strip().lower()
         if not sep:
             continue
-        if k == "flavor" and v in ("auto",) + FLAVORS:
-            s["flavor"] = v
+        if k == "flavor" and v in ("auto",) + FLAVORS and "palette_set" not in s:
+            s["palette"] = "catppuccin-" + v  # older theme files
+        elif k == "palette" and v in PALETTE_CHOICES:
+            s["palette"], s["palette_set"] = v, True
+        elif k == "tint" and v in ("on", "off"):
+            s["tint"] = v == "on"
+        elif k == "mode" and v in ("dark", "light", "auto"):
+            s["mode"] = v
         elif k == "accent" and v in ("wallpaper", "flavor"):
             s["accent"] = v
         elif k == "style" and v in ("catppuccin", "material"):
             s["style"] = v
         elif k == "scheme" and v in MATUGEN_SCHEMES:
             s["scheme"] = v
+    s.pop("palette_set", None)
     return s
 
 
@@ -772,6 +1043,9 @@ def main(argv=None):
     ap.add_argument("image", nargs="?")
     ap.add_argument("--color")
     ap.add_argument("--flavor", choices=("auto",) + FLAVORS)
+    ap.add_argument("--palette", choices=PALETTE_CHOICES)
+    ap.add_argument("--tint", choices=("on", "off"))
+    ap.add_argument("--mode", choices=("dark", "light", "auto"))
     ap.add_argument("--accent", choices=("wallpaper", "flavor"))
     ap.add_argument("--style", choices=("catppuccin", "material"))
     ap.add_argument("--scheme", choices=MATUGEN_SCHEMES)
@@ -784,7 +1058,10 @@ def main(argv=None):
         return 0
 
     settings = read_settings()
-    flavor_setting = args.flavor or settings["flavor"]
+    palette_setting = (args.palette or ("catppuccin-" + args.flavor if args.flavor else None)
+                       or settings["palette"])
+    tint_on = (args.tint == "on") if args.tint else settings["tint"]
+    mode_setting = args.mode or settings["mode"]
     accent_setting = args.accent or settings["accent"]
     style = args.style or settings["style"]
     scheme = args.scheme or settings["scheme"]
@@ -801,7 +1078,8 @@ def main(argv=None):
         kind, value = current_wallpaper()
 
     # Skip the work when nothing changed since the last run (login restores).
-    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|10"
+    stamp_src = (f"{kind}|{value}|{style}|{scheme}|{mode_setting}|{palette_setting}|"
+                 f"{tint_on}|{accent_setting}|11")
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
@@ -813,18 +1091,7 @@ def main(argv=None):
             and os.path.isfile(os.path.join(SIMPBAR, "matugen.json")):
         return 0
 
-    theme = None
-    if style == "material" and kind:
-        try:
-            theme = build_material(run_matugen(kind, value, scheme))
-            accents, votes = theme["accents"], {}
-            flavor = "material"
-        except (RuntimeError, ValueError) as e:
-            print(f"perihelion-theme: {e}; using Catppuccin instead", file=sys.stderr)
-
-    if theme is not None:
-        pixels = []
-    elif kind == "image":
+    if kind == "image":
         try:
             pixels = load_pixels(value)
         except Exception as e:  # an image format with no loader installed, a broken file
@@ -836,16 +1103,30 @@ def main(argv=None):
     else:
         pixels = []
 
+    theme = None
+    if style == "material" and kind:
+        mode = mode_setting
+        if mode == "auto":
+            mode = "light" if mean_lightness(pixels) >= 0.76 else "dark"
+        try:
+            theme = build_material(run_matugen(kind, value, scheme, mode), light=mode == "light")
+            accents, votes = theme["accents"], {}
+            preset = "material"
+        except (RuntimeError, ValueError) as e:
+            print(f"perihelion-theme: {e}; using Catppuccin instead", file=sys.stderr)
+
     if theme is None:
-        flavor = pick_flavor(pixels) if flavor_setting == "auto" else flavor_setting
-        if accent_setting == "wallpaper" and pixels:
-            accents, votes = pick_accents(pixels, flavor)
-        else:
-            accents, votes = list(DEFAULT_ACCENTS[:3]), {}
-        theme = build_theme(flavor, accents)
+        preset = resolve_palette(palette_setting, pixels)
+        accents, votes, tint = pick_preset_accents(pixels, preset) if pixels else ([], {}, None)
+        if accent_setting != "wallpaper" or not pixels:
+            names = PRESETS[preset]["accents"]
+            accents = [a for a in PRESETS[preset]["default"] if a in names][:3]
+        theme = build_theme(preset, accents, tint if tint_on else None)
+    flavor = preset[len("catppuccin-"):] if preset.startswith("catppuccin-") else preset
 
     if args.dry_run:
-        print(json.dumps({"source": value, "style": style, "flavor": flavor, "accents": accents,
+        print(json.dumps({"source": value, "style": style, "palette": preset, "flavor": flavor,
+                          "tint": theme.get("tint"), "accents": accents,
                           "votes": {k: round(v, 2) for k, v in votes.items() if v},
                           "matugen": matugen_json(theme)}, indent=2, ensure_ascii=False))
         return 0
@@ -909,6 +1190,13 @@ def main(argv=None):
                 except (OSError, subprocess.SubprocessError):
                     pass
 
+    # kitty: a colors file kitty.conf includes; open terminals reload it (USR1).
+    kitty_dir = os.path.join(CONFIG, "kitty")
+    if shutil.which("kitty") or os.path.isdir(kitty_dir):
+        if write(os.path.join(kitty_dir, "perihelion-colors.conf"), kitty_colors(theme)):
+            changed.append("terminal")
+            signal_procs(("kitty",), signal.SIGUSR1)
+
     # The login screen: same picture, same colors (Perihelion's helper; it
     # does nothing for someone who may not change the shared greeter).
     greeter = shutil.which("perihelion-greeter-sync")
@@ -926,7 +1214,7 @@ def main(argv=None):
 
     signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
-    print(f"perihelion-theme: {FLAVOR_NAMES[flavor]}, accents "
+    print(f"perihelion-theme: {theme['name']}{', tinted' if theme.get('tint') else ''}, accents "
           f"{', '.join(accents)}" + (f" ({', '.join(changed)} updated)" if changed else ""))
     return 0
 
