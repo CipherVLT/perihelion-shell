@@ -8978,12 +8978,32 @@ fn perihelionLeftCavaRoom() i64 {
     return 0;
 }
 
-/// The wave's color `dy` pixels from the middle line, out of `half_max`:
-/// the user's `cava_color` (a distro can swap in a gradient here).
+// The wave's gradient (Catppuccin Macchiato): blue at the middle line, pink
+// halfway out, yellow at the peaks, so loud moments light up.
+const WAVE_BLUE: u32 = 0xFF8AADF4;
+const WAVE_PINK: u32 = 0xFFF5BDE6;
+const WAVE_YELLOW: u32 = 0xFFEED49F;
+
+/// Mixes two 0xAARRGGBB colors; `t` runs 0 (all `a`) to 256 (all `b`).
+fn waveLerp(a: u32, b: u32, t: u32) u32 {
+    var out: u32 = 0xFF000000;
+    var i: u32 = 0;
+    while (i < 3) : (i += 1) {
+        const shift: u5 = @intCast(i * 8);
+        const ca: u32 = (a >> shift) & 0xFF;
+        const cb: u32 = (b >> shift) & 0xFF;
+        const c: u32 = (ca * (256 - t) + cb * t) >> 8;
+        out |= (c & 0xFF) << shift;
+    }
+    return out;
+}
+
+/// The wave color `dy` pixels from the middle line, out of `half_max`.
 fn waveColor(dy: i64, half_max: i64) u32 {
-    _ = dy;
-    _ = half_max;
-    return current_config.appearance.cava_color;
+    const d: i64 = if (dy < 0) -dy else dy;
+    const t: i64 = @divTrunc(@min(d, half_max) * 512, @max(half_max, 1));
+    if (t <= 256) return waveLerp(WAVE_BLUE, WAVE_PINK, @intCast(t));
+    return waveLerp(WAVE_PINK, WAVE_YELLOW, @intCast(@min(t - 256, 256)));
 }
 
 /// Draws the waveform starting at `x_start`, returning the pen after it.
