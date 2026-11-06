@@ -14,6 +14,9 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
   ~/.config/strata/themes/tokyo-night.toml   Strata, the file manager
   ~/.config/mango/colors.conf           Mango's window borders
   ~/.config/fastfetch/config.jsonc      the distro logo and labels in the terminal
+  ~/.config/cava/config                 terminal cava's gradient (live, SIGUSR2)
+  ~/.config/btop/themes/perihelion.theme   btop (btop.conf picks "perihelion")
+  ~/.config/perihelion/cmatrix-color    cmatrix's color (Perihelion's wrapper)
 
 and tells simpbar and simpbar-shell to reload (SIGUSR1).
 
@@ -534,6 +537,66 @@ def update_fastfetch(path, t, default_path):
     return write(path, new)
 
 
+# --- terminal apps: cava, btop, cmatrix --------------------------------------
+CAVA_NOTE = f"; {MARKER}: the gradient follows the wallpaper; delete this line to keep your own"
+
+
+def update_cava(path, t, default_path):
+    """The terminal cava's three gradient colors = the bar wave's three accents."""
+    cur = read(path)
+    if cur is None:
+        return False
+    default = read(default_path) if default_path else None
+    if MARKER not in cur and cur != default:
+        return False
+    if not re.search(r"(?m)^gradient_color_3 *=", cur):
+        return False
+    new = cur
+    for i, h in enumerate((t["accent"], t["accent2"], t["accent3"]), 1):
+        new = re.sub(rf"(?m)^gradient_color_{i} *=.*$", f"gradient_color_{i} = '{h}'", new)
+    if MARKER not in new:
+        new = re.sub(r"(?m)^gradient_color_1 *=", CAVA_NOTE + "\ngradient_color_1 =", new, count=1)
+    return write(path, new)
+
+
+def btop_theme(t):
+    c = t["colors"]
+    a1, a2, a3 = t["accent"], t["accent2"], t["accent3"]
+    rows = [
+        ("main_bg", c["base"]), ("main_fg", c["text"]), ("title", c["text"]),
+        ("hi_fg", a1), ("selected_bg", c["surface1"]), ("selected_fg", a1),
+        ("inactive_fg", c["overlay1"]), ("graph_text", c["text"]), ("meter_bg", c["surface1"]),
+        ("proc_misc", a2), ("cpu_box", a1), ("mem_box", a2), ("net_box", a3), ("proc_box", a1),
+        ("div_line", c["overlay0"]),
+        ("temp_start", a1), ("temp_mid", a2), ("temp_end", a3),
+        ("cpu_start", a1), ("cpu_mid", a2), ("cpu_end", a3),
+        ("free_start", a1), ("free_mid", mix(a1, a2, 0.5)), ("free_end", a2),
+        ("cached_start", a2), ("cached_mid", mix(a2, a3, 0.5)), ("cached_end", a3),
+        ("available_start", a3), ("available_mid", mix(a3, a1, 0.5)), ("available_end", a1),
+        ("used_start", a1), ("used_mid", a2), ("used_end", a3),
+        ("download_start", a1), ("download_mid", mix(a1, a2, 0.5)), ("download_end", a2),
+        ("upload_start", a3), ("upload_mid", mix(a3, a2, 0.5)), ("upload_end", a2),
+        ("process_start", a1), ("process_mid", a2), ("process_end", a3),
+    ]
+    head = [f"# btop theme written by {MARKER} ({FLAVOR_NAMES[t['flavor']]}), "
+            "rewritten on every wallpaper change.",
+            "# Pick another theme in btop's options (Esc > Options) to keep your own."]
+    return "\n".join(head + [f'theme[{k}]="{v}"' for k, v in rows]) + "\n"
+
+
+# cmatrix knows only the terminal's 8 named colors; pick the one nearest the
+# first accent's hue (kitty draws them in Catppuccin).
+CMATRIX_HUES = (("red", 20), ("yellow", 85), ("green", 140), ("cyan", 200),
+                ("blue", 260), ("magenta", 320))
+
+
+def cmatrix_color(t):
+    L, C, H = lch(hex_rgb(t["accent"].lstrip("#")))
+    if C < 0.03:
+        return "white"
+    return min(CMATRIX_HUES, key=lambda n: hue_gap(H, n[1]))[0]
+
+
 # --- writing ------------------------------------------------------------------
 def read(path):
     try:
@@ -707,7 +770,7 @@ def main(argv=None):
         kind, value = current_wallpaper()
 
     # Skip the work when nothing changed since the last run (login restores).
-    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|7"
+    stamp_src = f"{kind}|{value}|{style}|{scheme}|{flavor_setting}|{accent_setting}|8"
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
@@ -793,6 +856,16 @@ def main(argv=None):
     if update_fastfetch(os.path.join(CONFIG, "fastfetch", "config.jsonc"), theme,
                         os.path.join(SHARE, "fastfetch", "config.jsonc")):
         changed.append("fastfetch")
+
+    if update_cava(os.path.join(CONFIG, "cava", "config"), theme,
+                   os.path.join(SHARE, "cava", "config")):
+        changed.append("cava")
+        signal_procs(("cava",), signal.SIGUSR2)  # cava rereads its colors on USR2
+
+    if write(os.path.join(CONFIG, "btop", "themes", "perihelion.theme"), btop_theme(theme)):
+        changed.append("btop")
+    if write(os.path.join(CONFIG, "perihelion", "cmatrix-color"), cmatrix_color(theme) + "\n"):
+        changed.append("cmatrix")
 
     signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
