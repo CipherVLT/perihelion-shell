@@ -1,0 +1,43 @@
+# Temporary: where can Fedora 45 get matugen, and what does it print?
+name: Probe matugen
+on:
+  push:
+    paths: [.github/workflows/probe-matugen.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    container: registry.fedoraproject.org/fedora:45
+    steps:
+      - name: Look in Terra and the danklinux COPR
+        run: |
+          set -x
+          dnf5 -q --repofrompath "terra,https://repos.fyralabs.com/terra45" --setopt=terra.gpgcheck=0 \
+            --repo terra repoquery --qf '%{name} %{evr} %{repoid}\n' matugen || true
+          dnf5 -q --repofrompath "dank,https://download.copr.fedorainfracloud.org/results/avengemedia/danklinux/fedora-45-x86_64/" \
+            --setopt=dank.gpgcheck=0 --repo dank repoquery --qf '%{name} %{evr} %{repoid}\n' matugen || true
+          dnf5 -q --repofrompath "dank44,https://download.copr.fedorainfracloud.org/results/avengemedia/danklinux/fedora-44-x86_64/" \
+            --setopt=dank44.gpgcheck=0 --repo dank44 repoquery --qf '%{name} %{evr} %{repoid}\n' matugen || true
+      - name: Install one and try it
+        run: |
+          set -x
+          dnf5 install -y --setopt=install_weak_deps=False \
+            --repofrompath "terra,https://repos.fyralabs.com/terra45" --setopt=terra.gpgcheck=0 matugen ||
+          dnf5 install -y --setopt=install_weak_deps=False \
+            --repofrompath "dank,https://download.copr.fedorainfracloud.org/results/avengemedia/danklinux/fedora-45-x86_64/" \
+            --setopt=dank.gpgcheck=0 matugen
+          rpm -qi matugen | head -12
+          matugen --version
+          python3 - <<'PY'
+          import struct, zlib
+          w = h = 32
+          raw = b"".join(b"\x00" + b"".join(bytes((140, 70, 200) if x < 20 else (40, 30, 60)) for x in range(w)) for y in range(h))
+          c = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+          open("/tmp/t.png", "wb").write(b"\x89PNG\r\n\x1a\n" + c(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + c(b"IDAT", zlib.compress(raw)) + c(b"IEND", b""))
+          PY
+          matugen image /tmp/t.png -t scheme-tonal-spot -m dark --dry-run --json hex --source-color-index 0 > /tmp/new.json; echo "exit $?"
+          head -c 1500 /tmp/new.json; echo
+          matugen image /tmp/t.png -t scheme-tonal-spot -m dark --dry-run --json hex --source-color-index 0 --old-json-output | head -c 800; echo
+          matugen image /tmp/t.png --dry-run --json hex </dev/null | head -c 300; echo "exit ${PIPESTATUS[0]}"
