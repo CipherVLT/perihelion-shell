@@ -187,6 +187,11 @@ pub extern "c" fn adw_action_row_set_activatable_widget(self: *AdwActionRow, wid
 
 // AdwComboRow
 pub extern "c" fn adw_combo_row_new() *AdwComboRow;
+// Perihelion Settings: light/dark (AdwColorScheme: 0 default = follow the
+// system, 1 force light, 4 force dark).
+pub const AdwStyleManager = opaque {};
+pub extern "c" fn adw_style_manager_get_default() *AdwStyleManager;
+pub extern "c" fn adw_style_manager_set_color_scheme(self: *AdwStyleManager, color_scheme: c_int) void;
 pub extern "c" fn adw_combo_row_set_model(self: *AdwComboRow, model: ?*anyopaque) void;
 pub extern "c" fn adw_combo_row_get_selected(self: *AdwComboRow) c_uint;
 pub extern "c" fn adw_combo_row_set_selected(self: *AdwComboRow, position: c_uint) void;

@@ -846,7 +846,7 @@ pub const Overview = struct {
             var lit = entry.levels.map.iterator();
             outer: while (lit.next()) |lkv| {
                 for (lkv.value_ptr.*) |lr| {
-                    if (std.mem.eql(u8, lr.namespace, "simpbar")) {
+                    if (std.mem.eql(u8, lr.namespace, "perihelion-bar") or std.mem.eql(u8, lr.namespace, "simpbar")) {
                         self.bar = .{
                             .x = lr.x - self.out_x,
                             .y = lr.y - self.out_y,

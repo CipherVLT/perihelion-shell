@@ -1916,8 +1916,8 @@ fn spawnMoveLauncher(from: usize, to: usize) bool {
     // argv[0] is the program name — env-style launches must repeat it
     // (an array starting at the flag makes env parse OUR flag as ITS
     // option and die 125, which is exactly what happened here).
-    var argv = [_:null]?[*:0]const u8{ "/usr/bin/simpbar-config", "--move-launcher", from_s.ptr, to_s.ptr, null };
-    return spawnAndWait("/usr/bin/simpbar-config", &argv);
+    var argv = [_:null]?[*:0]const u8{ "/usr/bin/perihelion-settings", "--move-launcher", from_s.ptr, to_s.ptr, null };
+    return spawnAndWait("/usr/bin/perihelion-settings", &argv);
 }
 
 /// Blocking spawn-and-wait (fork/exec/waitpid) for drop commits — the one
@@ -2183,7 +2183,7 @@ const CENTER_LAUNCHERS = [_]LauncherButton{
     .{ .label = "\u{f07c} Files", .command = "nautilus" }, // fa-folder-open
     .{ .label = "\u{f120} Term", .command = "foot" }, // fa-terminal
     .{ .label = "\u{f1b6} Steam", .command = "steam" }, // fa-steam
-    .{ .label = "\u{f013} Config", .command = "simpbar-config" }, // fa-cog
+    .{ .label = "\u{f013} Settings", .command = "perihelion-settings" }, // fa-cog
     .{ .label = "\u{f118} Welcome", .command = "simpbar-welcome" }, // fa-smile-o
 };
 
@@ -4975,7 +4975,7 @@ fn drawAllBars(bars: []Bar) void {
 }
 
 pub fn main() void {
-    logging.init("simpbar");
+    logging.init(if (getenv("SIMPBAR_DOCK") != null) "perihelion-dock" else "perihelion-bar");
     realMain() catch |err| {
         logging.err("fatal: {s}", .{@errorName(err)});
         logging.crash("fatal error: {s}", .{@errorName(err)});
@@ -5169,7 +5169,9 @@ fn realMain() !void {
             surface,
             target_output,
             .top, // layer: show above normal windows
-            "simpbar",
+            // Perihelion: the overview (perihelion-shell) finds the bar by
+            // this namespace; the dock has its own.
+            if (dock_mode) "perihelion-dock" else "perihelion-bar",
         ) catch {
             surface.destroy();
             continue;

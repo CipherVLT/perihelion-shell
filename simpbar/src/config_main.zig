@@ -34,7 +34,7 @@ pub const panic = std.debug.FullPanic(logging.panicHandler);
 
 extern "c" fn exit(code: c_int) noreturn;
 
-const APP_ID = "dev.jaytheoutpatient.simpbar.Config";
+const APP_ID = "io.github.ciphervlt.perihelion.Settings";
 
 // ---------------------------------------------------------------------
 // libc externs (mirrors welcome_main.zig's own block)
@@ -174,7 +174,7 @@ const CENTER_LAUNCHERS = [_]LauncherButton{
     .{ .label = "\u{f07c} Files", .command = "nautilus" },
     .{ .label = "\u{f120} Term", .command = "foot" },
     .{ .label = "\u{f1b6} Steam", .command = "steam" },
-    .{ .label = "\u{f013} Config", .command = "simpbar-config" },
+    .{ .label = "\u{f013} Settings", .command = "perihelion-settings" },
     .{ .label = "\u{f118} Welcome", .command = "simpbar-welcome" },
 };
 
@@ -348,6 +348,40 @@ fn resolvePaths() void {
     theme_path = std.fmt.bufPrintZ(&theme_path_buf, "{s}/theme", .{dir}) catch "";
     widgets_disabled_path = std.fmt.bufPrintZ(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}) catch "";
     shell_pidfile_path = std.fmt.bufPrintZ(&shell_pidfile_path_buf, "{s}/simpbar-shell.pid", .{dir}) catch "";
+    settings_style_path = std.fmt.bufPrintZ(&settings_style_path_buf, "{s}/settings-style", .{dir}) catch "";
+}
+
+// Perihelion: this window's own light/dark choice (~/.config/simpbar/settings-style:
+// system, light or dark). "system" follows the desktop's preference
+// (org.gnome.desktop.interface color-scheme, which Perihelion sets to dark).
+var settings_style_path_buf: [512]u8 = undefined;
+var settings_style_path: [:0]const u8 = "";
+const SETTINGS_STYLE_CHOICES = [_][]const u8{ "system", "light", "dark" };
+const SETTINGS_STYLE_LABELS = [_][*:0]const u8{ "Follow the system", "Light", "Dark" };
+var live_settings_style: []const u8 = "system";
+
+fn loadSettingsStyle() void {
+    const raw = readFileAll(settings_style_path) orelse return;
+    defer gpa.free(raw);
+    const v = std.mem.trim(u8, raw, " \t\r\n");
+    for (SETTINGS_STYLE_CHOICES) |c| {
+        if (std.mem.eql(u8, c, v)) live_settings_style = c;
+    }
+}
+
+fn applySettingsStyle() void {
+    const scheme: c_int = if (std.mem.eql(u8, live_settings_style, "light")) 1 else if (std.mem.eql(u8, live_settings_style, "dark")) 4 else 0;
+    gtk.adw_style_manager_set_color_scheme(gtk.adw_style_manager_get_default(), scheme);
+}
+
+fn onSettingsStyleChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= SETTINGS_STYLE_CHOICES.len) return;
+    live_settings_style = SETTINGS_STYLE_CHOICES[idx];
+    applySettingsStyle();
+    var buf: [16]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{s}\n", .{live_settings_style}) catch return;
+    _ = writeFileAll(settings_style_path, text);
 }
 
 // ---------------------------------------------------------------------
@@ -1350,7 +1384,7 @@ fn restartBar() void {
     const old_pid = readPidfilePid();
     if (old_pid) |pid| _ = std.c.kill(pid, .TERM);
 
-    launchDetached(&.{"simpbar"});
+    launchDetached(&.{"perihelion-bar"});
 
     var waited_ms: u32 = 0;
     var dummy: [1]PollFd = undefined;
@@ -2121,9 +2155,10 @@ fn restartShell() void {
     } else {
         // No pidfile (shell predating pidfiles, or none running): exact-name
         // pkill covers the live-but-untracked case; a miss is a silent no-op.
-        launchDetached(&.{ "pkill", "-x", "simpbar-shell" });
+        // (-f: the kernel's 15-character process name cuts it short)
+        launchDetached(&.{ "pkill", "-f", "^(/usr/bin/)?perihelion-shell( |$)" });
     }
-    launchDetached(&.{"simpbar-shell"});
+    launchDetached(&.{"perihelion-shell"});
 }
 
 /// One desktop widget's row in the Desktop Widgets group. `id` is the exact
@@ -2748,6 +2783,11 @@ fn buildAppearancePage() *gtk.GtkBox {
     gtk.gtk_widget_set_margin_bottom(@ptrCast(outer), 24);
     gtk.gtk_widget_set_margin_start(@ptrCast(outer), 24);
     gtk.gtk_widget_set_margin_end(@ptrCast(outer), 24);
+
+    const window_group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(window_group, "Perihelion Settings");
+    buildThemeComboRow(window_group, "Window style", "Light or dark for this window. Follow the system uses the desktop's preference (dark on Perihelion).", &SETTINGS_STYLE_LABELS, &SETTINGS_STYLE_CHOICES, live_settings_style, &onSettingsStyleChanged);
+    gtk.gtk_box_append(outer, @ptrCast(window_group));
 
     const theming_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(theming_group, "Theming");
@@ -5537,7 +5577,7 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     const section_title: [:0]const u8 = if (hypr_pages.g_mango) "Mango" else "Hyprland";
 
     const window = gtk.adw_application_window_new(app);
-    gtk.gtk_window_set_title(@ptrCast(window), "Simpbar Config");
+    gtk.gtk_window_set_title(@ptrCast(window), "Perihelion Settings");
     // Widened from the original 700 — Nerd Font family names ("JetBrainsMonoNL
     // Nerd Font", etc.) were getting truncated in the font dropdown at 700px,
     // making it impossible to tell entries apart well enough to pick one.
@@ -5599,7 +5639,7 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     const sidebar_toolbar = gtk.adw_toolbar_view_new();
     gtk.adw_toolbar_view_add_top_bar(sidebar_toolbar, @ptrCast(gtk.adw_header_bar_new()));
     gtk.adw_toolbar_view_set_content(sidebar_toolbar, @ptrCast(sidebar_list));
-    const sidebar_page = gtk.adw_navigation_page_new(@ptrCast(sidebar_toolbar), "Simpbar Config");
+    const sidebar_page = gtk.adw_navigation_page_new(@ptrCast(sidebar_toolbar), "Perihelion Settings");
     gtk.adw_navigation_split_view_set_sidebar(split_view, sidebar_page);
 
 
@@ -5634,6 +5674,8 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
         gtk.g_object_set(@ptrCast(settings), "gtk-icon-theme-name", @as([*:0]const u8, "Adwaita"), @as(?*anyopaque, null));
     }
 
+    loadSettingsStyle();
+    applySettingsStyle();
     if (g_window == null) {
         g_window = buildWindow(@ptrCast(app));
     }
@@ -5642,7 +5684,7 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
 }
 
 pub fn main() void {
-    logging.init("simpbar-config");
+    logging.init("perihelion-settings");
     realMain() catch |err| {
         logging.err("fatal: {s}", .{@errorName(err)});
         logging.crash("fatal error: {s}", .{@errorName(err)});
