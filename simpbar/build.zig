@@ -55,7 +55,7 @@ pub fn build(b: *Build) !void {
     exe_mod.addCSourceFile(.{ .file = b.path("src/gdkpixbuf_shim.c"), .flags = &.{} });
 
     const exe = b.addExecutable(.{
-        .name = "simpbar",
+        .name = "perihelion-bar",
         .root_module = exe_mod,
     });
     // Zig 0.16 defaults Debug builds to the self-hosted x86 backend +
@@ -139,7 +139,7 @@ pub fn build(b: *Build) !void {
     config_mod.linkSystemLibrary("gio-2.0", .{});
 
     const config_exe = b.addExecutable(.{
-        .name = "simpbar-config",
+        .name = "perihelion-settings",
         .root_module = config_mod,
     });
     config_exe.use_llvm = true; // see simpbar exe above: Debug defaults SEGV/ld-lld

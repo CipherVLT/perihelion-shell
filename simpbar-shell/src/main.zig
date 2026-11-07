@@ -1056,7 +1056,7 @@ fn removeWidget(host: *Host, i: usize) void {
     _ = posix.system.close(fd);
     logging.step("widgets: {s} removed (Alt + right-click) — restarting", .{id});
     endEdit(host); // save a note being typed before going away
-    widgets_mod.spawnDetached("sleep 0.4; exec simpbar-shell");
+    widgets_mod.spawnDetached("sleep 0.4; exec perihelion-shell");
     std.process.exit(0);
 }
 
@@ -1871,23 +1871,23 @@ fn cliOverview(action: []const u8) noreturn {
     }
     var path_buf: [IPC_PATH_LEN]u8 = undefined;
     const path = ipcSockPathZ(&path_buf) orelse {
-        cliPrint(2, "simpbar-shell: XDG_RUNTIME_DIR not set\n");
+        cliPrint(2, "perihelion-shell: XDG_RUNTIME_DIR not set\n");
         std.process.exit(1);
     };
     const raw = std.c.socket(std.os.linux.AF.UNIX, std.os.linux.SOCK.STREAM | std.os.linux.SOCK.CLOEXEC, 0);
     if (raw < 0) {
-        cliPrint(2, "simpbar-shell: socket() failed\n");
+        cliPrint(2, "perihelion-shell: socket() failed\n");
         std.process.exit(1);
     }
     const fd: posix.fd_t = @intCast(raw);
     const addr = ipcUnixAddr(path) catch {
         _ = posix.system.close(fd);
-        cliPrint(2, "simpbar-shell: control path too long\n");
+        cliPrint(2, "perihelion-shell: control path too long\n");
         std.process.exit(1);
     };
     if (std.c.connect(fd, @ptrCast(&addr), @sizeOf(std.os.linux.sockaddr.un)) != 0) {
         _ = posix.system.close(fd);
-        cliPrint(2, "simpbar-shell: no running instance (start simpbar-shell first)\n");
+        cliPrint(2, "perihelion-shell: no running instance (start perihelion-shell first)\n");
         std.process.exit(1);
     }
 
@@ -1912,7 +1912,7 @@ fn cliOverview(action: []const u8) noreturn {
     _ = posix.system.close(fd);
 
     if (got == 0) {
-        cliPrint(2, "simpbar-shell: no reply from the running instance\n");
+        cliPrint(2, "perihelion-shell: no reply from the running instance\n");
         std.process.exit(1);
     }
     const out: []const u8 = reply[0..got];
@@ -1938,14 +1938,14 @@ pub fn main(init: std.process.Init.Minimal) !void {
         var ubuf: [256]u8 = undefined;
         const usage = std.fmt.bufPrint(
             &ubuf,
-            "simpbar-shell: unknown command \"{s}\"\nusage: simpbar-shell [overview [toggle|open|close]]\n",
+            "perihelion-shell: unknown command \"{s}\"\nusage: perihelion-shell [overview [toggle|open|close]]\n",
             .{arg},
-        ) catch "simpbar-shell: unknown command\n";
+        ) catch "perihelion-shell: unknown command\n";
         cliPrint(2, usage);
         std.process.exit(2);
     }
 
-    logging.init("simpbar-shell");
+    logging.init("perihelion-shell");
     defer logging.deinit();
 
     // SIGUSR1 live-reload (g_reload_pending): matugen rewrites the palette
@@ -2074,7 +2074,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             surface,
             output,
             .bottom,
-            "simpbar-shell",
+            "perihelion-shell",
         ) catch {
             surface.destroy();
             continue;

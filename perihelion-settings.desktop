@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Perihelion Settings
+GenericName=Bar and Desktop Settings
+Comment=Perihelion Bar's look, modules and colors, the desktop widgets, and shortcuts
+Exec=perihelion-settings
+Icon=perihelion-settings
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=bar;dock;theme;colors;wallpaper;widgets;simpbar;
+StartupNotify=true
+StartupWMClass=io.github.ciphervlt.perihelion.Settings

@@ -21,7 +21,7 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
   ~/.config/mako/config                 notifications (Mango), reloaded live
   the login screen (SDDM, Pixie)        through perihelion-greeter-sync
 
-and tells simpbar and simpbar-shell to reload (SIGUSR1).
+and tells Perihelion Bar (bar and dock) and Perihelion Shell to reload (SIGUSR1).
 
 Settings, ~/.config/simpbar/theme (Simpbar Config writes it):
   style=catppuccin   catppuccin (a palette, matched to the wallpaper), or
@@ -1018,8 +1018,12 @@ def ensure_mango_source(conf):
 
 
 def pids(name):
+    # The kernel keeps 15 characters of a process name (perihelion-shell
+    # shows as perihelion-shel), so longer names match the command line.
+    args = ["pgrep", "-x", name] if len(name) <= 15 else \
+        ["pgrep", "-f", f"^(/usr/bin/)?{re.escape(name)}( |$)"]
     try:
-        return subprocess.run(["pgrep", "-x", name], capture_output=True, text=True,
+        return subprocess.run(args, capture_output=True, text=True,
                               timeout=5, check=False).stdout.split()
     except (OSError, subprocess.SubprocessError):
         return []
@@ -1277,7 +1281,7 @@ def main(argv=None):
         except (OSError, subprocess.SubprocessError):
             pass
 
-    signal_procs(("simpbar", "simpbar-shell"), signal.SIGUSR1)
+    signal_procs(("perihelion-bar", "perihelion-shell", "simpbar", "simpbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
     print(f"perihelion-theme: {theme['name']}{', tinted' if theme.get('tint') else ''}, accents "
           f"{', '.join(accents)}" + (f" ({', '.join(changed)} updated)" if changed else ""))

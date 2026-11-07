@@ -127,7 +127,7 @@ pub fn build(b: *Build) !void {
     exe_mod.addCSourceFile(.{ .file = b.path("../simpbar/src/gdkpixbuf_shim.c"), .flags = &.{} });
 
     const exe = b.addExecutable(.{
-        .name = "simpbar-shell",
+        .name = "perihelion-shell",
         .root_module = exe_mod,
     });
     // Same toolchain pins as the bar (../simpbar/build.zig): Zig 0.16's
