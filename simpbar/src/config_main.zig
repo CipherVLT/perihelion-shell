@@ -1702,7 +1702,7 @@ fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
     buildThemeComboRow(group, "Palette", "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night. Auto picks a light variant for light wallpapers and a darker one otherwise.", &THEME_PALETTE_LABELS, &THEME_PALETTE_CHOICES, live_theme_palette, &onThemePaletteChanged);
     buildThemeTintRow(group);
     buildThemeComboRow(group, "Accent colors", "Palette only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or the palette's own.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
-    buildThemeComboRow(group, "Matugen color scheme", "Material You only: the palette matugen derives from the wallpaper.", &MATUGEN_TYPE_LABELS, &MATUGEN_TYPE_CHOICES, live_theme_scheme, &onMatugenTypeChanged);
+    buildThemeComboRow(group, "Matugen color scheme", "The palette matugen derives from the wallpaper: Material You's colors, and in both styles the terminal's (fastfetch sections). Fruit salad gives a red OS section.", &MATUGEN_TYPE_LABELS, &MATUGEN_TYPE_CHOICES, live_theme_scheme, &onMatugenTypeChanged);
     buildThemeComboRow(group, "Theme mode", "Material You only: dark, light, or picked from how light the wallpaper is.", &THEME_MODE_LABELS, &THEME_MODE_CHOICES, live_theme_mode, &onThemeModeChanged);
 }
 

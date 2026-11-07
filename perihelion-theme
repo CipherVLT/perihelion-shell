@@ -1180,10 +1180,11 @@ def main(argv=None):
         theme = build_theme(preset, accents, tint if tint_on else None)
     flavor = preset[len("catppuccin-"):] if preset.startswith("catppuccin-") else preset
     # The terminal (and so fastfetch) is Material from the wallpaper in both
-    # styles, like Event Horizon: matugen's Content scheme, dark.
+    # styles, like Event Horizon: matugen, dark, with the chosen scheme
+    # (Content by default; Fruit salad gives Event Horizon's red OS section).
     if theme["flavor"] != "material" and kind and matugen_bin():
         try:
-            theme["md"] = run_matugen(kind, value, "scheme-content", "dark")
+            theme["md"] = run_matugen(kind, value, scheme, "dark")
         except (RuntimeError, ValueError):
             pass
     theme["wall_L"] = mean_lightness(pixels) if pixels else None
