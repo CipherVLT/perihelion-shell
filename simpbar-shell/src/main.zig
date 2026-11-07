@@ -79,6 +79,10 @@ const JsonMatugenColors = struct {
     border_color: ?[]const u8 = null,
     hover_color: ?[]const u8 = null,
     holiday_color: ?[]const u8 = null,
+    // Perihelion: perihelion-theme may set how opaque the widget cards are
+    // for its current style (Material You's darker surfaces need more to
+    // read as the bar's grey). Absent: shell.json's card_bg_opacity.
+    card_bg_opacity: ?u32 = null,
 };
 
 const WidgetCfg = struct {
@@ -442,6 +446,7 @@ fn tryApplyMatugenColors(gpa: std.mem.Allocator, theme: *widgets_mod.Theme) bool
     if (colors.holiday_color) |hex| {
         theme.holiday_color = parseHexColor(hex) catch theme.holiday_color;
     }
+    if (colors.card_bg_opacity) |a| theme.card_alpha = @min(a, 100);
     return true;
 }
 
@@ -455,7 +460,9 @@ fn tryApplyMatugenColors(gpa: std.mem.Allocator, theme: *widgets_mod.Theme) bool
 /// stays put rather than snapping back to grey defaults.
 fn reloadTheme(host: *Host) void {
     var theme = widgets_mod.Theme{
-        .card_alpha = host.theme.card_alpha,
+        // shell.json's value, so a palette without card_bg_opacity goes back
+        // to it after one (Material You) that set its own.
+        .card_alpha = g_shell_cfg.card_bg_opacity,
         .radius_px = host.theme.radius_px,
     };
     if (!tryApplyMatugenColors(host.gpa, &theme)) {
