@@ -23,7 +23,7 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
 
 and tells Perihelion Bar (bar and dock) and Perihelion Shell to reload (SIGUSR1).
 
-Settings, ~/.config/simpbar/theme (Simpbar Config writes it):
+Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
   style=catppuccin   catppuccin (a palette, matched to the wallpaper), or
                      material (Material You, via matugen)
   palette=catppuccin-auto   catppuccin-auto|-latte|-frappe|-macchiato|-mocha,
@@ -220,7 +220,7 @@ PRESETS = {
         ("red", "green", "yellow", "blue", "magenta", "cyan"),
         ("blue", "magenta", "yellow", "cyan", "green", "orange")),
 }
-# The palette choices Simpbar Config offers; "-auto" picks a variant from how
+# The palette choices Perihelion Settings offers; "-auto" picks a variant from how
 # light the wallpaper is.
 PALETTE_CHOICES = ("catppuccin-auto", "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato",
                    "catppuccin-mocha", "gruvbox-auto", "gruvbox-dark", "gruvbox-light",
@@ -1114,7 +1114,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if not args.dry_run and auto_theme_off():
-        print("perihelion-theme: 'Match the wallpaper' is off in Simpbar Config; nothing to do")
+        print("perihelion-theme: 'Match the wallpaper' is off in Perihelion Settings; nothing to do")
         return 0
 
     settings = read_settings()

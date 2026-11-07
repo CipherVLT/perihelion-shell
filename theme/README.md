@@ -28,7 +28,7 @@ btop, cmatrix and notifications (mako).
 | popup_disabled_color | overlay1 |
 | holiday_color | red |
 
-Settings live in `~/.config/simpbar/theme`, written by Simpbar Config:
+Settings live in `~/.config/simpbar/theme`, written by Perihelion Settings:
 
 ```
 style=catppuccin           # catppuccin (a palette), or material
