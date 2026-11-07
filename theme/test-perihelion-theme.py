@@ -122,7 +122,7 @@ try:
     check(r.returncode == 0, "full run succeeds" + ("" if r.returncode == 0 else ": " + r.stderr))
     with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
         mj = json.load(f)
-    check(len(mj) == 15 and mj["bg_color"] == "#24273a", "matugen.json: 15 keys, Macchiato base (theme file honored)")
+    check(len([k for k in mj if k.endswith("_color")]) == 15 and mj["bg_color"] == "#24273a", "matugen.json: 15 keys, Macchiato base (theme file honored)")
     check(mj["bezel_color"] != mj["cava_color"] != mj["matrix_color"], "wave gradient gets three colors")
     drawer = pt.read(os.path.join(cfg, "nwg-drawer", "drawer.css"))
     check("Written by perihelion-theme" in drawer and mj["border_color"] in drawer, "drawer.css replaced the shipped default")
@@ -157,74 +157,76 @@ try:
     r = run(home, img("green-purple.png"), "--force")
     check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) == snap and "off" in r.stdout, "auto_theme manual: nothing written")
 
-    # 6. fastfetch: Perihelion's layout recolored in place, defaults reproduced.
+    # 6. fastfetch: Veyl OS's terminal-color layout (OS 31, WM 32, PC and
+    # after 33), kept as is or restored from older 24-bit files.
     os.remove(os.path.join(cfg, "simpbar", "config.json"))
     os.makedirs(os.path.join(share, "fastfetch"))
-    ff_default = """// Perihelion fastfetch layout
-{
+    veyl = """{
     "logo": {
-        "padding": { "top": 3 },
-        "color": { "1": "38;2;95;117;166", "2": "38;2;138;173;244" }
+        "padding": { "top": 3 }
     },
     "display": {
-          "separator": " ➜  ",
-          "color": { "title": "1;38;2;138;173;244", "output": "38;2;194;206;245", "separator": "38;2;128;135;162" }
+          "separator": " ➜  "
     },
     "modules": [
+        "break",
+        "break",
+        "break",
          {
             "type": "os",
             "key": "OS   ",
-            "keyColor": "1;38;2;237;135;150",  // = color1
+            "keyColor": "31",  // = color1
         },
         "break",
         {
             "type": "wm",
             "key": "WM   ",
-            "keyColor": "1;38;2;138;173;244",
+            "keyColor": "32",
         },
         "break",
         {
             "type": "host",
             "format": "{5} {1} Type {2}",
             "key": "PC   ",
-            "keyColor": "1;38;2;238;212;159",
+            "keyColor": "33",
         },
+        "break",
         {
             "type": "command",
             "format": "OS Age: {result}",
-            "keyColor": "1;38;2;238;212;159",
+            "keyColor": "33",
         }
     ]
 }
 """
-    for d in (os.path.join(share, "fastfetch"), os.path.join(cfg, "fastfetch")):
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "config.jsonc"), "w", encoding="utf-8") as f:
-            f.write(ff_default)
-    run(home, "--color", "#24273a", "--flavor", "macchiato", "--accent", "flavor", "--tint", "off", "--force")
-    ff = pt.read(os.path.join(cfg, "fastfetch", "config.jsonc"))
-    check(ff.split("\n", 1)[1] == ff_default and ff.startswith("// perihelion-theme"),
-          "fastfetch: Macchiato defaults reproduce the shipped colors exactly")
-    run(home, img("green-purple.png"), "--flavor", "mocha", "--force")
-    ff = pt.read(os.path.join(cfg, "fastfetch", "config.jsonc"))
-    with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
-        mj = json.load(f)
-    check('"2": "' + pt.ansi(mj["bezel_color"]) + '"' in ff, "fastfetch: logo highlight takes accent 1")
-    check('"1": "38;2;' not in ff or '"1": "' + pt.ansi(mj["bezel_color"]) + '"' not in ff,
-          "fastfetch: logo body is a darker shade, not accent 1 itself")
-    check('"keyColor": "' + pt.ansi(mj["holiday_color"], True) + '",  // = color1' in ff,
-          "fastfetch: OS section takes the palette's red-pink")
-    check(re.search(r'"key": "WM   ",\s*"keyColor": "1;38;2;', ff) is not None,
-          "fastfetch: WM section recolored")
-    pc = re.search(r'"key": "PC   ",\s*"keyColor": "([^"]*)"', ff).group(1)
-    wm = re.search(r'"key": "WM   ",\s*"keyColor": "([^"]*)"', ff).group(1)
-    check(pc != wm and pc != pt.ansi(mj["holiday_color"], True),
-          "fastfetch: PC header (format with {braces}) is a second hue, not WM's or OS's")
-    age = re.search(r'"format": "OS Age: \{result\}",\s*"keyColor": "([^"]*)"', ff).group(1)
-    check(age == pc, "fastfetch: OS Age line follows its section")
-    check(ff.count("perihelion-theme") == 1, "fastfetch: one note line")
-    check(json.loads(re.sub(r"//[^\n]*", "", ff).replace(",\n        }", "\n        }").replace(",\n         }", "\n         }"))
-          if False else True, "fastfetch: still parses")  # (layout untouched; JSONC)
+    old = veyl.replace('"keyColor": "31"', '"keyColor": "1;38;2;237;135;150"').replace(
+        '"keyColor": "32"', '"keyColor": "1;38;2;238;212;159"').replace(
+        '"keyColor": "33"', '"keyColor": "1;38;2;238;212;159"').replace(
+        '"padding": { "top": 3 }', '"padding": { "top": 3 },\n        "color": { "1": "38;2;95;117;166", "2": "38;2;138;173;244" }').replace(
+        '"separator": " ➜  "', '"separator": " ➜  ",\n          "color": { "title": "1;38;2;138;173;244", "output": "38;2;194;206;245", "separator": "38;2;128;135;162" }')
+    old = pt.FASTFETCH_NOTE + "\n" + old
+    with open(os.path.join(share, "fastfetch", "config.jsonc"), "w", encoding="utf-8") as f:
+        f.write(veyl)
+    os.makedirs(os.path.join(cfg, "fastfetch"), exist_ok=True)
+    ff_path = os.path.join(cfg, "fastfetch", "config.jsonc")
+    with open(ff_path, "w", encoding="utf-8") as f:
+        f.write(old)
+    run(home, img("green-purple.png"), "--force")
+    check(pt.read(ff_path) == veyl, "fastfetch: an older 24-bit file goes back to Veyl's terminal-color layout")
+    run(home, img("dark-red.png"), "--force")
+    check(pt.read(ff_path) == veyl, "fastfetch: Veyl's layout is left as is")
+    with open(ff_path, "w", encoding="utf-8") as f:
+        f.write(veyl.replace('"keyColor": "31"', '"keyColor": "35"'))
+    run(home, img("light.png"), "--force")
+    check('"keyColor": "35"' in pt.read(ff_path), "fastfetch: a hand-edited file is kept")
+
+    # kitty carries the colors: Event Horizon's slots
+    kc = pt.read(os.path.join(cfg, "kitty", "perihelion-colors.conf"))
+    slots = dict(line.split(None, 1) for line in kc.splitlines() if line and not line.startswith("#"))
+    check(all(f"color{i}" in slots for i in range(16)), "kitty: all 16 colors")
+    check(len({slots["color1"].strip(), slots["color2"].strip(), slots["color3"].strip()}) == 3,
+          f"kitty: OS/WM/PC colors differ ({slots['color1'].strip()}, {slots['color2'].strip()}, {slots['color3'].strip()})")
+    check(pt.hsl_lighten("#808080", -20.0) == "#4d4d4d", "matugen's lighten: HSL lightness minus 20 points")
 
     # 6b. terminal cava, btop, cmatrix
     cava_default = "[color]\ngradient = 1\ngradient_count = 3\ngradient_color_1 = '#8aadf4'\ngradient_color_2 = '#f5bde6'\ngradient_color_3 = '#eed49f'\n"
@@ -252,13 +254,6 @@ try:
     check("border-color=#8aadf4" in mk and "background-color=#24273aee" in mk and "[urgency=high]" in mk,
           "mako: notification colors from the palette")
 
-    # 6b2. OS, WM and PC never share a hue, even when the wallpaper's accents
-    # are neighbors (pink, mauve, lavender) or the main one is red
-    for acc in (["pink", "mauve", "lavender"], ["red", "mauve", "pink"], ["blue", "sapphire", "sky"],
-                ["maroon", "red", "flamingo"]):
-        os_c, wm_c, pc_c = pt.section_colors(pt.build_theme("catppuccin-macchiato", acc))
-        check(len({os_c, wm_c, pc_c}) == 3 and wm_c != os_c, f"fastfetch: {acc} -> OS {os_c}, WM {wm_c}, PC {pc_c}")
-
     # 6c. Wallpaper tint: backgrounds take the wallpaper's hue
     for name, rgb, lo, hi in (("purple", (150, 60, 210), 280, 330), ("green", (40, 190, 80), 120, 170)):
         png(img(name + ".png"), lambda x, y, rgb=rgb: rgb if (x + y) % 3 else (30, 30, 36))
@@ -276,16 +271,12 @@ try:
     for pal in pt.PALETTE_CHOICES:
         d = dry(home, img("green-purple.png"), "--palette", pal)
         ok = len(set(d["accents"])) == 3 and all(
-            re.fullmatch(r"#[0-9a-f]{6}", v) for v in d["matugen"].values())
+            re.fullmatch(r"#[0-9a-f]{6}", v) for k, v in d["matugen"].items() if k.endswith("_color"))
         check(ok, f"palette {pal}: {d['palette']}, accents {d['accents']}")
     check(dry(home, img("light.png"), "--palette", "gruvbox-auto")["palette"] == "gruvbox-light",
           "gruvbox-auto: light wallpaper -> Gruvbox Light")
     check(dry(home, img("dark-red.png"), "--palette", "rose-pine-auto")["palette"] == "rose-pine",
           "rose-pine-auto: dark wallpaper -> Rosé Pine")
-
-    # 6e. kitty
-    kc = pt.read(os.path.join(cfg, "kitty", "perihelion-colors.conf"))
-    check(kc and "background" in kc and kc.count("\ncolor") == 16, "kitty: background and 16 colors written")
 
     # 7. Material You through matugen (a stand-in when matugen isn't installed).
     fake_bin = os.path.join(tmp, "bin")
@@ -305,7 +296,10 @@ try:
           "material: colors come from matugen" + (" (real matugen)" if real else " (stand-in)"))
     check(d["matugen"]["bezel_color"] != d["matugen"]["matrix_color"], "material: three-color wave")
     check(d["matugen"].get("card_bg_opacity") == pt.MATERIAL_CARD_OPACITY, "material: widget cards opaque like the bar")
-    check("card_bg_opacity" not in dry(home, img("green-purple.png"))["matugen"], "palette: shell.json's card opacity")
+    check("card_bg_opacity" not in dry(home, img("dark-red.png"), "--style", "catppuccin")["matugen"],
+          "palette, dark wallpaper: shell.json's card opacity")
+    check(dry(home, img("light.png"), "--style", "catppuccin")["matugen"].get("card_bg_opacity", 0) > 40,
+          "palette, light wallpaper: cards opaque enough to read")
     r = run(home, img("green-purple.png"), "--style", "material", "--force")
     check(r.returncode == 0 and "Material You" in r.stdout, "material: full run")
     os.environ["PATH"] = os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep) if p != fake_bin)

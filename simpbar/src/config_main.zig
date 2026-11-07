@@ -611,7 +611,7 @@ var live_empty_click_command: []const u8 = "";
 // THEME_ACCENT_CHOICES), always static literals like live_auto_theme above.
 // Loaded from ~/.config/simpbar/theme.
 var live_theme_style: []const u8 = "catppuccin";
-var live_theme_scheme: []const u8 = "scheme-tonal-spot";
+var live_theme_scheme: []const u8 = "scheme-content";
 var live_theme_palette: []const u8 = "catppuccin-auto";
 var live_theme_tint: bool = true;
 var live_theme_mode: []const u8 = "dark";
@@ -1593,7 +1593,7 @@ const MATUGEN_TYPE_CHOICES = [_][]const u8{
     "scheme-vibrant",    "scheme-smart",
 };
 const MATUGEN_TYPE_LABELS = [_][*:0]const u8{
-    "Tonal spot (default)", "Content", "Expressive", "Fidelity",
+    "Tonal spot",           "Content (default, like Event Horizon)", "Expressive", "Fidelity",
     "Fruit salad",          "Monochrome", "Neutral", "Rainbow",
     "Vibrant",              "Smart",
 };

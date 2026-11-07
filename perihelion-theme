@@ -34,7 +34,7 @@ Settings, ~/.config/simpbar/theme (Simpbar Config writes it):
                      lightness steps stay the palette's)
   accent=wallpaper   wallpaper (the palette's accents nearest the image's
                      colors) or flavor (the palette's own defaults)
-  scheme=scheme-tonal-spot   Material You: matugen's --type
+  scheme=scheme-content   Material You: matugen's --type (Event Horizon's default)
   mode=dark          Material You: dark, light or auto
 
 A file you edited by hand is left alone: the drawer CSS, fuzzel colors,
@@ -52,6 +52,7 @@ Usage:
 """
 
 import argparse
+import colorsys
 import hashlib
 import json
 import math
@@ -458,7 +459,13 @@ MATERIAL_CARD_OPACITY = 72
 
 def matugen_json(t):
     c = t["colors"]
-    extra = {"card_bg_opacity": MATERIAL_CARD_OPACITY} if t["flavor"] == "material" else {}
+    extra = {}
+    if t["flavor"] == "material":
+        extra = {"card_bg_opacity": MATERIAL_CARD_OPACITY}
+    elif (t.get("wall_L") or 0) > 0.55:
+        # Light wallpapers wash the see-through cards out to white (text
+        # unreadable): more of the tinted background the lighter it is.
+        extra = {"card_bg_opacity": round(25 + min(1.0, (t["wall_L"] - 0.55) / 0.30) * 35)}
     return extra | {
         "bg_color": c["base"],
         "text_color": c["text"],
@@ -643,6 +650,16 @@ def parse_matugen(text, mode="dark"):
         h = _hex_of(v[mode] if isinstance(v, dict) and mode in v else v)
         if h:
             out[role] = h
+    # base16 (matugen 4): base00..base0F made from the wallpaper; Event
+    # Horizon's terminal red slot is base08.
+    b16 = data.get("base16") if isinstance(data, dict) else None
+    if isinstance(b16, dict):
+        if isinstance(b16.get(mode), dict):
+            b16 = b16[mode]
+        for slot, v in b16.items():
+            h = _hex_of(v[mode] if isinstance(v, dict) and mode in v else v)
+            if h:
+                out["base16." + slot] = h
     missing = [r for r in ("primary", "secondary", "tertiary", "surface", "on_surface") if r not in out]
     if missing:
         raise ValueError("matugen's output has no " + ", ".join(missing))
@@ -702,7 +719,7 @@ def build_material(md, light=False):
     colors["subtext0"] = mix(colors["text"], colors["overlay1"], 0.35)
     colors["subtext1"] = mix(colors["text"], colors["overlay1"], 0.2)
     return {
-        "flavor": "material", "name": "Material You", "light": light, "tint": None,
+        "flavor": "material", "name": "Material You", "light": light, "tint": None, "md": md,
         "accents": ["primary", "secondary", "tertiary"],
         "colors": colors,
         "accent": md["primary"], "accent2": md["secondary"], "accent3": md["tertiary"],
@@ -719,121 +736,126 @@ FASTFETCH_OS_MODULES = ("os", "kernel", "packages", "shell")
 FASTFETCH_NOTE = f"// {MARKER}: these colors follow the wallpaper; delete this line to keep your own"
 
 
-def _hue(h):
-    return lch(hex_rgb(h.lstrip("#")))[2]
-
-
-def section_colors(t):
-    """(OS, WM, PC) for fastfetch: OS the palette's red-pink; WM and PC two
-    of the wallpaper's accents with clearly different hues (from each other
-    and from OS). When the wallpaper has fewer distinct hues, a lighter tone
-    of the WM color stands in."""
-    red = t["colors"]["red"]
-    accents = [t["accent"], t["accent2"], t["accent3"]]
-    apart = lambda a, others: all(hue_gap(_hue(a), _hue(o)) >= 25 for o in others)  # noqa: E731
-    wm = next((a for a in accents if apart(a, [red])), mix(t["accent"], t["colors"]["text"], 0.35))
-    rest = [a for a in accents if a != wm and apart(a, [red, wm])]
-    if rest:
-        pc = max(rest, key=lambda a: hue_gap(_hue(a), _hue(wm)))
-    else:
-        pc = mix(wm, t["colors"]["text"], 0.45)
-    return red, wm, pc
-
-
-def second_hue(t):
-    return section_colors(t)[2]
-
-
-def fastfetch_colors(t):
-    """What each part of Perihelion's fastfetch layout gets, like Event
-    Horizon's and pywal's terminals: the logo a darker shade of the main
-    color with its highlight in the main color; the OS section in the
-    palette's red-pink (Material You: its error color), WM in accent 1, PC in
-    a second hue (see second_hue); values in text lightly tinted toward the
-    main color."""
-    c = t["colors"]
-    a1 = t["accent"]
-    shade = mix(a1, c["text"], 0.25) if t.get("light") else mix(a1, c["crust"], 0.38)
-    return {
-        "logo1": ansi(shade), "logo2": ansi(a1),
-        "title": ansi(a1, True), "output": ansi(mix(c["text"], a1, 0.12)),
-        "separator": ansi(c["overlay1"]),
-        "sections": tuple(ansi(x, True) for x in section_colors(t)),
-    }
-
-
 # A module object: braces inside its strings ("format": "{5} {1}") included.
 _FF_OBJECT = r'\{(?:[^{}"]|"(?:[^"\\]|\\.)*")*\}'
 
 
 def update_fastfetch(path, t, default_path):
-    """Recolor Perihelion's fastfetch layout in place (see fastfetch_colors).
-    Sections are counted by the "break"s between modules. Only while the
-    file is still ours."""
+    """Keep Perihelion's fastfetch on Veyl OS's terminal-color layout: OS
+    section color1, WM color2, PC and after color3, the logo in fastfetch's
+    own colors (Fedora: 4 and 7). The wallpaper reaches it through kitty's
+    palette (kitty_colors), like Event Horizon. Older Perihelion files with
+    24-bit colors written in are turned back into that layout."""
     cur = read(path)
     if cur is None:
         return False
     default = read(default_path) if default_path else None
-    if MARKER not in cur and cur != default:
+    if MARKER not in cur and cur != default and "38;2;" not in cur:
         return False
-    f = fastfetch_colors(t)
-    new = re.sub(r'"color": \{ "1": "[^"]*", "2": "[^"]*" \}',
-                 f'"color": {{ "1": "{f["logo1"]}", "2": "{f["logo2"]}" }}', cur)
-    new = re.sub(r'"color": \{ "title": "[^"]*", "output": "[^"]*", "separator": "[^"]*" \}',
-                 f'"color": {{ "title": "{f["title"]}", "output": "{f["output"]}", '
-                 f'"separator": "{f["separator"]}" }}', new)
+    if "38;2;" not in cur and cur == default:
+        return False  # already the terminal-color layout
+    new = re.sub(r'\n[ \t]*"color": \{ "1": "[^"]*", "2": "[^"]*" \}', "", cur)
+    new = re.sub(r'(?m)^([ \t]*"padding": \{[^}]*\}),(\s*\n[ \t]*\})', r"\1\2", new)
+    new = re.sub(r',\n[ \t]*"color": \{ "title": "[^"]*", "output": "[^"]*", "separator": "[^"]*" \}', "", new)
     start = new.find('"modules"')
     if start >= 0:
-        section = 0
+        # Sections are the module runs between "break"s; the blank breaks
+        # Veyl's layout starts with don't count.
+        section, seen = 0, False
         out = [new[:start]]
         pos = start
         for m in re.finditer(r'"break"|' + _FF_OBJECT, new[start:]):
             out.append(new[pos:start + m.start()])
             token = m.group(0)
             if token == '"break"':
-                section += 1
+                if seen:
+                    section, seen = section + 1, False
             elif '"keyColor"' in token:
-                color = f["sections"][min(section, len(f["sections"]) - 1)]
-                token = re.sub(r'"keyColor": "[^"]*"', f'"keyColor": "{color}"', token)
+                token = re.sub(r'"keyColor": "[^"]*"', f'"keyColor": "{31 + min(section, 2)}"', token)
+                seen = True
             out.append(token)
             pos = start + m.end()
         out.append(new[pos:])
         new = "".join(out)
-    if MARKER not in new:
-        new = FASTFETCH_NOTE + "\n" + new
+    new = new.replace(FASTFETCH_NOTE + "\n", "")
     return write(path, new)
 
 
 # --- kitty: the terminal's own colors ----------------------------------------
-def kitty_colors(t):
-    """kitty's background, text and 16 colors: the theme's tinted darkest
-    shade behind, and the palette's red/green/yellow/blue/magenta/cyan."""
+def hsl_lighten(h, amount):
+    """matugen's `lighten` filter (colorsys): HSL lightness plus `amount` points."""
+    r, g, b = (x / 255 for x in hex_rgb(h.lstrip("#")))
+    hh, ll, ss = colorsys.rgb_to_hls(r, g, b)
+    ll = min(1.0, max(0.0, ll + amount / 100))
+    return "#{:02x}{:02x}{:02x}".format(*(round(x * 255) for x in colorsys.hls_to_rgb(hh, ll, ss)))
+
+
+def terminal_md(t):
+    """The Material roles the terminal palette is made of: matugen's own
+    (Content scheme, dark, like Event Horizon) when it ran, else tones of
+    the theme's three accents."""
+    md = t.get("md")
+    if md and all(k in md for k in ("primary", "secondary", "tertiary")):
+        return md
     c = t["colors"]
     a1, a2, a3 = t["accent"], t["accent2"], t["accent3"]
-    bg = c["base"] if t.get("light") else c["crust"]
+
+    def tone(h, L, cmax=0.12):
+        _, C, H = lch(hex_rgb(h.lstrip("#")))
+        return oklch_hex(L, min(C, cmax), H)
+    return {
+        "primary": a1, "secondary": a2, "tertiary": a3,
+        "on_primary": tone(a1, 0.30), "on_secondary": tone(a2, 0.30),
+        "primary_fixed": tone(a1, 0.90, 0.08), "secondary_fixed": tone(a2, 0.90, 0.08),
+        "tertiary_fixed": tone(a3, 0.90, 0.08),
+        "secondary_fixed_dim": tone(a2, 0.82), "tertiary_fixed_dim": tone(a3, 0.82),
+        "on_primary_fixed": tone(a1, 0.20), "on_secondary_fixed": tone(a2, 0.20),
+        "on_tertiary_fixed": tone(a3, 0.20),
+        "on_primary_fixed_variant": tone(a1, 0.42), "on_secondary_fixed_variant": tone(a2, 0.42),
+        "on_tertiary_fixed_variant": tone(a3, 0.42),
+        "surface": c["base"], "surface_container_highest": c["surface1"],
+        "surface_container_lowest": c["crust"],
+        "on_surface": c["text"], "on_surface_variant": c["subtext0"],
+        "base16.base08": a1,
+    }
+
+
+def kitty_colors(t):
+    """kitty's colors, laid out like Event Horizon's matugen kitty template,
+    so Perihelion's fastfetch (Veyl OS's layout: OS = color1, WM = color2,
+    PC and after = color3, Fedora logo = colors 4 and 7) follows the
+    wallpaper the same way: color1 is matugen's base16 base08 darkened 20,
+    colors 2 and 3 the light secondary and tertiary, colors 4-6 their dark
+    tones. The background is the theme's own: the palette's tinted darkest
+    shade, or Material You's surface_container_lowest."""
+    c, md = t["colors"], terminal_md(t)
+    g = lambda k, d=None: md.get(k) or d  # noqa: E731
+    b08 = g("base16.base08", g("primary"))
+    bg = c["base"] if t.get("light") else (
+        g("surface_container_lowest", c["crust"]) if t["flavor"] == "material" else c["crust"])
     rows = [
-        ("foreground", c["text"]), ("background", bg),
-        ("selection_foreground", c["base"]), ("selection_background", a1),
-        ("cursor", a1), ("cursor_text_color", c["base"]), ("url_color", a1),
-        ("active_border_color", a1), ("inactive_border_color", c["overlay0"]),
-        ("bell_border_color", a3),
-        ("active_tab_foreground", c["crust"]), ("active_tab_background", a1),
+        ("cursor", g("primary")), ("cursor_text_color", g("on_primary", c["base"])),
+        ("foreground", g("on_surface", c["text"])), ("background", bg),
+        ("selection_foreground", g("on_secondary", c["base"])),
+        ("selection_background", g("secondary")), ("url_color", g("secondary")),
+        ("color0", g("surface", c["base"])), ("color8", g("surface_container_highest", c["surface1"])),
+        ("color1", hsl_lighten(b08, -20.0)), ("color9", hsl_lighten(b08, 10.0)),
+        ("color2", g("secondary_fixed_dim", g("secondary"))), ("color10", g("secondary_fixed", g("secondary"))),
+        ("color3", g("tertiary_fixed_dim", g("tertiary"))), ("color11", g("tertiary_fixed", g("tertiary"))),
+        ("color4", g("on_primary_fixed_variant", g("primary"))), ("color12", g("primary")),
+        ("color5", g("on_secondary_fixed_variant", g("secondary"))), ("color13", g("secondary")),
+        ("color6", g("on_tertiary_fixed_variant", g("tertiary"))), ("color14", g("tertiary")),
+        ("color7", g("on_surface_variant", c["subtext0"])), ("color15", g("on_surface", c["text"])),
+        ("mark1_foreground", g("on_primary_fixed", c["base"])), ("mark1_background", g("primary_fixed", g("primary"))),
+        ("mark2_foreground", g("on_secondary_fixed", c["base"])), ("mark2_background", g("secondary_fixed", g("secondary"))),
+        ("mark3_foreground", g("on_tertiary_fixed", c["base"])), ("mark3_background", g("tertiary_fixed", g("tertiary"))),
+        ("active_tab_foreground", g("on_primary", c["base"])), ("active_tab_background", g("primary")),
         ("inactive_tab_foreground", c["text"]), ("inactive_tab_background", c["mantle"]),
-        ("tab_bar_background", c["crust"]),
-        ("mark1_foreground", c["base"]), ("mark1_background", a1),
-        ("mark2_foreground", c["base"]), ("mark2_background", a2),
-        ("mark3_foreground", c["base"]), ("mark3_background", a3),
-        ("color0", c["surface1"]), ("color8", c["surface2"]),
-        ("color1", c["red"]), ("color9", c["red"]),
-        ("color2", c["ansi_green"]), ("color10", c["ansi_green"]),
-        ("color3", c["ansi_yellow"]), ("color11", c["ansi_yellow"]),
-        ("color4", c["ansi_blue"]), ("color12", c["ansi_blue"]),
-        ("color5", c["ansi_magenta"]), ("color13", c["ansi_magenta"]),
-        ("color6", c["ansi_cyan"]), ("color14", c["ansi_cyan"]),
-        ("color7", c["subtext1"]), ("color15", c["subtext0"]),
+        ("active_border_color", g("primary")), ("inactive_border_color", c["overlay0"]),
     ]
-    head = [f"# kitty colors written by {MARKER} on every wallpaper change ({t['name']}).",
-            "# kitty.conf includes this file; remove that line to keep your own colors."]
+    head = [f"# kitty colors written by {MARKER} on every wallpaper change ({t['name']}),",
+            "# laid out like Event Horizon's matugen template. kitty.conf includes this",
+            "# file; remove that line to keep your own colors."]
     return "\n".join(head + [f"{k:<24}{v}" for k, v in rows]) + "\n"
 
 
@@ -1019,7 +1041,7 @@ def signal_procs(names, sig):
 # --- settings and inputs ---------------------------------------------------
 def read_settings():
     s = {"style": "catppuccin", "palette": "catppuccin-auto", "tint": True,
-         "accent": "wallpaper", "scheme": "scheme-tonal-spot", "mode": "dark"}
+         "accent": "wallpaper", "scheme": "scheme-content", "mode": "dark"}
     text = read(os.path.join(SIMPBAR, "theme")) or ""
     for line in text.splitlines():
         k, sep, v = line.partition("=")
@@ -1157,6 +1179,14 @@ def main(argv=None):
             accents = [a for a in PRESETS[preset]["default"] if a in names][:3]
         theme = build_theme(preset, accents, tint if tint_on else None)
     flavor = preset[len("catppuccin-"):] if preset.startswith("catppuccin-") else preset
+    # The terminal (and so fastfetch) is Material from the wallpaper in both
+    # styles, like Event Horizon: matugen's Content scheme, dark.
+    if theme["flavor"] != "material" and kind and matugen_bin():
+        try:
+            theme["md"] = run_matugen(kind, value, "scheme-content", "dark")
+        except (RuntimeError, ValueError):
+            pass
+    theme["wall_L"] = mean_lightness(pixels) if pixels else None
 
     if args.dry_run:
         print(json.dumps({"source": value, "style": style, "palette": preset, "flavor": flavor,
