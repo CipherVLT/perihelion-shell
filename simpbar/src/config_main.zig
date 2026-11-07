@@ -1271,18 +1271,28 @@ fn buildConfigJson() ![]u8 {
 // ---------------------------------------------------------------------
 
 fn signalBar() void {
-    const text = readFileAll(pidfile_path) orelse {
-        logging.warn("config: no pidfile at {s} (bar not running?)", .{pidfile_path});
+    signalPidfile(pidfile_path, true);
+    // Perihelion: the dock is a second bar (SIMPBAR_DOCK=1) reading the same
+    // config.json; reload it too. Quietly skipped when no dock runs.
+    var buf: [520]u8 = undefined;
+    const dir = std.fs.path.dirname(pidfile_path) orelse return;
+    const dock = std.fmt.bufPrintZ(&buf, "{s}/dock.pid", .{dir}) catch return;
+    signalPidfile(dock, false);
+}
+
+fn signalPidfile(path: [:0]const u8, warn: bool) void {
+    const text = readFileAll(path) orelse {
+        if (warn) logging.warn("config: no pidfile at {s} (bar not running?)", .{path});
         return;
     };
     defer gpa.free(text);
     const trimmed = std.mem.trim(u8, text, " \t\r\n");
     const pid = std.fmt.parseInt(c_int, trimmed, 10) catch {
-        logging.warn("config: unreadable pid in {s}", .{pidfile_path});
+        if (warn) logging.warn("config: unreadable pid in {s}", .{path});
         return;
     };
     if (std.c.kill(pid, .USR1) != 0) {
-        logging.warn("config: kill(SIGUSR1) on pid {d} failed (bar not running?)", .{pid});
+        if (warn) logging.warn("config: kill(SIGUSR1) on pid {d} failed (bar not running?)", .{pid});
     }
 }
 
