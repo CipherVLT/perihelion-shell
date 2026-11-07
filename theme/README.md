@@ -34,7 +34,7 @@ Settings live in `~/.config/simpbar/theme`, written by Simpbar Config:
 style=catppuccin           # catppuccin (a palette), or material
 flavor=auto                # Catppuccin: auto, latte, frappe, macchiato, mocha
 accent=wallpaper           # Catppuccin: wallpaper, or flavor (blue, pink, yellow)
-scheme=scheme-tonal-spot   # Material You: matugen's --type
+scheme=scheme-content      # Material You: matugen's --type
 ```
 
 In Material You, accent 1 / 2 / 3 are primary / secondary / tertiary.
@@ -46,3 +46,13 @@ In Material You, accent 1 / 2 / 3 are primary / secondary / tertiary.
   hand-edited files alone.
 
 Palette: https://catppuccin.com/palette (MIT).
+
+## The terminal and fastfetch
+
+Like Event Horizon, the terminal's palette is Material from the wallpaper in
+both styles (matugen, Content scheme, dark), laid out as Event Horizon's
+matugen kitty template: color1 = base16 base08 darkened 20, color2/3 =
+secondary/tertiary fixed-dim, color4-6 their dark tones. fastfetch keeps
+Veyl OS's layout, which names terminal colors (OS 31, WM 32, PC and after 33,
+the Fedora logo 34/37), so it follows the wallpaper through kitty. Without
+matugen, tones of the theme's three accents stand in.
