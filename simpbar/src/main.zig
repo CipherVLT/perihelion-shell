@@ -2575,7 +2575,7 @@ fn resolveConfigPaths() void {
     const dir = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/simpbar", .{home}) catch return;
     _ = posix.system.mkdir(dir.ptr, 0o755);
     config_json_path = std.fmt.bufPrintZ(&config_json_path_buf, "{s}/config.json", .{dir}) catch "";
-    pidfile_path = std.fmt.bufPrintZ(&pidfile_path_buf, "{s}/simpbar.pid", .{dir}) catch "";
+    pidfile_path = std.fmt.bufPrintZ(&pidfile_path_buf, "{s}/{s}", .{ dir, if (dock_mode) "dock.pid" else "simpbar.pid" }) catch "";
     // The matugen colors file lives under simpbar's own config dir (not
     // matugen's) so this bar only ever reads from under its own roof. The
     // post-hook in the shipped matugen template writes it here; simpbar
@@ -2989,7 +2989,30 @@ fn loadConfigFromFile() ?Config {
 /// directly instead, specifically to skip this fallback — see its doc
 /// comment.
 fn loadConfig() Config {
-    return loadConfigFromFile() orelse defaultConfig();
+    return dockConfig(loadConfigFromFile() orelse defaultConfig());
+}
+
+// --- Perihelion: dock mode -----------------------------------------------
+//
+// `SIMPBAR_DOCK=1 simpbar` runs a second copy of the bar as Perihelion's
+// dock: the same ~/.config/simpbar/config.json (so its pinned launchers are
+// the ones Simpbar Config edits, and drag-reordering still writes there),
+// but showing only the launchers, centered at the bottom in "dock" mode.
+// It keeps its own pidfile (dock.pid), hosts no tray and runs no weather or
+// update checks — the top bar does those. A pin whose command is
+// `appdrawer` wears the distro logo (see ensureLauncherIcons), so the dock's
+// first pin is the app drawer.
+var dock_mode: bool = false;
+const DOCK_CENTER = [_]ModuleEntry{.{ .kind = .launchers, .enabled = true }};
+const DOCK_NONE = [_]ModuleEntry{};
+
+fn dockConfig(cfg: Config) Config {
+    if (!dock_mode) return cfg;
+    var c = cfg;
+    c.modules = .{ .left = &DOCK_NONE, .center = &DOCK_CENTER, .right = &DOCK_NONE };
+    c.appearance.position = "bottom";
+    c.appearance.bar_mode = "dock";
+    return c;
 }
 
 // --- tray (org.kde.StatusNotifierItem via a hand-rolled D-Bus client) -----
@@ -4848,8 +4871,14 @@ fn applyLayerGeometry(bar: *Bar) void {
     bar.layer_surface.setSize(0, current_config.appearance.bar_height);
     if (is_dock) {
         // Floating dock: margins on three sides, and no exclusive zone so
-        // windows slide under it instead of stopping at it.
-        bar.layer_surface.setExclusiveZone(0);
+        // windows slide under it instead of stopping at it. Perihelion's
+        // dock (SIMPBAR_DOCK=1) reserves its strip instead: windows stop
+        // above it, like a fixed dock.
+        if (dock_mode) {
+            bar.layer_surface.setExclusiveZone(@intCast(@as(i64, current_config.appearance.bar_height) + DOCK_MARGIN_EDGE));
+        } else {
+            bar.layer_surface.setExclusiveZone(0);
+        }
         if (is_top) {
             bar.layer_surface.setMargin(DOCK_MARGIN_EDGE, DOCK_MARGIN_SIDE, 0, DOCK_MARGIN_SIDE);
         } else {
@@ -4957,6 +4986,8 @@ pub fn main() void {
 
 fn realMain() !void {
     logging.step("starting up", .{});
+    if (getenv("SIMPBAR_DOCK")) |v| dock_mode = v[0] == '1';
+    if (dock_mode) logging.step("dock mode: launchers only, bottom center", .{});
     resolveConfigPaths();
     current_config = loadConfig();
     invalidateLauncherIcons();
@@ -5108,15 +5139,16 @@ fn realMain() !void {
     };
 
     var weather: PolledCommand = .{};
-    startWeatherFetch(&weather);
+    if (!dock_mode) startWeatherFetch(&weather);
     var pacman_updates: PolledCommand = .{};
-    startPacmanFetch(&pacman_updates);
+    if (!dock_mode) startPacmanFetch(&pacman_updates);
     var volume: PolledCommand = .{};
     startVolumeFetch(&volume);
     startVolumeSubscribe();
     var mpris: PolledCommand = .{};
     startMprisFetch(&mpris);
-    var tray = Tray.init(gpa);
+    // Dock mode: the top bar hosts the tray (one StatusNotifierWatcher).
+    var tray = if (dock_mode) Tray{ .gpa = gpa } else Tray.init(gpa);
     defer tray.deinit();
 
     // One Bar per target output, sharing every pointer to global/system
@@ -5501,7 +5533,7 @@ fn realMain() !void {
         if (poll_fds[3].revents & posix.POLL.IN != 0) {
             var expirations: u64 = undefined;
             _ = posix.read(weather_timer_fd, std.mem.asBytes(&expirations)) catch {};
-            startWeatherFetch(&weather);
+            if (!dock_mode) startWeatherFetch(&weather);
         }
         // POLLHUP (not just POLLIN) needs to trigger a read attempt too:
         // once a pipe is fully drained and its write end has closed, Linux
@@ -5521,7 +5553,7 @@ fn realMain() !void {
         if (poll_fds[5].revents & posix.POLL.IN != 0) {
             var expirations: u64 = undefined;
             _ = posix.read(pacman_timer_fd, std.mem.asBytes(&expirations)) catch {};
-            startPacmanFetch(&pacman_updates);
+            if (!dock_mode) startPacmanFetch(&pacman_updates);
         }
         if (poll_fds[6].revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
             if (pacman_updates.onReadable()) {
@@ -5752,7 +5784,8 @@ fn realMain() !void {
             // malformed (mid-edit, a bad hand-edit, a GUI bug) should leave
             // the bar exactly as it was, not silently discard the user's
             // working config.
-            if (loadConfigFromFile()) |cfg| {
+            if (loadConfigFromFile()) |file_cfg| {
+                const cfg = dockConfig(file_cfg);
                 const old_font_path = current_config.appearance.font_path;
                 const font_changed = !std.mem.eql(u8, old_font_path, cfg.appearance.font_path);
                 const old_matrix_style = current_config.appearance.matrix_style;
@@ -7736,8 +7769,13 @@ fn drawLeftGroup(
     const y0: i64 = baselineY(buf_height, font);
     var x0: i64 = x0_start;
     var any_drawn = false;
+    // Perihelion: where the last module that actually drew something ended,
+    // so the cava wave keeps one fixed distance from it (an empty mpris
+    // module no longer adds a gap of its own) and the right group can mirror it.
+    var last_end: ?i64 = null;
     for (current_config.modules.left) |entry| {
         if (!entry.enabled) continue;
+        const pen_before = x0;
         // Guaranteed module→module padding (mirroring the center group's
         // boundary gap): whatever pen the previous module's own trailing gap
         // left, the next module still starts MODULE_GAP after it, so a drag
@@ -7940,13 +7978,14 @@ fn drawLeftGroup(
                 // Perihelion: a mirrored waveform after the track title,
                 // bounded by the center group like the mpris pill.
                 if (cava_state.has_data) {
-                    x0 += CAVA_WAVE_SPACER;
+                    x0 = if (last_end) |e| e + CAVA_WAVE_EDGE_GAP else x0 + CAVA_WAVE_SPACER;
                     x0 = drawCavaWave(pixels, buf_width, buf_height, x0, center_start_x - MPRIS_CENTER_CLEARANCE);
                 }
             },
             else => {}, // RIGHT-only kind in left: no left-anchored render for it
         }
         any_drawn = true;
+        if (x0 > pen_before + MODULE_GAP) last_end = x0;
     }
     // Pen end = content end (every module advances past exactly what drew).
     return x0;
@@ -8972,6 +9011,10 @@ const CAVA_WAVE_GAP: i64 = 2;
 const CAVA_WAVE_PAD: i64 = 5;
 // Extra space between the track title and the wave (on top of MODULE_GAP).
 const CAVA_WAVE_SPACER: i64 = 16;
+/// Perihelion: the fixed distance between a cava wave and the module next to
+/// it, the same on both sides of the bar (workspaces → left wave, right wave
+/// → clock): two module gaps plus the spacer.
+const CAVA_WAVE_EDGE_GAP: i64 = 2 * MODULE_GAP + CAVA_WAVE_SPACER;
 
 /// Width the left-group cava wave needs, plus its gaps; 0 when it isn't
 /// placed in the left group or has nothing to draw. The mpris pill in the
@@ -8981,7 +9024,7 @@ fn perihelionLeftCavaRoom() i64 {
     for (current_config.modules.left) |e| {
         if (e.kind == .cava and e.enabled) {
             const n: i64 = @as(i64, @intCast(cava_state.bar_count));
-            return n * (CAVA_WAVE_BAR_W + CAVA_WAVE_GAP) - CAVA_WAVE_GAP + MODULE_GAP + CAVA_WAVE_SPACER;
+            return n * (CAVA_WAVE_BAR_W + CAVA_WAVE_GAP) - CAVA_WAVE_GAP + CAVA_WAVE_EDGE_GAP;
         }
     }
     return 0;
@@ -9811,7 +9854,9 @@ fn drawRightGroup(
                 if (cava_state.has_data and cava_state.bar_count > 0) {
                     const n: i64 = @as(i64, @intCast(cava_state.bar_count));
                     const wave_w: i64 = n * (CAVA_WAVE_BAR_W + CAVA_WAVE_GAP) - CAVA_WAVE_GAP;
-                    const gap: i64 = if (first) 0 else MODULE_GAP;
+                    // Mirror the left wave: the same distance from the
+                    // module beside it (see CAVA_WAVE_EDGE_GAP).
+                    const gap: i64 = if (first) 0 else CAVA_WAVE_EDGE_GAP;
                     const start = x_end - gap - wave_w;
                     if (start > center_start_x) {
                         first = false;
