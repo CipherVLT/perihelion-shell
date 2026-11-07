@@ -450,9 +450,16 @@ def tinted_neutrals(colors, tint, light):
     return out
 
 
+# Material You's surfaces are near-black with a little hue; at shell.json's
+# light card opacity they wash out to the wallpaper, so its widgets get
+# enough to read as the bar's grey. Palettes keep shell.json's (25 %).
+MATERIAL_CARD_OPACITY = 72
+
+
 def matugen_json(t):
     c = t["colors"]
-    return {
+    extra = {"card_bg_opacity": MATERIAL_CARD_OPACITY} if t["flavor"] == "material" else {}
+    return extra | {
         "bg_color": c["base"],
         "text_color": c["text"],
         "border_color": t["accent"],
@@ -712,11 +719,38 @@ FASTFETCH_OS_MODULES = ("os", "kernel", "packages", "shell")
 FASTFETCH_NOTE = f"// {MARKER}: these colors follow the wallpaper; delete this line to keep your own"
 
 
+def _hue(h):
+    return lch(hex_rgb(h.lstrip("#")))[2]
+
+
+def section_colors(t):
+    """(OS, WM, PC) for fastfetch: OS the palette's red-pink; WM and PC two
+    of the wallpaper's accents with clearly different hues (from each other
+    and from OS). When the wallpaper has fewer distinct hues, a lighter tone
+    of the WM color stands in."""
+    red = t["colors"]["red"]
+    accents = [t["accent"], t["accent2"], t["accent3"]]
+    apart = lambda a, others: all(hue_gap(_hue(a), _hue(o)) >= 25 for o in others)  # noqa: E731
+    wm = next((a for a in accents if apart(a, [red])), mix(t["accent"], t["colors"]["text"], 0.35))
+    rest = [a for a in accents if a != wm and apart(a, [red, wm])]
+    if rest:
+        pc = max(rest, key=lambda a: hue_gap(_hue(a), _hue(wm)))
+    else:
+        pc = mix(wm, t["colors"]["text"], 0.45)
+    return red, wm, pc
+
+
+def second_hue(t):
+    return section_colors(t)[2]
+
+
 def fastfetch_colors(t):
     """What each part of Perihelion's fastfetch layout gets, like Event
     Horizon's and pywal's terminals: the logo a darker shade of the main
-    color with its highlight in the main color, one accent per section
-    header (OS, WM, PC), values in text lightly tinted toward the main color."""
+    color with its highlight in the main color; the OS section in the
+    palette's red-pink (Material You: its error color), WM in accent 1, PC in
+    a second hue (see second_hue); values in text lightly tinted toward the
+    main color."""
     c = t["colors"]
     a1 = t["accent"]
     shade = mix(a1, c["text"], 0.25) if t.get("light") else mix(a1, c["crust"], 0.38)
@@ -724,7 +758,7 @@ def fastfetch_colors(t):
         "logo1": ansi(shade), "logo2": ansi(a1),
         "title": ansi(a1, True), "output": ansi(mix(c["text"], a1, 0.12)),
         "separator": ansi(c["overlay1"]),
-        "sections": (ansi(t["accent2"], True), ansi(a1, True), ansi(t["accent3"], True)),
+        "sections": tuple(ansi(x, True) for x in section_colors(t)),
     }
 
 

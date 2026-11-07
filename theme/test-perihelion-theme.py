@@ -174,7 +174,7 @@ try:
          {
             "type": "os",
             "key": "OS   ",
-            "keyColor": "1;38;2;245;189;230",  // = color1
+            "keyColor": "1;38;2;237;135;150",  // = color1
         },
         "break",
         {
@@ -212,11 +212,14 @@ try:
     check('"2": "' + pt.ansi(mj["bezel_color"]) + '"' in ff, "fastfetch: logo highlight takes accent 1")
     check('"1": "38;2;' not in ff or '"1": "' + pt.ansi(mj["bezel_color"]) + '"' not in ff,
           "fastfetch: logo body is a darker shade, not accent 1 itself")
-    check('"keyColor": "' + pt.ansi(mj["cava_color"], True) + '",  // = color1' in ff, "fastfetch: OS section takes accent 2")
-    check('"key": "WM   ",\n            "keyColor": "' + pt.ansi(mj["bezel_color"], True) + '"' in ff,
-          "fastfetch: WM section takes accent 1")
+    check('"keyColor": "' + pt.ansi(mj["holiday_color"], True) + '",  // = color1' in ff,
+          "fastfetch: OS section takes the palette's red-pink")
+    check(re.search(r'"key": "WM   ",\s*"keyColor": "1;38;2;', ff) is not None,
+          "fastfetch: WM section recolored")
     pc = re.search(r'"key": "PC   ",\s*"keyColor": "([^"]*)"', ff).group(1)
-    check(pc == pt.ansi(mj["matrix_color"], True), "fastfetch: PC header (format with {braces}) takes accent 3")
+    wm = re.search(r'"key": "WM   ",\s*"keyColor": "([^"]*)"', ff).group(1)
+    check(pc != wm and pc != pt.ansi(mj["holiday_color"], True),
+          "fastfetch: PC header (format with {braces}) is a second hue, not WM's or OS's")
     age = re.search(r'"format": "OS Age: \{result\}",\s*"keyColor": "([^"]*)"', ff).group(1)
     check(age == pc, "fastfetch: OS Age line follows its section")
     check(ff.count("perihelion-theme") == 1, "fastfetch: one note line")
@@ -248,6 +251,13 @@ try:
     mk = pt.mako_config(pt.build_theme("macchiato", ["blue", "pink", "yellow"]))
     check("border-color=#8aadf4" in mk and "background-color=#24273aee" in mk and "[urgency=high]" in mk,
           "mako: notification colors from the palette")
+
+    # 6b2. OS, WM and PC never share a hue, even when the wallpaper's accents
+    # are neighbors (pink, mauve, lavender) or the main one is red
+    for acc in (["pink", "mauve", "lavender"], ["red", "mauve", "pink"], ["blue", "sapphire", "sky"],
+                ["maroon", "red", "flamingo"]):
+        os_c, wm_c, pc_c = pt.section_colors(pt.build_theme("catppuccin-macchiato", acc))
+        check(len({os_c, wm_c, pc_c}) == 3 and wm_c != os_c, f"fastfetch: {acc} -> OS {os_c}, WM {wm_c}, PC {pc_c}")
 
     # 6c. Wallpaper tint: backgrounds take the wallpaper's hue
     for name, rgb, lo, hi in (("purple", (150, 60, 210), 280, 330), ("green", (40, 190, 80), 120, 170)):
@@ -294,6 +304,8 @@ try:
     check(d["flavor"] == "material" and d["accents"] == ["primary", "secondary", "tertiary"],
           "material: colors come from matugen" + (" (real matugen)" if real else " (stand-in)"))
     check(d["matugen"]["bezel_color"] != d["matugen"]["matrix_color"], "material: three-color wave")
+    check(d["matugen"].get("card_bg_opacity") == pt.MATERIAL_CARD_OPACITY, "material: widget cards opaque like the bar")
+    check("card_bg_opacity" not in dry(home, img("green-purple.png"))["matugen"], "palette: shell.json's card opacity")
     r = run(home, img("green-purple.png"), "--style", "material", "--force")
     check(r.returncode == 0 and "Material You" in r.stdout, "material: full run")
     os.environ["PATH"] = os.pathsep.join(p for p in os.environ["PATH"].split(os.pathsep) if p != fake_bin)
