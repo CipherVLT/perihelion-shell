@@ -50,7 +50,7 @@ Palette: https://catppuccin.com/palette (MIT).
 ## The terminal and fastfetch
 
 Like Event Horizon, the terminal's palette is Material from the wallpaper in
-both styles (matugen, Content scheme, dark), laid out as Event Horizon's
+both styles (matugen, dark, the chosen scheme: Content by default), laid out as Event Horizon's
 matugen kitty template: color1 = base16 base08 darkened 20, color2/3 =
 secondary/tertiary fixed-dim, color4-6 their dark tones. fastfetch keeps
 Veyl OS's layout, which names terminal colors (OS 31, WM 32, PC and after 33,
