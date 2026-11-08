@@ -108,4 +108,18 @@ You are helping improve **Perihelion Shell** — a feather-lightweight Zig Wayla
 - When you find C code, prefer rewriting it in Zig, or in QML if it is UI-related
 - Never sacrifice the project’s extreme lightness
 
-  
+## Dock & Widgets Goals
+
+### Dock
+- Fix jagged / unrounded corners (especially the right side) — make both ends cleanly and evenly rounded
+- Add proper right-click context menu on dock icons with:
+  - Unpin
+  - New Window
+  - Close window
+- Keep the dock lightweight and visually clean
+
+### Bar & Widgets
+- Fix the volume icon so it matches the other icons (currently black, should be white/light like the rest)
+- Improve all desktop widgets (weather, calendar, media, system, etc.) to have a clean modern glass/blur style
+- Target look: soft rounded glass panels, good blur, refined spacing, clean typography, and high visual quality (inspired by clean Event Horizon / modern glass widgets)
+- Make widgets feel polished and professionally coded rather than basic
