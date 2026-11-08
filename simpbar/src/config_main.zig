@@ -6018,12 +6018,12 @@ fn applyPerihelionStyle() void {
         }
     }
     css.appendSlice(gpa,
-        \.perihelion-section label { font-weight: 700; font-size: 0.8em; letter-spacing: 0.06em; }
-        \.perihelion-section { min-height: 0; }
-        \preferencesgroup { margin-bottom: 6px; }
-        \.navigation-sidebar > row { border-radius: 10px; margin: 1px 6px; }
-        \.boxed-list, list.boxed-list { border-radius: 14px; }
-        \
+        \\.perihelion-section label { font-weight: 700; font-size: 0.8em; letter-spacing: 0.06em; }
+        \\.perihelion-section { min-height: 0; }
+        \\preferencesgroup { margin-bottom: 6px; }
+        \\.navigation-sidebar > row { border-radius: 10px; margin: 1px 6px; }
+        \\.boxed-list, list.boxed-list { border-radius: 14px; }
+        \\
     ) catch return;
     css.append(gpa, 0) catch return;
     const provider = pstyle.gtk_css_provider_new();
