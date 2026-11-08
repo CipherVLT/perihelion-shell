@@ -5737,9 +5737,10 @@ fn addSidebarRow(sidebar_list: *gtk.GtkListBox, name: [:0]const u8, icon: [:0]co
     hg.gtk_list_box_row_set_selectable(row, if (selectable) 1 else 0);
     if (!selectable) {
         gtk.gtk_widget_add_css_class(@ptrCast(row), "dim-label");
+        gtk.gtk_widget_add_css_class(@ptrCast(row), "perihelion-section");
     }
     const row_box = gtk.gtk_box_new(gtk.ORIENTATION_HORIZONTAL, 12);
-    gtk.gtk_widget_set_margin_top(@ptrCast(row_box), if (selectable) 8 else 4);
+    gtk.gtk_widget_set_margin_top(@ptrCast(row_box), if (selectable) 8 else 14);
     gtk.gtk_widget_set_margin_bottom(@ptrCast(row_box), if (selectable) 8 else 4);
     gtk.gtk_widget_set_margin_start(@ptrCast(row_box), 12);
     gtk.gtk_widget_set_margin_end(@ptrCast(row_box), 12);
@@ -5965,6 +5966,71 @@ fn buildSddmPage() *gtk.GtkBox {
 /// Limine and Ly ones.
 const perihelion_system_pages = true;
 
+// ---------------------------------------------------------------------
+// Perihelion: the window's look. libadwaita already is GNOME; this adds the
+// wallpaper's accent (the same matugen.json the bar, dock and app drawer
+// read, so switches and highlights match them instead of stock blue), quiet
+// sidebar section headings, and a little more air between groups. One small
+// CSS provider, loaded once.
+// ---------------------------------------------------------------------
+
+const pstyle = struct {
+    extern "c" fn adw_clamp_new() *anyopaque;
+    extern "c" fn adw_clamp_set_maximum_size(self: *anyopaque, size: c_int) void;
+    extern "c" fn adw_clamp_set_tightening_threshold(self: *anyopaque, t: c_int) void;
+    extern "c" fn adw_clamp_set_child(self: *anyopaque, child: *anyopaque) void;
+    extern "c" fn gtk_css_provider_new() *anyopaque;
+    extern "c" fn gtk_css_provider_load_from_string(self: *anyopaque, css: [*:0]const u8) void;
+    extern "c" fn gdk_display_get_default() ?*anyopaque;
+    extern "c" fn gtk_style_context_add_provider_for_display(display: *anyopaque, provider: *anyopaque, priority: c_uint) void;
+};
+
+/// "#rrggbb" for a matugen.json key, or null.
+fn matugenHex(text: []const u8, key: []const u8, out: *[8]u8) ?[:0]const u8 {
+    var pat_buf: [64]u8 = undefined;
+    const pat = std.fmt.bufPrint(&pat_buf, "\"{s}\"", .{key}) catch return null;
+    const at = std.mem.indexOf(u8, text, pat) orelse return null;
+    const rest = text[at + pat.len ..];
+    const hash = std.mem.indexOfScalar(u8, rest, '#') orelse return null;
+    if (hash > 8 or rest.len < hash + 7) return null;
+    const hex = rest[hash + 1 .. hash + 7];
+    for (hex) |ch| if (!std.ascii.isHex(ch)) return null;
+    out[0] = '#';
+    @memcpy(out[1..7], hex);
+    out[7] = 0;
+    return out[0..7 :0];
+}
+
+fn applyPerihelionStyle() void {
+    const display = pstyle.gdk_display_get_default() orelse return;
+    var css: std.ArrayList(u8) = .empty;
+    defer css.deinit(gpa);
+    const home = std.mem.span(getenv("HOME") orelse "/root");
+    var pbuf: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/simpbar/matugen.json", .{home}) catch return;
+    if (readFileAll(path)) |text| {
+        defer gpa.free(text);
+        var hb: [8]u8 = undefined;
+        if (matugenHex(text, "border_color", &hb)) |accent| {
+            // Both spellings: CSS variables (libadwaita 1.6+) and the older
+            // named colors.
+            css.print(gpa, ":root {{ --accent-bg-color: {s}; --accent-color: {s}; }}\n@define-color accent_bg_color {s};\n@define-color accent_color {s};\n", .{ accent, accent, accent, accent }) catch return;
+        }
+    }
+    css.appendSlice(gpa,
+        \.perihelion-section label { font-weight: 700; font-size: 0.8em; letter-spacing: 0.06em; }
+        \.perihelion-section { min-height: 0; }
+        \preferencesgroup { margin-bottom: 6px; }
+        \.navigation-sidebar > row { border-radius: 10px; margin: 1px 6px; }
+        \.boxed-list, list.boxed-list { border-radius: 14px; }
+        \
+    ) catch return;
+    css.append(gpa, 0) catch return;
+    const provider = pstyle.gtk_css_provider_new();
+    pstyle.gtk_css_provider_load_from_string(provider, @ptrCast(css.items.ptr));
+    pstyle.gtk_style_context_add_provider_for_display(display, provider, 600); // GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
+}
+
 fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     hypr_pages.init();
     if (hypr_pages.g_mango) {
@@ -6038,7 +6104,13 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
         gtk.gtk_scrolled_window_set_policy(scrolled, gtk.POLICY_NEVER, gtk.POLICY_AUTOMATIC);
         gtk.gtk_widget_set_vexpand(@ptrCast(scrolled), 1);
         gtk.gtk_widget_set_hexpand(@ptrCast(scrolled), 1);
-        gtk.gtk_scrolled_window_set_child(scrolled, @ptrCast(page_widgets[i]));
+        // GNOME preferences hierarchy: content in a centered column up to
+        // 760 px wide instead of rows stretched across a wide window.
+        const clamp = pstyle.adw_clamp_new();
+        pstyle.adw_clamp_set_maximum_size(clamp, 760);
+        pstyle.adw_clamp_set_tightening_threshold(clamp, 560);
+        pstyle.adw_clamp_set_child(clamp, @ptrCast(page_widgets[i]));
+        gtk.gtk_scrolled_window_set_child(scrolled, clamp);
         _ = gtk.gtk_stack_add_named(content_stack, @ptrCast(scrolled), name);
     }
 
@@ -6084,6 +6156,7 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
 
     loadSettingsStyle();
     applySettingsStyle();
+    applyPerihelionStyle();
     if (g_window == null) {
         g_window = buildWindow(@ptrCast(app));
     }
