@@ -1,0 +1,122 @@
+#!/usr/bin/python3
+"""perihelion-dock-pin: pin an app to the Perihelion dock.
+
+    perihelion-dock-pin firefox.desktop      (the app drawer's "Pin to dock")
+
+Adds the app (its name, launch command and icon from the .desktop file) to
+the end of the pinned launchers in ~/.config/simpbar/config.json, which the
+dock shows left of the trash, then tells the bar and the dock to reload.
+An app that is already pinned is left alone.
+"""
+import json
+import os
+import re
+import shlex
+import signal
+import sys
+import tempfile
+
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "simpbar")
+CONFIG = os.path.join(CONFIG_DIR, "config.json")
+
+
+def data_dirs():
+    home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    dirs = [home, os.path.join(home, "flatpak/exports/share"), "/var/lib/flatpak/exports/share"]
+    dirs += (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")
+    return [d for d in dirs if d]
+
+
+def find_desktop(desktop_id):
+    """The .desktop file for an id ("a-b.desktop" may live at a/b.desktop)."""
+    if os.path.isabs(desktop_id):
+        return desktop_id if os.path.isfile(desktop_id) else None
+    if not desktop_id.endswith(".desktop"):
+        desktop_id += ".desktop"
+    candidates = [desktop_id]
+    parts = desktop_id.split("-")
+    for i in range(1, len(parts)):
+        candidates.append("-".join(parts[:i]) + "/" + "-".join(parts[i:]))
+    for d in data_dirs():
+        for c in candidates:
+            p = os.path.join(d, "applications", c)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def read_entry(path):
+    entry, section = {}, None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("["):
+                section = line
+                continue
+            if section != "[Desktop Entry]" or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            entry.setdefault(k.strip(), v.strip())
+    return entry
+
+
+def command_of(exec_line):
+    """Exec= without the field codes (%f, %U, ...), as the bar runs it."""
+    try:
+        words = shlex.split(exec_line)
+    except ValueError:
+        words = exec_line.split()
+    words = [w for w in words if not re.fullmatch(r"%[fFuUdDnNickvm]", w)]
+    return " ".join(shlex.quote(w) if re.search(r"[\s'\"]", w) else w for w in words)
+
+
+def signal_pidfile(name):
+    try:
+        with open(os.path.join(CONFIG_DIR, name)) as f:
+            os.kill(int(f.read().strip()), signal.SIGUSR1)
+    except (OSError, ValueError):
+        pass
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0 if len(sys.argv) == 2 else 2
+    path = find_desktop(sys.argv[1])
+    if not path:
+        print(f"perihelion-dock-pin: no app {sys.argv[1]}", file=sys.stderr)
+        return 1
+    e = read_entry(path)
+    command = command_of(e.get("Exec", ""))
+    if not command:
+        print(f"perihelion-dock-pin: {path} has no Exec line", file=sys.stderr)
+        return 1
+    if e.get("Terminal", "").lower() == "true":
+        command = "kitty -e " + command
+
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        cfg = {}
+    launchers = cfg.setdefault("launchers", [])
+    if any(isinstance(b, dict) and b.get("command") == command for b in launchers):
+        return 0
+    pin = {"label": e.get("Name") or os.path.basename(path)[:-8], "command": command}
+    if e.get("Icon"):
+        pin["icon"] = e["Icon"]
+    launchers.append(pin)
+
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.json.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, CONFIG)
+    signal_pidfile("simpbar.pid")
+    signal_pidfile("dock.pid")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

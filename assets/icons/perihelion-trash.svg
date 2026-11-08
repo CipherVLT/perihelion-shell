@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <!-- Fallback for the dock's trash: a flat grey can in Numix's style.
+       Perihelion installs Numix's own user-trash icon over it when the
+       Numix theme is present. -->
+  <ellipse cx="24" cy="43" rx="15" ry="2.5" fill="#000" opacity=".2"/>
+  <path d="M19 5h10a2 2 0 0 1 2 2v3h-3V8h-8v2h-3V7a2 2 0 0 1 2-2z" fill="#8a919e"/>
+  <rect x="8" y="10" width="32" height="5" rx="1.5" fill="#9aa1ad"/>
+  <path d="M11 15h26l-2 25a2.5 2.5 0 0 1-2.5 2.3h-17A2.5 2.5 0 0 1 13 40z" fill="#8a919e"/>
+  <g fill="#6c7380">
+    <rect x="16" y="19" width="3" height="19" rx="1.5"/>
+    <rect x="22.5" y="19" width="3" height="19" rx="1.5"/>
+    <rect x="29" y="19" width="3" height="19" rx="1.5"/>
+  </g>
+</svg>

@@ -315,14 +315,20 @@ const JsonConfig = struct {
 
 /// Perihelion's dock (config.json "dock"; main.zig's DockSettings).
 const JsonDock = struct {
-    enabled: bool = true,
+    enabled: bool = false,
     icon_size: u32 = 40,
     corner_radius: u32 = 18,
     border: bool = true,
     border_size: u32 = 1,
     colored_glass: bool = true,
+    trash: bool = true,
+    window_gap: u32 = 0,
+    shrink: bool = true,
 };
-var live_dock_enabled: bool = true;
+var live_dock_trash: bool = true;
+var live_dock_window_gap: u32 = 0;
+var live_dock_shrink: bool = true;
+var live_dock_enabled: bool = false;
 var live_dock_icon_size: u32 = 40;
 var live_dock_corner_radius: u32 = 18;
 var live_dock_border: bool = true;
@@ -1102,6 +1108,15 @@ fn loadConfigFromDisk() void {
     live_dock_border = parsed.dock.border;
     live_dock_border_size = std.math.clamp(parsed.dock.border_size, 1, 4);
     live_dock_colored_glass = parsed.dock.colored_glass;
+    live_dock_trash = parsed.dock.trash;
+    live_dock_window_gap = @min(parsed.dock.window_gap, 40);
+    live_dock_shrink = parsed.dock.shrink;
+    // An older Perihelion kept the trash as a pin: it is the dock's own
+    // fixed button now (saved on the next change).
+    if (launchersHave(TRASH_COMMAND)) {
+        launchersRemoveAll(TRASH_COMMAND);
+        live_dock_trash = true;
+    }
 }
 
 /// Removes entries whose kind was retired (see ModuleKind.waypaper) from a
@@ -1328,6 +1343,12 @@ fn buildConfigJson() ![]u8 {
     try list.appendSlice(gpa, if (live_dock_border) "true" else "false");
     try list.appendSlice(gpa, ",\"border_size\":");
     try appendJsonInt(&list, u32, live_dock_border_size);
+    try list.appendSlice(gpa, ",\"trash\":");
+    try list.appendSlice(gpa, if (live_dock_trash) "true" else "false");
+    try list.appendSlice(gpa, ",\"window_gap\":");
+    try appendJsonInt(&list, u32, live_dock_window_gap);
+    try list.appendSlice(gpa, ",\"shrink\":");
+    try list.appendSlice(gpa, if (live_dock_shrink) "true" else "false");
     try list.appendSlice(gpa, ",\"colored_glass\":");
     try list.appendSlice(gpa, if (live_dock_colored_glass) "true" else "false");
     try list.append(gpa, '}');
@@ -3855,19 +3876,24 @@ fn onDockAppDrawerChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque
 }
 
 fn onDockTrashChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    const on = gtk.gtk_switch_get_active(sw) != 0;
-    if (on == launchersHave(TRASH_COMMAND)) return;
-    if (on) {
-        _ = live_launchers.append("Trash", TRASH_COMMAND, "user-trash");
-    } else launchersRemoveAll(TRASH_COMMAND);
-    populatePinnedLaunchers();
+    live_dock_trash = gtk.gtk_switch_get_active(sw) != 0;
+    saveAndSignal();
+}
+
+fn onDockShrinkChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_dock_shrink = gtk.gtk_switch_get_active(sw) != 0;
+    saveAndSignal();
+}
+
+fn onDockWindowGapChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    live_dock_window_gap = spinU32(button, 0, 40);
     saveAndSignal();
 }
 
 fn addDockSwitchRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, icon: [:0]const u8, active: bool, callback: gtk.GCallback) void {
     const row = gtk.adw_action_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), title);
-    gtk.adw_action_row_set_subtitle(row, subtitle);
+    if (subtitle.len > 0) gtk.adw_action_row_set_subtitle(row, subtitle);
     gtk.adw_action_row_set_icon_name(row, icon);
     const sw = gtk.gtk_switch_new();
     gtk.gtk_switch_set_active(sw, if (active) 1 else 0);
@@ -3881,15 +3907,17 @@ fn addDockSwitchRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtit
 fn buildDockGroup(outer: *gtk.GtkBox) void {
     const group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(group, "Dock");
-    gtk.adw_preferences_group_set_description(group, "The dock at the bottom of the screen. Its apps are the Pinned Launchers (Shortcuts tab); drag them in the dock to reorder.");
+    gtk.adw_preferences_group_set_description(group, "The dock at the bottom of the screen. Right-click an app in the app drawer to pin it; drag pins in the dock to reorder (the trash stays at the end). Exclusive zone is the space between windows and the dock.");
     addDockSwitchRow(group, "Show the dock", "Windows stop just above it.", "view-app-grid-symbolic", live_dock_enabled, @ptrCast(&onDockEnabledChanged));
     addSpinRow(group, "Icon size (px)", @floatFromInt(DOCK_ICON_MIN), @floatFromInt(DOCK_ICON_MAX), @floatFromInt(live_dock_icon_size), @ptrCast(&onDockIconSizeChanged));
+    addDockSwitchRow(group, "Shrink the dash", "Tighter padding and spacing around the icons.", "view-restore-symbolic", live_dock_shrink, @ptrCast(&onDockShrinkChanged));
+    addSpinRow(group, "Exclusive zone (px)", 0, 40, @floatFromInt(live_dock_window_gap), @ptrCast(&onDockWindowGapChanged));
     addSpinRow(group, "Corner radius (px)", 0, 40, @floatFromInt(live_dock_corner_radius), @ptrCast(&onDockCornerRadiusChanged));
     addDockSwitchRow(group, "Dock border", "A ring in the wallpaper's color around the dock.", "object-select-symbolic", live_dock_border, @ptrCast(&onDockBorderChanged));
     addSpinRow(group, "Border size (px)", 1, 4, @floatFromInt(live_dock_border_size), @ptrCast(&onDockBorderSizeChanged));
     addDockSwitchRow(group, "Colored glass", "A faint tint of the wallpaper's color in a slightly see-through dock.", "weather-clear-night-symbolic", live_dock_colored_glass, @ptrCast(&onDockGlassChanged));
     addDockSwitchRow(group, "App drawer", "The distro logo button that opens all your apps, first in the dock.", "view-grid-symbolic", launchersHave(APPDRAWER_COMMAND), @ptrCast(&onDockAppDrawerChanged));
-    addDockSwitchRow(group, "Recycle bin", "Opens the trash, last in the dock. Its icon shows when the trash has files.", "user-trash-symbolic", launchersHave(TRASH_COMMAND), @ptrCast(&onDockTrashChanged));
+    addDockSwitchRow(group, "Trash", "", "user-trash-symbolic", live_dock_trash, @ptrCast(&onDockTrashChanged));
     gtk.gtk_box_append(outer, @ptrCast(group));
 }
 

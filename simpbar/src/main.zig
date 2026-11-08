@@ -45,13 +45,16 @@ const WORKSPACE_LEFT_MARGIN: i64 = 8;
 /// beside launchers, etc.), and without a guaranteed module→module gap the
 /// last segment of one runs straight into the first of the next. Segments
 /// also carry their own intra-module gaps (workspace_gap between digits
-/// inside their shared pill, LAUNCHER_GAP between launcher buttons).
+/// inside their shared pill, launcher_gap between launcher buttons).
 const MODULE_GAP: i64 = 12;
 
 // Spacing for the custom/* launcher buttons and custom/power.
-const LAUNCHER_GAP: i64 = 16;
+const LAUNCHER_GAP_BAR: i64 = 16;
+/// Perihelion: the dock sets its own spacing (wider, or tighter with
+/// "Shrink the dash"); the bar keeps simpbar's 16.
+var launcher_gap: i64 = LAUNCHER_GAP_BAR;
 /// Gap between system tray icons (and before the first one) — tighter than
-/// LAUNCHER_GAP so the tray reads as one cluster, in or out of the island.
+/// launcher_gap so the tray reads as one cluster, in or out of the island.
 const TRAY_ICON_GAP: i64 = 8;
 const RIGHT_MARGIN: i64 = 8;
 
@@ -329,6 +332,7 @@ fn setLauncherIconSize(size: u32) void {
     if (want == launcher_icon_size) return;
     launcher_icon_size = want;
     invalidateLauncherIcons();
+    trash_icon.resolved = false;
     for (&tail_icons) |*c| c.* = .{};
 }
 
@@ -624,7 +628,25 @@ fn ensureTailIcons() void {
 /// inline cache. Each slot is resolved at most once per config load: a null
 /// or unresolvable icon marks the slot resolved-but-without-icon so the
 /// missing-icon case doesn't retry gdk-pixbuf on every frame.
+fn ensureTrashIcon() void {
+    if (!dock_mode or trash_icon.resolved) return;
+    trash_icon = .{ .resolved = true };
+    trash_full = trashHasFiles();
+    // Perihelion's own (Numix-Circle style), then the icon theme's.
+    const names = if (trash_full)
+        [_][]const u8{ "perihelion-trash-full", "perihelion-trash", "user-trash-full", "user-trash" }
+    else
+        [_][]const u8{ "perihelion-trash", "user-trash", "perihelion-trash-full", "user-trash-full" };
+    for (names) |n| {
+        if (decodeIconIntoPixels(n, &trash_icon.pixels)) {
+            trash_icon.has_icon = true;
+            return;
+        }
+    }
+}
+
 fn ensureLauncherIcons(font: *font_mod.Font) void {
+    ensureTrashIcon();
     for (current_config.launchers, 0..) |btn, i| {
         if (i >= launcher_icons.len) break;
         const cache = &launcher_icons[i];
@@ -646,18 +668,6 @@ fn ensureLauncherIcons(font: *font_mod.Font) void {
             if (dock_mode and renderDistroTile(font, cache.distro_glyph, &cache.pixels)) {
                 cache.distro_glyph = 0;
                 cache.has_icon = true;
-            }
-            continue;
-        }
-        // Perihelion's recycle bin pin: the theme's full or empty trash.
-        if (launcherIsTrash(btn.command)) {
-            trash_full = trashHasFiles();
-            const names = if (trash_full) [_][]const u8{ "user-trash-full", "user-trash" } else [_][]const u8{ "user-trash", "user-trash-full" };
-            for (names) |n| {
-                if (decodeIconIntoPixels(n, &cache.pixels)) {
-                    cache.has_icon = true;
-                    break;
-                }
             }
             continue;
         }
@@ -684,6 +694,9 @@ fn launcherIsTrash(command: []const u8) bool {
 
 /// Whether ~/.local/share/Trash/files holds anything (the bin's icon).
 var trash_full: bool = false;
+/// The dock's trash icon (one buffer; re-picked when the trash fills or
+/// empties, or the icon size changes).
+var trash_icon: LauncherIconCache = .{};
 fn trashHasFiles() bool {
     const home = getenv("HOME") orelse return false;
     var buf: [512]u8 = undefined;
@@ -703,15 +716,8 @@ fn refreshTrashIcon() bool {
     const full = trashHasFiles();
     if (full == trash_full) return false;
     trash_full = full;
-    var any = false;
-    for (current_config.launchers, 0..) |btn, i| {
-        if (i >= launcher_icons.len) break;
-        if (launcherIsTrash(btn.command)) {
-            launcher_icons[i].resolved = false;
-            any = true;
-        }
-    }
-    return any;
+    trash_icon.resolved = false;
+    return true;
 }
 
 /// Paints the dock's app drawer button into an icon buffer: a rounded
@@ -1741,7 +1747,21 @@ fn appidMatchesKey(appid_norm: []const u8, key: []const u8) bool {
 /// to the wrapped app id (`flatpak run … com.spotify.Client @@` → the id,
 /// not "flatpak" — otherwise every sandboxed pin matches nothing and
 /// spawns duplicates). Empty when unmatchable.
-fn launcherMatchKey(command: []const u8, buf: []u8) []const u8 {
+fn launcherMatchKey(command_in: []const u8, buf: []u8) []const u8 {
+    // Perihelion: "env VAR=x app ..." (common in .desktop Exec lines, which
+    // the drawer's "Pin to dock" copies) matches as "app".
+    var command = command_in;
+    if (std.mem.startsWith(u8, command, "env ")) {
+        var rest = command[4..];
+        while (true) {
+            while (rest.len > 0 and rest[0] == ' ') rest = rest[1..];
+            const end = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+            const tok = rest[0..end];
+            if (tok.len == 0 or !(std.mem.indexOfScalar(u8, tok, '=') != null or tok[0] == '-')) break;
+            rest = rest[end..];
+        }
+        command = rest;
+    }
     var word = command;
     if (std.mem.indexOfScalar(u8, word, ' ')) |sp| word = word[0..sp];
     if (std.mem.lastIndexOfScalar(u8, word, '/')) |sl| word = word[sl + 1 ..];
@@ -2580,7 +2600,8 @@ const Config = struct {
 /// Modules tab). The app drawer and recycle bin buttons are ordinary pins
 /// in "launchers" that the settings add and remove.
 const DockSettings = struct {
-    enabled: bool = true,
+    /// Off until switched on in Perihelion Settings.
+    enabled: bool = false,
     icon_size: u32 = 40,
     /// Roundness of the dock's corners (clamped to a capsule).
     corner_radius: u32 = 18,
@@ -2589,6 +2610,12 @@ const DockSettings = struct {
     border_size: u32 = 1,
     /// A faint wash of the wallpaper's accent in a more see-through dock.
     colored_glass: bool = true,
+    /// The trash at the dock's right end, behind a spacer. It never moves.
+    trash: bool = true,
+    /// Space between a window and the dock, in px ("Exclusive zone").
+    window_gap: u32 = 0,
+    /// "Shrink the dash": tighter padding and spacing.
+    shrink: bool = true,
 };
 
 // Today's exact hardcoded layout/order — see the header comment above.
@@ -3149,13 +3176,12 @@ var dock_mode: bool = false;
 const DOCK_CENTER = [_]ModuleEntry{.{ .kind = .launchers, .enabled = true }};
 const DOCK_NONE = [_]ModuleEntry{};
 
-/// Space above plus below the dock's icons.
-const DOCK_ICON_AIR: u32 = 14;
-/// Space left between a window and the dock under it. Mango adds the
-/// layer margin and its own outer gap (gappov, 10 by default) to the
-/// exclusive zone; the zone is trimmed so the window ends this far above
-/// the dock instead of a whole gap plus margin.
-const DOCK_WINDOW_GAP: i64 = 4;
+/// Space above plus below the dock's icons (shrunk / normal).
+const DOCK_ICON_AIR_SHRUNK: u32 = 10;
+const DOCK_ICON_AIR: u32 = 18;
+/// Mango adds the layer margin and its own outer gap (gappov, 10 by
+/// default) to the exclusive zone; the zone is trimmed by that so a window
+/// ends dock.window_gap px above the dock (0 = right on top of it).
 const MANGO_OUTER_GAP: i64 = 10;
 
 /// The dock was switched off in Perihelion Settings: leave quietly.
@@ -3174,7 +3200,17 @@ fn dockConfig(cfg: Config) Config {
     c.appearance.bar_mode = "dock";
     // Tall enough for the chosen icon size plus a little air.
     setLauncherIconSize(cfg.dock.icon_size);
-    c.appearance.bar_height = @max(c.appearance.bar_height, @as(@TypeOf(c.appearance.bar_height), @intCast(launcher_icon_size + DOCK_ICON_AIR)));
+    const air: u32 = if (cfg.dock.shrink) DOCK_ICON_AIR_SHRUNK else DOCK_ICON_AIR;
+    const h: u32 = launcher_icon_size + air;
+    c.appearance.bar_height = @intCast(h);
+    launcher_gap = if (cfg.dock.shrink) 10 else 18;
+    // Ends: far enough in that an icon's corners clear the rounded end
+    // (circle of radius r around the end's center), plus a little air.
+    const r: f32 = @floatFromInt(@min(cfg.dock.corner_radius, h / 2));
+    const half: f32 = @as(f32, @floatFromInt(launcher_icon_size)) / 2.0 + 1.0;
+    const clear: f32 = if (half >= r) r else r - @sqrt(r * r - half * half);
+    const base: i64 = if (cfg.dock.shrink) 6 else 10;
+    dock_pill_pad = @max(base, @as(i64, @intFromFloat(@ceil(clear))) + @divTrunc(base, 2));
     return c;
 }
 
@@ -5038,7 +5074,7 @@ fn applyLayerGeometry(bar: *Bar) void {
         // dock (SIMPBAR_DOCK=1) reserves its strip instead: windows stop
         // above it, like a fixed dock.
         if (dock_mode) {
-            bar.layer_surface.setExclusiveZone(@intCast(@max(1, @as(i64, current_config.appearance.bar_height) + DOCK_WINDOW_GAP - MANGO_OUTER_GAP)));
+            bar.layer_surface.setExclusiveZone(@intCast(@max(1, @as(i64, current_config.appearance.bar_height) + @as(i64, @min(current_config.dock.window_gap, 80)) - MANGO_OUTER_GAP)));
         } else {
             bar.layer_surface.setExclusiveZone(0);
         }
@@ -7815,7 +7851,7 @@ const MPRIS_CONTROL_GAP: i64 = 6; // spacing between the three control glyphs, a
 /// rightward until the pill touched the centered middle modules. Content is
 /// capped so the pill's own 4px overhang still leaves a full MODULE_GAP of
 /// air against the center group's leftmost pill (which overhangs up to
-/// LAUNCHER_GAP/2 left of its start edge). Dock/morph modes pass their
+/// launcher_gap/2 left of its start edge). Dock/morph modes pass their
 /// packed center start as that same bound, so the cap holds in every layout.
 const MPRIS_CENTER_CLEARANCE: i64 = 4 + MODULE_GAP;
 
@@ -8017,24 +8053,24 @@ fn drawLeftGroup(
                     const munit: i64 = if (mhas and mdistro == 0) launcher_icon_size else if (mdistro != 0) textPixelWidth(font, encodeBmpCodepoint(mdistro, &mdg)) else 0;
                     const mw = (if (mdraw_label) textPixelWidth(font, mbtn.label) else 0) + (if (mdraw_icon) munit + (if (mdraw_label) LAUNCHER_ICON_TEXT_GAP else 0) else 0);
                     if (run_first) {
-                        run_start = run_x - @divTrunc(LAUNCHER_GAP, 2);
+                        run_start = run_x - @divTrunc(launcher_gap, 2);
                         run_first = false;
                     } else {
-                        run_x += LAUNCHER_GAP;
+                        run_x += launcher_gap;
                     }
                     run_x += mw;
-                    run_end = run_x + @divTrunc(LAUNCHER_GAP, 2);
+                    run_end = run_x + @divTrunc(launcher_gap, 2);
                 }
                 for (unpinned[0..unpinned_n]) |g| {
                     const mw = tailButtonWidth(font, &g);
                     if (run_first) {
-                        run_start = run_x - @divTrunc(LAUNCHER_GAP, 2);
+                        run_start = run_x - @divTrunc(launcher_gap, 2);
                         run_first = false;
                     } else {
-                        run_x += LAUNCHER_GAP;
+                        run_x += launcher_gap;
                     }
                     run_x += mw;
-                    run_end = run_x + @divTrunc(LAUNCHER_GAP, 2);
+                    run_end = run_x + @divTrunc(launcher_gap, 2);
                 }
                 if (!run_first) drawRestingPill(pixels, buf_width, buf_height, run_start, run_end);
                 for (0..launcher_view_len) |vp| {
@@ -8057,8 +8093,8 @@ fn drawLeftGroup(
                     const icon_w: i64 = if (draw_icon) icon_unit + (if (draw_label) LAUNCHER_ICON_TEXT_GAP else 0) else 0;
                     const label_w = (if (draw_label) textPixelWidth(font, btn.label) else 0) + icon_w;
                     const region_start = x0;
-                    const hover_start = region_start - @divTrunc(LAUNCHER_GAP, 2);
-                    const hover_end = region_start + label_w + @divTrunc(LAUNCHER_GAP, 2);
+                    const hover_start = region_start - @divTrunc(launcher_gap, 2);
+                    const hover_end = region_start + label_w + @divTrunc(launcher_gap, 2);
                     drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
                     if (draw_icon and li < launcher_icons.len) {
                         if (draw_glyph) {
@@ -8081,13 +8117,13 @@ fn drawLeftGroup(
                     const live = launcherLive(btn.command);
                     if (live.count > 0) drawRunningDot(pixels, buf_width, buf_height, region_start + @divTrunc(label_w, 2), live.focused);
                     click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .launcher = li });
-                    x0 += LAUNCHER_GAP;
+                    x0 += launcher_gap;
                 }
                 for (unpinned[0..unpinned_n]) |g| {
                     const uw = tailButtonWidth(font, &g);
                     const uregion_start = x0;
-                    const uhover_start = uregion_start - @divTrunc(LAUNCHER_GAP, 2);
-                    const uhover_end = uregion_start + uw + @divTrunc(LAUNCHER_GAP, 2);
+                    const uhover_start = uregion_start - @divTrunc(launcher_gap, 2);
+                    const uhover_end = uregion_start + uw + @divTrunc(launcher_gap, 2);
                     drawPill(pixels, buf_width, buf_height, uhover_start, uhover_end, click_regions.nextHover());
                     if (tailHasIcon(&g)) {
                         if (tailIconPixels(running_state.apps[g.client_idx].appid())) |px| {
@@ -8102,7 +8138,7 @@ fn drawLeftGroup(
                     }
                     drawRunningDot(pixels, buf_width, buf_height, uregion_start + @divTrunc(uw, 2), g.focused);
                     click_regions.add(@intCast(uhover_start), @intCast(uhover_end), .{ .focus_client = g.client_idx });
-                    x0 += LAUNCHER_GAP;
+                    x0 += launcher_gap;
                 }
             },
             .mpris => {
@@ -8217,6 +8253,9 @@ const CenterSegment = struct {
     /// an mpris label, 0 when the seg isn't mpris. Measured at compose time
     /// so centering accounts for it exactly like any other width.
     mpris_toggle_w: i64 = 0,
+    /// Perihelion dock: the spacer line before the trash, and the trash.
+    separator: bool = false,
+    trash: bool = false,
 };
 
 const CenterSegments = struct {
@@ -8241,7 +8280,7 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
         // module always gets at least MODULE_GAP of trailing space, so two
         // modules never collide no matter which kinds a cross-group drag
         // joined (workspace pills leave workspace_gap between themselves,
-        // launcher buttons LAUNCHER_GAP, but the module→module handoff needs
+        // launcher buttons launcher_gap, but the module→module handoff needs
         // the full gap regardless of what either module is).
         if (emitted_any and out.len > 0 and out.items[out.len - 1].gap_after < MODULE_GAP) {
             out.items[out.len - 1].gap_after = MODULE_GAP;
@@ -8259,6 +8298,9 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                     const i = launcher_view_order[vp];
                     if (i >= current_config.launchers.len) continue;
                     const btn = current_config.launchers[i];
+                    // The dock draws its own trash at the end (below); an
+                    // older config's trash pin is not shown as a pin.
+                    if (dock_mode and launcherIsTrash(btn.command)) continue;
                     if (out.len >= out.items.len) break;
                     const has_icon = i < launcher_icons.len and launcher_icons[i].has_icon;
                     const distro: u32 = if (i < launcher_icons.len) launcher_icons[i].distro_glyph else 0;
@@ -8274,7 +8316,7 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                     out.items[out.len] = .{
                         .label = if (draw_label) btn.label else "",
                         .command = btn.command,
-                        .gap_after = LAUNCHER_GAP,
+                        .gap_after = launcher_gap,
                         .icon_w = if (draw_icon) icon_unit + (if (draw_label) LAUNCHER_ICON_TEXT_GAP else 0) else 0,
                         .launcher_idx = i,
                     };
@@ -8288,7 +8330,7 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                 for (tail[0..tail_n]) |g| {
                     if (out.len >= out.items.len) break;
                     var seg = &out.items[out.len];
-                    seg.* = .{ .label = "", .gap_after = LAUNCHER_GAP, .focus_idx = g.client_idx, .task_focused = g.focused };
+                    seg.* = .{ .label = "", .gap_after = launcher_gap, .focus_idx = g.client_idx, .task_focused = g.focused };
                     if (tailHasIcon(&g)) {
                         // Icon-only: no label, no icon→text gap.
                         seg.icon_w = launcher_icon_size;
@@ -8298,6 +8340,14 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                         seg.label = seg.task_buf[0..nl];
                     }
                     out.len += 1;
+                }
+                // Perihelion dock: a spacer, then the trash, always last —
+                // pins and open apps stay left of it, and it can't be dragged
+                // (it isn't a launcher, so it has no drag handle).
+                if (dock_mode and current_config.dock.trash and out.len + 2 <= out.items.len) {
+                    out.items[out.len] = .{ .label = "", .gap_after = launcher_gap, .icon_w = 1, .separator = true };
+                    out.items[out.len + 1] = .{ .label = "", .gap_after = launcher_gap, .icon_w = launcher_icon_size, .trash = true };
+                    out.len += 2;
                 }
             },
             .workspaces => {
@@ -8385,12 +8435,12 @@ fn drawCenterGroup(
         const is_launcher = (seg.command != null or seg.focus_idx != null) and seg.ws_id == null;
         if (is_launcher and !scan_run) {
             scan_run = true;
-            scan_start = scan_x - @divTrunc(LAUNCHER_GAP, 2);
+            scan_start = scan_x - @divTrunc(launcher_gap, 2);
         }
         if (is_launcher) scan_last_end = scan_x + seg_w;
         if (!is_launcher and scan_run) {
             scan_run = false;
-            drawRestingPill(pixels, buf_width, buf_height, scan_start, scan_last_end + @divTrunc(LAUNCHER_GAP, 2));
+            drawRestingPill(pixels, buf_width, buf_height, scan_start, scan_last_end + @divTrunc(launcher_gap, 2));
         }
         const is_ws = seg.ws_id != null;
         if (is_ws and !wscan_run) {
@@ -8404,7 +8454,7 @@ fn drawCenterGroup(
         }
         scan_x += seg_w + seg.gap_after;
     }
-    if (scan_run) drawRestingPill(pixels, buf_width, buf_height, scan_start, scan_last_end + @divTrunc(LAUNCHER_GAP, 2));
+    if (scan_run) drawRestingPill(pixels, buf_width, buf_height, scan_start, scan_last_end + @divTrunc(launcher_gap, 2));
     if (wscan_run) drawRestingPill(pixels, buf_width, buf_height, wscan_start, wscan_last_end);
 
     for (segs.items[0..segs.len]) |seg| {
@@ -8428,11 +8478,31 @@ fn drawCenterGroup(
                 x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, color, 0, buf_width);
             }
             click_regions.addScrollable(@intCast(hover_start), @intCast(hover_end), .{ .switch_workspace = ws_id }, .step_workspace);
+        } else if (seg.separator) {
+            // A thin line in the text color, the middle half of the dock high.
+            const h: i64 = @intCast(buf_height);
+            if (x0 >= 0 and x0 < buf_width) {
+                var yy: i64 = @divTrunc(h, 4);
+                while (yy < h - @divTrunc(h, 4)) : (yy += 1) {
+                    const idx: usize = @intCast(yy * @as(i64, buf_width) + x0);
+                    pixels[idx] = blendPixel(pixels[idx], current_config.appearance.text_color | 0xFF000000, 90);
+                }
+            }
+            x0 += seg.icon_w;
+        } else if (seg.trash) {
+            const region_start = x0;
+            const hover_start = region_start - @divTrunc(launcher_gap, 2);
+            const hover_end = region_start + seg.icon_w + @divTrunc(launcher_gap, 2);
+            drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            if (trash_icon.has_icon) drawLauncherIcon(pixels, buf_width, buf_height, x0, &trash_icon);
+            x0 += seg.icon_w;
+            // Click opens the trash; right-click empties it (asks first).
+            click_regions.addWithRight(@intCast(hover_start), @intCast(hover_end), .{ .spawn = "perihelion-trash" }, .{ .spawn = "perihelion-trash --empty" });
         } else if (seg.command != null) {
             const region_start = x0;
             const label_w = seg.icon_w + textPixelWidth(font, seg.label);
-            const hover_start = region_start - @divTrunc(LAUNCHER_GAP, 2);
-            const hover_end = region_start + label_w + @divTrunc(LAUNCHER_GAP, 2);
+            const hover_start = region_start - @divTrunc(launcher_gap, 2);
+            const hover_end = region_start + label_w + @divTrunc(launcher_gap, 2);
             drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
             if (seg.icon_w > 0 and seg.launcher_idx < launcher_icons.len) {
                 const distro = launcher_icons[seg.launcher_idx].distro_glyph;
@@ -8470,8 +8540,8 @@ fn drawCenterGroup(
             // running dot (a tail row only exists while up, so always lit).
             const region_start = x0;
             const label_w = seg.icon_w + textPixelWidth(font, seg.label);
-            const hover_start = region_start - @divTrunc(LAUNCHER_GAP, 2);
-            const hover_end = region_start + label_w + @divTrunc(LAUNCHER_GAP, 2);
+            const hover_start = region_start - @divTrunc(launcher_gap, 2);
+            const hover_end = region_start + label_w + @divTrunc(launcher_gap, 2);
             drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
             if (seg.icon_w > 0) {
                 if (fci < running_state.len) {
@@ -8624,7 +8694,10 @@ const DOCK_MARGIN_SIDE: i32 = 16;
 /// Gap between packed groups in dock mode (same rhythm as MODULE_GAP).
 const DOCK_GAP: i64 = 12;
 /// Padding around the packed content for the dock's background pill.
-const DOCK_PILL_PAD: i64 = 8;
+/// Space between the dock's ends and its first/last icon. Set by
+/// dockConfig from the corner radius so the icons always sit inside the
+/// rounded ends (a capsule's ends need more room than a square's).
+var dock_pill_pad: i64 = 8;
 /// Auto-hide hint strip thickness (px) at the screen edge while hidden.
 const AUTOHIDE_STRIP_PX: i32 = 2;
 /// Hide delay after the pointer leaves, in scroll-timer ticks
@@ -9693,7 +9766,7 @@ fn drawLavaBackground(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, 
 /// space and never sits flush against its neighbour; the cell's padding is
 /// what fills the gap, so those cases no longer subtract MODULE_GAP
 /// themselves. Multi-item kinds (tray, cava) keep their explicit intra-module
-/// LAUNCHER_GAP instead: a cell per icon would space them arbitrarily far
+/// launcher_gap instead: a cell per icon would space them arbitrarily far
 /// apart, and their width is data-driven rather than a label's, so there is
 /// no meaningful "natural width" to pad out to a minimum.
 /// Speaker icon tier for a 0-100 volume (wireplumber's "default"
@@ -10403,12 +10476,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                         handleAction(bar, r.action);
                     }
                 } else if (e.button == BTN_RIGHT) {
-                    // Perihelion: right-click the dock's recycle bin to empty it.
-                    if (r.action == .launcher and r.action.launcher < current_config.launchers.len and
-                        launcherIsTrash(current_config.launchers[r.action.launcher].command))
-                    {
-                        spawnDetached("perihelion-trash --empty");
-                    } else if (r.right_action) |ra| handleAction(bar, ra);
+                    if (r.right_action) |ra| handleAction(bar, ra);
                 }
                 return;
             }
@@ -10782,8 +10850,8 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
     // Background capsule over the pack span (skipped while degenerate —
     // groups still draw below so widths get measured for the next frame).
     if (total > 0) {
-        const px0 = pack_start - DOCK_PILL_PAD;
-        const px1 = pack_start + total + DOCK_PILL_PAD;
+        const px0 = pack_start - dock_pill_pad;
+        const px1 = pack_start + total + dock_pill_pad;
         if (ring > 0) {
             // The ring, then the body inset by its width (fills overwrite,
             // so the see-through body never shows the ring through it).
@@ -10808,8 +10876,8 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
     // change; the region object itself is compositor-copied on commit, so
     // destroying it right away is safe.
     if (total > 0) {
-        const rx = @max(0, pack_start - DOCK_PILL_PAD);
-        const region_w: i64 = total + DOCK_PILL_PAD * 2;
+        const rx = @max(0, pack_start - dock_pill_pad);
+        const region_w: i64 = total + dock_pill_pad * 2;
         if (!bar.dock_input_set or bar.dock_input_x != rx or bar.dock_input_w != region_w) {
             if (bar.compositor.createRegion()) |region| {
                 region.add(@intCast(rx), 0, @intCast(region_w), @intCast(bar.height));
@@ -10854,8 +10922,8 @@ fn paintMorph(bar: *Bar, pixels: [*]u32, e: f32, time_text: []const u8, mpris_te
     // rect (clipped, correct) and must not invert the rounding.
     const user_r: i64 = @intCast(@min(current_config.appearance.corner_radius_px, @min(bar.width, bar.height) / 2));
     const pr = @max(0, lerpI64(user_r, @divTrunc(buf_h, 2), e));
-    fillRoundedRect(pixels, bar.width, bar.height, lerpI64(0, pack.start - DOCK_PILL_PAD, e), 0, lerpI64(buf_w, pack.start + pack.total + DOCK_PILL_PAD, e), buf_h, @intCast(pr), bg_fill);
-    paintBackgroundEffect(bar, pixels, bar.width, bar.height, lerpI64(0, pack.start - DOCK_PILL_PAD, e), lerpI64(buf_w, pack.start + pack.total + DOCK_PILL_PAD, e), 0, buf_h, pr);
+    fillRoundedRect(pixels, bar.width, bar.height, lerpI64(0, pack.start - dock_pill_pad, e), 0, lerpI64(buf_w, pack.start + pack.total + dock_pill_pad, e), buf_h, @intCast(pr), bg_fill);
+    paintBackgroundEffect(bar, pixels, bar.width, bar.height, lerpI64(0, pack.start - dock_pill_pad, e), lerpI64(buf_w, pack.start + pack.total + dock_pill_pad, e), 0, buf_h, pr);
 
     const left_end = drawLeftGroup(pixels, bar.width, bar.height, bar.font, barWorkspaces(bar), time_text, mpris_text, mpris_playing, bar.mpris_frac, C, L, &bar.click_regions);
     bar.dock_left_w = @max(0, left_end - L);
@@ -10865,8 +10933,8 @@ fn paintMorph(bar: *Bar, pixels: [*]u32, e: f32, time_text: []const u8, mpris_te
     bar.dock_right_w = @max(0, Rend - right_start);
 
     // Input follows the morphing pill (same change-detect fields as dock).
-    const rx = @max(0, lerpI64(0, pack.start - DOCK_PILL_PAD, e));
-    const rw: i64 = lerpI64(buf_w, pack.total + DOCK_PILL_PAD * 2, e);
+    const rx = @max(0, lerpI64(0, pack.start - dock_pill_pad, e));
+    const rw: i64 = lerpI64(buf_w, pack.total + dock_pill_pad * 2, e);
     if (!bar.dock_input_set or bar.dock_input_x != rx or bar.dock_input_w != rw) {
         if (bar.compositor.createRegion()) |region| {
             region.add(@intCast(rx), 0, @intCast(rw), @intCast(bar.height));
