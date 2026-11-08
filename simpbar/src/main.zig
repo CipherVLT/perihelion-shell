@@ -684,12 +684,6 @@ fn launcherIsTrash(command: []const u8) bool {
 
 /// Whether ~/.local/share/Trash/files holds anything (the bin's icon).
 var trash_full: bool = false;
-const libc_dir = struct {
-    extern "c" fn opendir(name: [*:0]const u8) ?*anyopaque;
-    extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
-    extern "c" fn closedir(dir: *anyopaque) c_int;
-    const Dirent = extern struct { ino: u64, off: i64, reclen: u16, type: u8, name: [256]u8 };
-};
 fn trashHasFiles() bool {
     const home = getenv("HOME") orelse return false;
     var buf: [512]u8 = undefined;
@@ -697,7 +691,7 @@ fn trashHasFiles() bool {
     const d = libc_dir.opendir(path.ptr) orelse return false;
     defer _ = libc_dir.closedir(d);
     while (libc_dir.readdir(d)) |e| {
-        const n = std.mem.sliceTo(&e.name, 0);
+        const n = std.mem.sliceTo(&e.d_name, 0);
         if (!std.mem.eql(u8, n, ".") and !std.mem.eql(u8, n, "..")) return true;
     }
     return false;

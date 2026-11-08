@@ -3796,7 +3796,7 @@ fn onDockEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) 
 }
 
 fn onDockIconSizeChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
-    live_dock_icon_size = @intCast(std.math.clamp(gtk.gtk_spin_button_get_value_as_int(button), DOCK_ICON_MIN, DOCK_ICON_MAX));
+    live_dock_icon_size = std.math.clamp(@as(u32, @intCast(@max(0, gtk.gtk_spin_button_get_value_as_int(button)))), DOCK_ICON_MIN, DOCK_ICON_MAX);
     saveAndSignal();
 }
 
