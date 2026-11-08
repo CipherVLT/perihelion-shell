@@ -100,11 +100,9 @@ try:
     # 3. Writing, in a home laid out like a fresh Perihelion install.
     cfg = os.path.join(home, ".config")
     share = os.path.join(home, "share")
-    os.makedirs(os.path.join(share, "nwg-drawer"))
     os.makedirs(os.path.join(share, "fuzzel"))
-    shipped_drawer = "/* shipped drawer */\nwindow { color: #cad3f5; }\n"
     shipped_fuzzel = "[main]\nfont=Noto Sans:size=12\n\n[colors]\nbackground=24273add\ntext=cad3f5ff\n\n[border]\nwidth=2\n"
-    for rel, text in (("nwg-drawer/drawer.css", shipped_drawer), ("fuzzel/fuzzel.ini", shipped_fuzzel)):
+    for rel, text in (("fuzzel/fuzzel.ini", shipped_fuzzel),):
         with open(os.path.join(share, rel), "w", encoding="utf-8") as f:
             f.write(text)
         os.makedirs(os.path.dirname(os.path.join(cfg, rel)), exist_ok=True)
@@ -124,8 +122,9 @@ try:
         mj = json.load(f)
     check(len([k for k in mj if k.endswith("_color")]) == 15 and mj["bg_color"] == "#24273a", "matugen.json: 15 keys, Macchiato base (theme file honored)")
     check(mj["bezel_color"] != mj["cava_color"] != mj["matrix_color"], "wave gradient gets three colors")
-    drawer = pt.read(os.path.join(cfg, "nwg-drawer", "drawer.css"))
-    check("Written by perihelion-theme" in drawer and mj["border_color"] in drawer, "drawer.css replaced the shipped default")
+    check(all(mj.get(k, "").startswith("#") for k in ("popup_bg_color", "popup_hover_color", "popup_separator_color")),
+          "matugen.json carries the app drawer's popup colors")
+    check(not os.path.exists(os.path.join(cfg, "nwg-drawer", "drawer.css")), "no nwg-drawer CSS any more")
     fz = pt.read(os.path.join(cfg, "fuzzel", "fuzzel.ini"))
     check("[main]\nfont=Noto Sans:size=12" in fz and "[border]\nwidth=2" in fz, "fuzzel.ini: other sections untouched")
     check("border=" + mj["border_color"].lstrip("#") + "ff" in fz, "fuzzel.ini: colors follow the accent")
@@ -144,12 +143,9 @@ try:
     check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) != before["simpbar/matugen.json"], "new wallpaper: new colors")
 
     # 5. Hand-edited files are left alone; "manual" turns it all off.
-    with open(os.path.join(cfg, "nwg-drawer", "drawer.css"), "w", encoding="utf-8") as f:
-        f.write("/* mine */\n")
     with open(os.path.join(cfg, "fuzzel", "fuzzel.ini"), "w", encoding="utf-8") as f:
         f.write("[colors]\nbackground=000000ff\n")
     run(home, img("light.png"))
-    check(pt.read(os.path.join(cfg, "nwg-drawer", "drawer.css")) == "/* mine */\n", "edited drawer.css kept")
     check(pt.read(os.path.join(cfg, "fuzzel", "fuzzel.ini")) == "[colors]\nbackground=000000ff\n", "edited fuzzel colors kept")
     with open(os.path.join(cfg, "simpbar", "config.json"), "w", encoding="utf-8") as f:
         json.dump({"appearance": {"auto_theme": "manual"}}, f)
