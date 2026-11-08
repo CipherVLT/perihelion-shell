@@ -1320,6 +1320,31 @@ const Workspaces = struct {
         };
     }
 
+    /// Perihelion dock: closes one window (Close window in the dock menu).
+    /// Mango closes the focused client, so focus it by id first, then
+    /// killclient — the same request Super+Q sends (apps may still ask to
+    /// save first).
+    fn closeClient(self: *const Workspaces, addr: []const u8, ws_id: i32) void {
+        if (addr.len == 0) return;
+        var cmd_buf: [160]u8 = undefined;
+        switch (self.mode) {
+            .mango => {
+                _ = ws_id; // focusid raises it wherever it is; no tag switch needed to close
+                const focus = std.fmt.bufPrint(&cmd_buf, "dispatch focusid,{s}", .{addr}) catch return;
+                self.dispatchCommand(focus) catch return;
+                self.dispatchCommand("dispatch killclient") catch |err| {
+                    logging.err("close client ({s}) failed: {}", .{ addr, err });
+                };
+            },
+            .hyprland => {
+                const cmd = std.fmt.bufPrint(&cmd_buf, "dispatch hl.dsp.window.close({{ window = \"address:{s}\" }})", .{addr}) catch return;
+                self.dispatchCommand(cmd) catch |err| {
+                    logging.err("close client ({s}) failed: {}", .{ addr, err });
+                };
+            },
+        }
+    }
+
     /// Focuses one running client by its `addr` token (see RunningApp):
     /// Hyprland's `0x...` window address, Mango's decimal client id. Same
     /// dispatch bridge the overview's activateTile uses, so the bar and the
@@ -2128,6 +2153,11 @@ const Action = union(enum) {
     /// raises that window. Bounds-checked at click time — a refresh between
     /// draw and click may have shifted the list.
     focus_client: usize,
+    /// Perihelion dock: right-click menu for a pinned launcher (index into
+    /// current_config.launchers) or an unpinned running app (index into
+    /// running_state.apps). See openDockMenu.
+    dock_menu_launcher: usize,
+    dock_menu_client: usize,
     toggle_drawer,
     activate_tray: usize,
     context_menu_tray: usize,
@@ -3783,6 +3813,17 @@ const PopupMenu = struct {
     row_hover: [MAX_POPUP_ROWS]f32 = [_]f32{0} ** MAX_POPUP_ROWS,
     /// Row under the pointer, maintained by the pointer handlers.
     hovered_row: ?usize = null,
+    /// Perihelion dock menu (kind == .dock_menu): the actions on offer, in
+    /// row order, and the app they act on, copied at open so a list refresh
+    /// while the menu is up can't retarget it.
+    dock_actions: [3]DockMenuAction = undefined,
+    dock_action_count: usize = 0,
+    dock_launcher: ?usize = null,
+    dock_cmd_buf: [256]u8 = undefined,
+    dock_cmd_len: usize = 0,
+    dock_addr_buf: [20]u8 = undefined,
+    dock_addr_len: usize = 0,
+    dock_ws: i32 = -1,
 
     fn dest(self: *const PopupMenu) []const u8 {
         return self.dest_buf[0..self.dest_len];
@@ -3809,7 +3850,7 @@ const PopupMenu = struct {
 
 /// What a PopupMenu's rows are sourced from; selects the draw and click
 /// paths in drawPopup / the pointer-button handler.
-const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd };
+const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu };
 
 /// Creates the xdg_popup surface a popup menu draws on, anchored to a thin
 /// rect at the clicked x position and spanning the bar's full height — the
@@ -3984,6 +4025,140 @@ fn wirePopup(bar: *Bar, ps: PopupSurface, grab: bool) void {
     }
 
     ps.surface.commit(); // initial null commit — triggers the first configure
+}
+
+// ---------------------------------------------------------------------
+// Perihelion dock: right-click menu on an icon. Unpin (pinned apps), New
+// window, Close window (when one is open). One small xdg_popup like the
+// layout picker, with rounded smooth corners; no new surface type.
+// ---------------------------------------------------------------------
+
+const DockMenuAction = enum { unpin, new_window, close_window };
+const DOCK_MENU_ROW_H: i32 = 30;
+const DOCK_MENU_PAD: i32 = 6;
+const DOCK_MENU_RADIUS: i32 = 12;
+
+fn dockMenuLabel(a: DockMenuAction) []const u8 {
+    return switch (a) {
+        .unpin => "\u{f0931}  Unpin", // nf-md-pin_off
+        .new_window => "\u{f0415}  New window", // nf-md-plus
+        .close_window => "\u{f0156}  Close window", // nf-md-close
+    };
+}
+
+fn openDockMenu(bar: *Bar, launcher: ?usize, client: ?usize) void {
+    if (!dock_mode or bar.popup != null) return;
+    var pm = PopupMenu{ .surface = undefined, .xdg_surface = undefined, .popup = undefined, .kind = .dock_menu };
+    var cmd: []const u8 = "";
+    var win: ?usize = null;
+    if (launcher) |li| {
+        if (li >= current_config.launchers.len) return;
+        cmd = current_config.launchers[li].command;
+        win = launcherLive(cmd).client_idx;
+        pm.dock_launcher = li;
+    } else if (client) |ci| {
+        if (ci >= running_state.len) return;
+        win = ci;
+    } else return;
+
+    // New window: the pin's own command; for an unpinned app, its desktop
+    // entry by app id (gtk-launch), when it has one.
+    var cbuf: [256]u8 = undefined;
+    if (cmd.len == 0) {
+        if (win) |ci| {
+            const id = running_state.apps[ci].appid();
+            if (id.len > 0) cmd = std.fmt.bufPrint(&cbuf, "gtk-launch {s}", .{id}) catch "";
+        }
+    }
+    const n = @min(cmd.len, pm.dock_cmd_buf.len);
+    @memcpy(pm.dock_cmd_buf[0..n], cmd[0..n]);
+    pm.dock_cmd_len = n;
+    if (win) |ci| {
+        const a = running_state.apps[ci].addr();
+        const m = @min(a.len, pm.dock_addr_buf.len);
+        @memcpy(pm.dock_addr_buf[0..m], a[0..m]);
+        pm.dock_addr_len = m;
+        pm.dock_ws = running_state.apps[ci].ws;
+    }
+
+    if (pm.dock_launcher != null) {
+        pm.dock_actions[pm.dock_action_count] = .unpin;
+        pm.dock_action_count += 1;
+    }
+    if (pm.dock_cmd_len > 0) {
+        pm.dock_actions[pm.dock_action_count] = .new_window;
+        pm.dock_action_count += 1;
+    }
+    if (pm.dock_addr_len > 0) {
+        pm.dock_actions[pm.dock_action_count] = .close_window;
+        pm.dock_action_count += 1;
+    }
+    if (pm.dock_action_count == 0) return;
+
+    var max_w: i32 = POPUP_MIN_WIDTH;
+    for (pm.dock_actions[0..pm.dock_action_count]) |a| {
+        const w: i32 = @intCast(textPixelWidth(bar.font, dockMenuLabel(a)) + POPUP_PADDING_X * 2 + DOCK_MENU_PAD * 2 + 8);
+        max_w = @max(max_w, w);
+    }
+    const total_h: i32 = @as(i32, @intCast(pm.dock_action_count)) * DOCK_MENU_ROW_H + DOCK_MENU_PAD * 2;
+    const ps = createPopupSurface(bar, max_w, total_h, false) orelse return;
+    pm.surface = ps.surface;
+    pm.xdg_surface = ps.xdg_surface;
+    pm.popup = ps.popup;
+    bar.popup = pm;
+    wirePopup(bar, ps, true);
+}
+
+/// The dock menu: a rounded card in the popup colors with a hairline in the
+/// accent, rows with a soft hover band (the same fade the other popups use).
+fn drawDockMenuRows(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
+    const ap = &current_config.appearance;
+    const w: i64 = @intCast(pm.width);
+    const h: i64 = @intCast(pm.height);
+    @memset(pixels[0 .. pm.width * pm.height], 0);
+    fillRoundedRectAA(pixels, pm.width, pm.height, 0, 0, w, h, DOCK_MENU_RADIUS, ap.workspace_active_color | 0xFF000000);
+    fillRoundedRectAA(pixels, pm.width, pm.height, 1, 1, w - 1, h - 1, DOCK_MENU_RADIUS - 1, ap.popup_bg_color | 0xFF000000);
+
+    pm.row_count = 0;
+    var y: i32 = DOCK_MENU_PAD;
+    for (pm.dock_actions[0..pm.dock_action_count], 0..) |a, i| {
+        const y_end = y + DOCK_MENU_ROW_H;
+        if (pm.row_count < pm.rows.len) {
+            pm.rows[pm.row_count] = .{ .y_start = y, .y_end = y_end, .item_id = @intCast(i) };
+            pm.row_count += 1;
+        }
+        const hv = pm.row_hover[i];
+        if (hv > 0.01) {
+            const band = blendPixel(ap.popup_bg_color | 0xFF000000, ap.popup_hover_color | 0xFF000000, @intFromFloat(@min(1.0, hv) * 255.0));
+            fillRoundedRectAA(pixels, pm.width, pm.height, DOCK_MENU_PAD, y, w - DOCK_MENU_PAD, y_end, 8, band);
+        }
+        const color = if (a == .close_window) ap.workspace_active_color else ap.text_color;
+        const baseline = y + @divTrunc(DOCK_MENU_ROW_H + bar.font.ascentPx() - bar.font.descentPx(), 2);
+        var x0: i64 = DOCK_MENU_PAD + POPUP_PADDING_X;
+        const label = dockMenuLabel(a);
+        var ci: usize = 0;
+        while (nextUtf8Codepoint(label, &ci)) |cp| {
+            x0 += drawGlyphAt(pixels, pm.width, pm.height, bar.font, x0, baseline, cp, color, 0, pm.width);
+        }
+        y = y_end;
+    }
+}
+
+fn runDockMenuAction(bar: *Bar, pm: *const PopupMenu, a: DockMenuAction) void {
+    switch (a) {
+        .unpin => {
+            const li = pm.dock_launcher orelse return;
+            var buf: [64]u8 = undefined;
+            const c = std.fmt.bufPrintZ(&buf, "perihelion-dock-pin --unpin {d}", .{li}) catch return;
+            spawnDetached(c);
+        },
+        .new_window => {
+            var buf: [260]u8 = undefined;
+            const c = std.fmt.bufPrintZ(&buf, "{s}", .{pm.dock_cmd_buf[0..pm.dock_cmd_len]}) catch return;
+            spawnDetached(c);
+        },
+        .close_window => bar.workspaces.closeClient(pm.dock_addr_buf[0..pm.dock_addr_len], pm.dock_ws),
+    }
 }
 
 fn closePopup(bar: *Bar) void {
@@ -4718,6 +4893,7 @@ fn drawPopup(bar: *Bar) !void {
         .layout_picker => drawLayoutPickerRows(bar, pm, pixels),
         .volume => drawVolumeRows(bar, pm, pixels),
         .volume_osd => drawVolumeOSD(bar, pm, pixels),
+        .dock_menu => drawDockMenuRows(bar, pm, pixels),
     }
 
     const pool = try bar.shm.createPool(fd, @intCast(size));
@@ -8436,6 +8612,7 @@ fn drawCenterGroup(
 ) i64 {
     const y0: i64 = baselineY(buf_height, font);
     var x0: i64 = x0_start;
+    var last_gap: i64 = 0;
     var segs: CenterSegments = .{};
     composeCenterSegments(&segs, font, time_text, workspaces, mpris_text, mpris_playing);
 
@@ -8555,7 +8732,11 @@ fn drawCenterGroup(
             if (seg.launcher_idx < current_config.launchers.len) {
                 const live = launcherLive(current_config.launchers[seg.launcher_idx].command);
                 if (live.count > 0) drawRunningDot(pixels, buf_width, buf_height, region_start + @divTrunc(label_w, 2), live.focused);
-                click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .launcher = seg.launcher_idx });
+                if (dock_mode) {
+                    click_regions.addWithRight(@intCast(hover_start), @intCast(hover_end), .{ .launcher = seg.launcher_idx }, .{ .dock_menu_launcher = seg.launcher_idx });
+                } else {
+                    click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .launcher = seg.launcher_idx });
+                }
             }
         } else if (seg.focus_idx) |fci| {
             // Unpinned running-app button: icon when resolved (icon-only
@@ -8580,7 +8761,11 @@ fn drawCenterGroup(
                 }
             }
             drawRunningDot(pixels, buf_width, buf_height, region_start + @divTrunc(label_w, 2), seg.task_focused);
-            click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .focus_client = fci });
+            if (dock_mode) {
+                click_regions.addWithRight(@intCast(hover_start), @intCast(hover_end), .{ .focus_client = fci }, .{ .dock_menu_client = fci });
+            } else {
+                click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .focus_client = fci });
+            }
         } else if (seg.mpris) {
             // mpris shares the left module's pill wholesale (one bar, one
             // code path) — text, progress, round toggle and all.
@@ -8602,8 +8787,12 @@ fn drawCenterGroup(
             }
         }
         x0 += seg.gap_after;
+        last_gap = seg.gap_after;
     }
-    return x0;
+    // Perihelion dock: the pill is sized from this pen, and counting the
+    // gap after the last icon made the right end wider than the left (the
+    // curves no longer matched). The bar keeps simpbar's spacing.
+    return if (dock_mode) x0 - last_gap else x0;
 }
 
 /// Blits a launcher's decoded app icon (a launcher_icon_size square, row-0
@@ -8992,6 +9181,64 @@ fn fillRoundedRect(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0:
             }
         }
     }
+}
+
+/// fillRoundedRect with smooth edges, for the dock's pill and its ring:
+/// each edge pixel gets the fraction of it the shape covers (signed
+/// distance to the rounded rect at the pixel center, over a 1px ramp)
+/// instead of all-or-nothing, so the curves read round rather than
+/// stair-stepped. Coverage lerps every channel, alpha included, from what is
+/// already there toward `color` (the buffer's premultiplied convention): a
+/// ring drawn first and a body drawn over it meet without a dark seam, and
+/// on the transparent surface the edge fades out cleanly.
+fn fillRoundedRectAA(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i64, x1: i64, y1: i64, radius: i32, color: u32) void {
+    if (x1 <= x0 or y1 <= y0) return;
+    const fx0: f32 = @floatFromInt(x0);
+    const fy0: f32 = @floatFromInt(y0);
+    const fx1: f32 = @floatFromInt(x1);
+    const fy1: f32 = @floatFromInt(y1);
+    const hw = (fx1 - fx0) / 2.0;
+    const hh = (fy1 - fy0) / 2.0;
+    const r: f32 = @min(@as(f32, @floatFromInt(@max(radius, 0))), @min(hw, hh));
+    const cx = fx0 + hw;
+    const cy = fy0 + hh;
+    const xs: i64 = @max(0, x0);
+    const xe: i64 = @min(@as(i64, @intCast(buf_width)), x1);
+    const ys: i64 = @max(0, y0);
+    const ye: i64 = @min(@as(i64, @intCast(buf_height)), y1);
+    var py = ys;
+    while (py < ye) : (py += 1) {
+        const qy = @abs(@as(f32, @floatFromInt(py)) + 0.5 - cy) - (hh - r);
+        var px = xs;
+        while (px < xe) : (px += 1) {
+            const qx = @abs(@as(f32, @floatFromInt(px)) + 0.5 - cx) - (hw - r);
+            const ox = @max(qx, 0.0);
+            const oy = @max(qy, 0.0);
+            const dist = @sqrt(ox * ox + oy * oy) + @min(@max(qx, qy), 0.0) - r;
+            const cov = std.math.clamp(0.5 - dist, 0.0, 1.0);
+            if (cov <= 0.0) continue;
+            const idx = @as(usize, @intCast(py)) * buf_width + @as(usize, @intCast(px));
+            if (cov >= 1.0) {
+                pixels[idx] = color;
+                continue;
+            }
+            pixels[idx] = lerpArgb(pixels[idx], color, cov);
+        }
+    }
+}
+
+/// Per-channel lerp of two ARGB pixels, alpha included.
+fn lerpArgb(a: u32, b: u32, t: f32) u32 {
+    var out: u32 = 0;
+    var shift: u5 = 0;
+    while (true) : (shift += 8) {
+        const ca: f32 = @floatFromInt((a >> shift) & 0xFF);
+        const cb: f32 = @floatFromInt((b >> shift) & 0xFF);
+        const v: u32 = @intFromFloat(@round(ca + (cb - ca) * t));
+        out |= (v & 0xFF) << shift;
+        if (shift == 24) break;
+    }
+    return out;
 }
 
 /// 1px animated bezel around the rounded rect [x0,x1)×[y0,y1): the ring wears
@@ -9876,7 +10123,10 @@ fn drawRightGroup(
                 const vol_label = std.fmt.bufPrint(&vol_buf, "{s} {s}", .{ vol_icon, volume_text }) catch vol_icon;
                 const cell = reserveRightCell(x_end, textPixelWidth(font, vol_label), center_start_x);
                 x_end = cell.next_pen;
-                _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, vol_label, drawer_color, .open_volume_mixer, click_regions, if (entry.in_drawer) &island_now else null, .adjust_volume);
+                // The drawer's fade color only applies inside the drawer;
+                // on the bar itself volume wears the text color like every
+                // other module (it used to stay at bg_color: a black icon).
+                _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, vol_label, if (entry.in_drawer) drawer_color else text_color, .open_volume_mixer, click_regions, if (entry.in_drawer) &island_now else null, .adjust_volume);
             },
             .waypaper => {
                 // Tombstone (see ModuleKind): old configs still parse, but
@@ -9893,7 +10143,7 @@ fn drawRightGroup(
                 const pac_label = std.fmt.bufPrint(&pac_buf, "{s} {s}", .{ encodeBmpCodepoint(distroLogoCodepoint(), &dg_buf), pacman_text }) catch pacman_text;
                 const cell = reserveRightCell(x_end, textPixelWidth(font, pac_label), center_start_x);
                 x_end = cell.next_pen;
-                _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, pac_label, drawer_color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
+                _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, pac_label, if (entry.in_drawer) drawer_color else text_color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
             },
             .tray => {
                 // icon-only items, no text label; skipped entirely if an
@@ -10467,6 +10717,15 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                             return;
                         },
                         .volume_osd => {}, // dismissed before hit-test above; unreachable here
+                        .dock_menu => {
+                            if (id < 0) return;
+                            const i: usize = @intCast(id);
+                            if (i >= pm.dock_action_count) return;
+                            const snap = pm.*; // closePopup nulls bar.popup
+                            closePopup(bar);
+                            runDockMenuAction(bar, &snap, snap.dock_actions[i]);
+                            return;
+                        },
                     }
                 } else if (kind == .volume) {
                     // Separator row: nothing to mute, panel stays open.
@@ -10658,6 +10917,8 @@ fn handleAction(bar: *Bar, action: Action) void {
             if (ci >= running_state.len) return;
             bar.workspaces.focusClient(running_state.apps[ci].addr(), running_state.apps[ci].ws);
         },
+        .dock_menu_launcher => |li| openDockMenu(bar, li, null),
+        .dock_menu_client => |ci| openDockMenu(bar, null, ci),
         .toggle_drawer => {
             // Only flips the target — bar.drawer_anim eases toward it on
             // the scroll timer's tick (see its handler), producing the
@@ -10753,6 +11014,8 @@ fn actionName(a: Action) []const u8 {
         .set_layout => "set_layout",
         .launcher => "launcher",
         .focus_client => "focus_client",
+        .dock_menu_launcher => "dock_menu_launcher",
+        .dock_menu_client => "dock_menu_client",
     };
 }
 
@@ -10878,10 +11141,10 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
         if (ring > 0) {
             // The ring, then the body inset by its width (fills overwrite,
             // so the see-through body never shows the ring through it).
-            fillRoundedRect(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), ap.workspace_active_color | 0xFF000000);
-            fillRoundedRect(pixels, bar.width, bar.height, px0 + ring, ring, px1 - ring, buf_h - ring, @intCast(@max(0, pill_r - ring)), bg_fill);
+            fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), ap.workspace_active_color | 0xFF000000);
+            fillRoundedRectAA(pixels, bar.width, bar.height, px0 + ring, ring, px1 - ring, buf_h - ring, @intCast(@max(0, pill_r - ring)), bg_fill);
         } else {
-            fillRoundedRect(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), bg_fill);
+            fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), bg_fill);
         }
         paintBackgroundEffect(bar, pixels, bar.width, bar.height, px0 + ring, px1 - ring, ring, buf_h - ring, @max(0, pill_r - ring));
     }

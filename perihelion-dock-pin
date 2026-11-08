@@ -2,6 +2,7 @@
 """perihelion-dock-pin: pin an app to the Perihelion dock.
 
     perihelion-dock-pin firefox.desktop      (the app drawer's "Pin to dock")
+    perihelion-dock-pin --unpin 3            (the dock's right-click "Unpin")
 
 Adds the app (its name, launch command and icon from the .desktop file) to
 the end of the pinned launchers in ~/.config/simpbar/config.json, which the
@@ -78,7 +79,41 @@ def signal_pidfile(name):
         pass
 
 
+def save(cfg):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.json.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, CONFIG)
+    signal_pidfile("simpbar.pid")
+    signal_pidfile("dock.pid")
+
+
+def unpin(index):
+    """Removes pin number `index` (0-based, config order: what the dock was
+    showing when it was right-clicked)."""
+    try:
+        with open(CONFIG, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return 1
+    launchers = cfg.get("launchers") or []
+    if not 0 <= index < len(launchers):
+        print(f"perihelion-dock-pin: no pin {index}", file=sys.stderr)
+        return 1
+    del launchers[index]
+    save(cfg)
+    return 0
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--unpin":
+        try:
+            return unpin(int(sys.argv[2]))
+        except ValueError:
+            print("perihelion-dock-pin: --unpin needs a number", file=sys.stderr)
+            return 2
     if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
         print(__doc__.strip())
         return 0 if len(sys.argv) == 2 else 2
@@ -106,15 +141,7 @@ def main():
     if e.get("Icon"):
         pin["icon"] = e["Icon"]
     launchers.append(pin)
-
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.json.")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-        f.write("\n")
-    os.replace(tmp, CONFIG)
-    signal_pidfile("simpbar.pid")
-    signal_pidfile("dock.pid")
+    save(cfg)
     return 0
 
 
