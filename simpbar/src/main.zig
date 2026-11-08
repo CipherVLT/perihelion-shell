@@ -2323,13 +2323,13 @@ const LauncherButton = struct {
 // strings (most of these have no icon at all in the real config — only
 // custom/rofi does; the rest are plain text).
 const CENTER_LAUNCHERS = [_]LauncherButton{
-    .{ .label = "\u{f0ac} Browser", .command = "simpbar-launch-browser" }, // fa-globe
-    .{ .label = "\u{f066f} Discord", .command = "simpbar-launch-discord" }, // nf-md-discord
-    .{ .label = "\u{f07c} Files", .command = "nautilus" }, // fa-folder-open
-    .{ .label = "\u{f120} Term", .command = "foot" }, // fa-terminal
+    // Perihelion's own apps, used only when config.json has no launchers
+    // (simpbar's launch scripts and Welcome app are not part of Perihelion).
+    .{ .label = "Apps", .command = "appdrawer" },
+    .{ .label = "\u{f0ac} Browser", .command = "firefox" }, // fa-globe
+    .{ .label = "\u{f07c} Files", .command = "strata" }, // fa-folder-open
+    .{ .label = "\u{f120} Term", .command = "kitty" }, // fa-terminal
     .{ .label = "\u{f1b6} Steam", .command = "steam" }, // fa-steam
-    .{ .label = "\u{f013} Settings", .command = "perihelion-settings" }, // fa-cog
-    .{ .label = "\u{f118} Welcome", .command = "simpbar-welcome" }, // fa-smile-o
 };
 
 // custom/power from "modules-right" — icon only in the real config, no text.
@@ -3179,10 +3179,32 @@ const DOCK_NONE = [_]ModuleEntry{};
 /// Space above plus below the dock's icons (shrunk / normal).
 const DOCK_ICON_AIR_SHRUNK: u32 = 10;
 const DOCK_ICON_AIR: u32 = 18;
-/// Mango adds the layer margin and its own outer gap (gappov, 10 by
-/// default) to the exclusive zone; the zone is trimmed by that so a window
-/// ends dock.window_gap px above the dock (0 = right on top of it).
-const MANGO_OUTER_GAP: i64 = 10;
+/// Mango adds the layer margin and its own outer gap (gap_outer_vertical,
+/// 10 by default, 4 in Perihelion) to the exclusive zone; the zone is
+/// trimmed by that so a window ends dock.window_gap px above the dock
+/// (0 = right on top of it). Read from Mango's config at each load.
+var mango_outer_gap: i64 = 10;
+
+/// gap_outer_vertical from ~/.config/mango (cfg/appearance.conf, else the
+/// single config.conf of older installs); the last setting wins, as in Mango.
+fn readMangoOuterGap() i64 {
+    const home = getenv("HOME") orelse return 10;
+    var found: ?i64 = null;
+    for ([_][]const u8{ "config.conf", "cfg/appearance.conf", "cfg/misc.conf" }) |name| {
+        var pbuf: [512]u8 = undefined;
+        const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/mango/{s}", .{ std.mem.span(home), name }) catch continue;
+        var fbuf: [16384]u8 = undefined;
+        const text = readSmallFile(path, &fbuf) orelse continue;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |raw| {
+            const line = std.mem.trim(u8, raw, " \t\r");
+            const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+            if (!std.mem.eql(u8, std.mem.trim(u8, line[0..eq], " \t"), "gap_outer_vertical")) continue;
+            found = std.fmt.parseInt(i64, std.mem.trim(u8, line[eq + 1 ..], " \t"), 10) catch continue;
+        }
+    }
+    return found orelse 10;
+}
 
 /// The dock was switched off in Perihelion Settings: leave quietly.
 fn dockExitIfDisabled(cfg: Config) void {
@@ -3200,6 +3222,7 @@ fn dockConfig(cfg: Config) Config {
     c.appearance.bar_mode = "dock";
     // Tall enough for the chosen icon size plus a little air.
     setLauncherIconSize(cfg.dock.icon_size);
+    mango_outer_gap = readMangoOuterGap();
     const air: u32 = if (cfg.dock.shrink) DOCK_ICON_AIR_SHRUNK else DOCK_ICON_AIR;
     const h: u32 = launcher_icon_size + air;
     c.appearance.bar_height = @intCast(h);
@@ -5074,7 +5097,7 @@ fn applyLayerGeometry(bar: *Bar) void {
         // dock (SIMPBAR_DOCK=1) reserves its strip instead: windows stop
         // above it, like a fixed dock.
         if (dock_mode) {
-            bar.layer_surface.setExclusiveZone(@intCast(@max(1, @as(i64, current_config.appearance.bar_height) + @as(i64, @min(current_config.dock.window_gap, 80)) - MANGO_OUTER_GAP)));
+            bar.layer_surface.setExclusiveZone(@intCast(@max(1, @as(i64, current_config.appearance.bar_height) + @as(i64, @min(current_config.dock.window_gap, 80)) - mango_outer_gap)));
         } else {
             bar.layer_surface.setExclusiveZone(0);
         }

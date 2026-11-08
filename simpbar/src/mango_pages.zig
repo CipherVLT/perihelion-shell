@@ -1745,18 +1745,19 @@ fn buildGeneralPage() *gtk.GtkBox {
 
     const blur = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(blur, "Blur");
-    gtk.adw_preferences_group_set_description(blur, "Blur needs something translucent to show through: for the bar use Background Opacity under the Appearance tab, for the widgets card_bg_opacity in ~/.config/simpbar/shell.json. Turning a surface on also enables Blur on Layer Surfaces, which it needs.");
+    gtk.adw_preferences_group_set_description(blur, "Blur needs something translucent to show through: for the bar use Background Opacity under the Appearance tab, for the dock Colored glass (Modules > Dock). Turning a surface on also enables Blur on Layer Surfaces, which it needs.");
     addSwitchField(blur, "Enable Blur", &doc_appearance, "blur", true);
     addSwitchField(blur, "Blur on Layer Surfaces", &doc_appearance, "blur_layer", true);
-    addSurfaceBlurSwitch(blur, "Bar Blur", "simpbar");
-    addSurfaceBlurSwitch(blur, "Desktop Widgets Blur", "simpbar-shell");
+    addSurfaceBlurSwitch(blur, "Bar Blur", "perihelion-bar");
+    addSurfaceBlurSwitch(blur, "Dock Blur", "perihelion-dock");
+    addSurfaceBlurSwitch(blur, "Desktop Widgets Blur", "perihelion-shell");
     addSpinField(blur, "Blur Radius", 1, 32, 1, &doc_appearance, "blur_params_radius", 4, false);
     addSpinField(blur, "Blur Passes", 1, 8, 1, &doc_appearance, "blur_params_num_passes", 2, false);
     gtk.gtk_box_append(outer, @ptrCast(blur));
 
     const colors = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(colors, "Colors");
-    gtk.adw_preferences_group_set_description(colors, "Base colours in appearance.conf. If ~/.config/mango/cfg/matugen-colors.conf exists, matugen's generated colours override these on reload.");
+    gtk.adw_preferences_group_set_description(colors, "Base colours in appearance.conf. The border colours follow the wallpaper: perihelion-theme writes ~/.config/mango/colors.conf, which config.conf reads last, so those win over the values here.");
     addColorField(colors, "Root Background", &doc_appearance, "root_color", "0x201b14ff");
     addColorField(colors, "Border", &doc_appearance, "border_color", "0x444444ff");
     addColorField(colors, "Focused Border", &doc_appearance, "focus_color", "0x47add6ff");

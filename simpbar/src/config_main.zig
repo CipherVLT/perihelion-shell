@@ -169,13 +169,13 @@ const DEFAULT_RIGHT = [_]ModuleEntry{
     .{ .kind = .weather, .enabled = true },
 };
 const CENTER_LAUNCHERS = [_]LauncherButton{
-    .{ .label = "\u{f0ac} Browser", .command = "simpbar-launch-browser" },
-    .{ .label = "\u{f066f} Discord", .command = "simpbar-launch-discord" },
-    .{ .label = "\u{f07c} Files", .command = "nautilus" },
-    .{ .label = "\u{f120} Term", .command = "foot" },
+    // Perihelion's own apps (simpbar's launch scripts and Welcome app are
+    // not part of Perihelion).
+    .{ .label = "Apps", .command = "appdrawer" },
+    .{ .label = "\u{f0ac} Browser", .command = "firefox" },
+    .{ .label = "\u{f07c} Files", .command = "strata" },
+    .{ .label = "\u{f120} Term", .command = "kitty" },
     .{ .label = "\u{f1b6} Steam", .command = "steam" },
-    .{ .label = "\u{f013} Settings", .command = "perihelion-settings" },
-    .{ .label = "\u{f118} Welcome", .command = "simpbar-welcome" },
 };
 
 // Mirrors main.zig's CLOCK_FORMAT_* keys exactly — must agree between the
@@ -5762,7 +5762,208 @@ fn onReloadMangoClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     mango_pages.reload();
 }
 
-const perihelion_bar_pages_only = true;
+
+// ---------------------------------------------------------------------
+// Perihelion: System > Boot (GRUB) and System > Login (SDDM). Perihelion
+// boots with GRUB and logs in with SDDM (Pixie), not simpbar's Limine and
+// Ly, so these two pages replace those. Reading needs no password; Apply
+// runs /usr/libexec/perihelion-system-settings once through pkexec.
+// ---------------------------------------------------------------------
+
+const SYS_HELPER: [:0]const u8 = "/usr/libexec/perihelion-system-settings";
+
+var sys_grub_menu_always: bool = false;
+var sys_grub_timeout: u32 = 5;
+var sys_grub_quiet: bool = true;
+var sys_sddm_autologin: bool = false;
+var sys_sddm_numlock: bool = false;
+var sys_sddm_clock24: bool = false;
+
+var sys_pid: c_int = -1;
+var sys_status: ?*gtk.GtkLabel = null;
+var sys_labels: [2]?*gtk.GtkLabel = .{ null, null };
+var sys_buttons: [2]?*gtk.GtkButton = .{ null, null };
+
+/// Value of `key` in an INI/shell-style file (`key=value`, quotes stripped).
+fn sysValue(text: []const u8, key: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var found: ?[]const u8 = null;
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        if (!std.mem.eql(u8, std.mem.trim(u8, line[0..eq], " \t"), key)) continue;
+        found = std.mem.trim(u8, line[eq + 1 ..], " \t\"'");
+    }
+    return found;
+}
+
+fn loadSystemState() void {
+    if (readFileAll("/etc/default/grub")) |t| {
+        defer gpa.free(t);
+        if (sysValue(t, "GRUB_TIMEOUT")) |v| sys_grub_timeout = @min(30, std.fmt.parseInt(u32, v, 10) catch 5);
+        if (sysValue(t, "GRUB_CMDLINE_LINUX")) |v| sys_grub_quiet = std.mem.indexOf(u8, v, "quiet") != null;
+        if (sysValue(t, "GRUB_TIMEOUT_STYLE")) |v| sys_grub_menu_always = std.mem.eql(u8, v, "menu");
+    }
+    if (readFileAll("/etc/sddm.conf.d/20-perihelion-settings.conf")) |t| {
+        defer gpa.free(t);
+        if (sysValue(t, "User")) |v| sys_sddm_autologin = v.len > 0;
+        if (sysValue(t, "Numlock")) |v| sys_sddm_numlock = std.mem.eql(u8, v, "on");
+    }
+    if (readFileAll("/usr/local/share/perihelion/greeter/theme.conf.user")) |t| {
+        defer gpa.free(t);
+        if (sysValue(t, "use24HourClock")) |v| sys_sddm_clock24 = std.mem.eql(u8, v, "true");
+    }
+}
+
+fn sysSetStatus(msg: [:0]const u8) void {
+    if (sys_status) |l| gtk.gtk_label_set_text(l, msg);
+}
+
+fn sysSetBusy(busy: bool) void {
+    for (sys_buttons) |b| if (b) |btn| gtk.gtk_widget_set_sensitive(@ptrCast(btn), if (busy) 0 else 1);
+}
+
+/// Waits for the pkexec child without blocking the window.
+fn sysPollTick(_: ?*anyopaque) callconv(.c) c_int {
+    if (sys_pid < 0) return 0;
+    var st: c_int = 0;
+    if (std.c.waitpid(sys_pid, &st, 1) != sys_pid) return 1;
+    sys_pid = -1;
+    sysSetBusy(false);
+    const code: u32 = if ((st & 0x7f) == 0) @intCast((st >> 8) & 0xff) else 255;
+    switch (code) {
+        0 => sysSetStatus("Applied."),
+        126 => sysSetStatus("Cancelled: the password prompt was closed."),
+        127 => sysSetStatus("Not allowed: an administrator password is needed."),
+        else => sysSetStatus("Could not apply (see the journal for perihelion-system-settings)."),
+    }
+    return 0;
+}
+
+fn sysRun(argv: []const [:0]const u8) void {
+    if (sys_pid >= 0) return;
+    var buf: [16]?[*:0]const u8 = undefined;
+    if (argv.len + 1 > buf.len) return;
+    for (argv, 0..) |a, i| buf[i] = a.ptr;
+    buf[argv.len] = null;
+    // A direct child: pkexec refuses to run once orphaned (see
+    // launchApplyChild), and the window stays responsive meanwhile.
+    const pid = libc_proc.fork();
+    if (pid < 0) {
+        sysSetStatus("Could not start pkexec.");
+        return;
+    }
+    if (pid == 0) {
+        _ = std.c.execve("/usr/bin/pkexec", @ptrCast(&buf), std.c.environ);
+        std.c._exit(127);
+    }
+    sys_pid = pid;
+    sysSetBusy(true);
+    sysSetStatus("Waiting for the password…");
+    _ = gtk.g_timeout_add(400, sysPollTick, null);
+}
+
+fn onBootApply(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    if (sys_pid >= 0) return;
+    sys_status = sys_labels[0];
+    var tbuf: [8]u8 = undefined;
+    const t = std.fmt.bufPrintZ(&tbuf, "{d}", .{sys_grub_timeout}) catch return;
+    sysRun(&.{ "pkexec", SYS_HELPER, "grub", "--menu", if (sys_grub_menu_always) "always" else "auto", "--timeout", t, "--quiet", if (sys_grub_quiet) "on" else "off" });
+}
+
+fn onLoginApply(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    if (sys_pid >= 0) return;
+    sys_status = sys_labels[1];
+    sysRun(&.{ "pkexec", SYS_HELPER, "sddm", "--autologin", if (sys_sddm_autologin) "on" else "off", "--numlock", if (sys_sddm_numlock) "on" else "off", "--clock24", if (sys_sddm_clock24) "on" else "off" });
+}
+
+fn onSysSwitch(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, data: ?*anyopaque) callconv(.c) void {
+    const target: *bool = @ptrCast(@alignCast(data orelse return));
+    target.* = gtk.gtk_switch_get_active(sw) != 0;
+}
+
+fn onGrubTimeout(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    sys_grub_timeout = spinU32(button, 0, 30);
+}
+
+fn addSysSwitch(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, target: *bool) void {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), title);
+    if (subtitle.len > 0) gtk.adw_action_row_set_subtitle(row, subtitle);
+    const sw = gtk.gtk_switch_new();
+    gtk.gtk_switch_set_active(sw, if (target.*) 1 else 0);
+    gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onSysSwitch), @ptrCast(target), null, 0);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+    gtk.adw_action_row_set_activatable_widget(row, @ptrCast(sw));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+}
+
+fn addSysApply(outer: *gtk.GtkBox, slot: usize, note: [:0]const u8, callback: gtk.GCallback) void {
+    const group = gtk.adw_preferences_group_new();
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Apply");
+    gtk.adw_action_row_set_subtitle(row, note);
+    const btn = gtk.gtk_button_new_with_label("Apply");
+    gtk.gtk_widget_add_css_class(@ptrCast(btn), "suggested-action");
+    gtk.gtk_widget_set_valign(@ptrCast(btn), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(btn), "clicked", callback, null, null, 0);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(btn));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+    sys_buttons[slot] = btn;
+    gtk.gtk_box_append(outer, @ptrCast(group));
+}
+
+fn sysPageBox() *gtk.GtkBox {
+    const outer = gtk.gtk_box_new(gtk.ORIENTATION_VERTICAL, 18);
+    gtk.gtk_widget_set_margin_top(@ptrCast(outer), 24);
+    gtk.gtk_widget_set_margin_bottom(@ptrCast(outer), 24);
+    gtk.gtk_widget_set_margin_start(@ptrCast(outer), 24);
+    gtk.gtk_widget_set_margin_end(@ptrCast(outer), 24);
+    return outer;
+}
+
+fn buildGrubPage() *gtk.GtkBox {
+    loadSystemState();
+    const outer = sysPageBox();
+    const group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(group, "Boot menu (GRUB)");
+    gtk.adw_preferences_group_set_description(group, "Fedora hides the boot menu unless the last boot failed; hold Shift or press Esc while starting to see it anyway.");
+    addSysSwitch(group, "Always show the boot menu", "Pick a kernel or another system at every start.", &sys_grub_menu_always);
+    addSpinRow(group, "Menu timeout (s)", 0, 30, @floatFromInt(sys_grub_timeout), @ptrCast(&onGrubTimeout));
+    addSysSwitch(group, "Quiet boot", "The Perihelion splash instead of scrolling kernel messages.", &sys_grub_quiet);
+    gtk.gtk_box_append(outer, @ptrCast(group));
+    addSysApply(outer, 0, "Writes /etc/default/grub and rebuilds the GRUB menu (asks for your password). Takes effect at the next start.", @ptrCast(&onBootApply));
+    const status = gtk.gtk_label_new("");
+    gtk.gtk_label_set_xalign(status, 0);
+    gtk.gtk_label_set_wrap(status, 1);
+    sys_labels[0] = status;
+    gtk.gtk_box_append(outer, @ptrCast(status));
+    return outer;
+}
+
+fn buildSddmPage() *gtk.GtkBox {
+    const outer = sysPageBox();
+    const group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(group, "Login screen (SDDM)");
+    gtk.adw_preferences_group_set_description(group, "The login screen already follows your wallpaper and its colors.");
+    addSysSwitch(group, "Log in automatically", "Skip the login screen and start Mango as you. Anyone at the computer gets your desktop.", &sys_sddm_autologin);
+    addSysSwitch(group, "Num Lock on", "Turn Num Lock on at the login screen.", &sys_sddm_numlock);
+    addSysSwitch(group, "24-hour clock", "The login screen's clock.", &sys_sddm_clock24);
+    gtk.gtk_box_append(outer, @ptrCast(group));
+    addSysApply(outer, 1, "Writes /etc/sddm.conf.d/20-perihelion-settings.conf (asks for your password). Takes effect at the next login screen.", @ptrCast(&onLoginApply));
+    const status = gtk.gtk_label_new("");
+    gtk.gtk_label_set_xalign(status, 0);
+    gtk.gtk_label_set_wrap(status, 1);
+    sys_labels[1] = status;
+    gtk.gtk_box_append(outer, @ptrCast(status));
+    return outer;
+}
+
+/// Perihelion shows its own System pages (GRUB, SDDM) instead of simpbar's
+/// Limine and Ly ones.
+const perihelion_system_pages = true;
 
 fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     hypr_pages.init();
@@ -5804,7 +6005,10 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     // Perihelion: only the Bar pages. Its Mango config lives in
     // ~/.config/mango/config.conf (not cfg/), it boots with GRUB and logs in
     // with SDDM, so the Mango and System pages would edit files nothing reads.
-    if (!perihelion_bar_pages_only) {
+    // Perihelion: the Mango pages edit ~/.config/mango/cfg/*.conf, which
+    // Perihelion's config.conf sources (simpbar's layout); System is GRUB
+    // and SDDM.
+    {
         addSidebarRow(sidebar_list, section_title, "", false, SB_COUNT);
         for (BAR_COUNT..BOOT_PAGE_INDEX) |i| {
             addSidebarRow(sidebar_list, g_sb_names[i], g_sb_icons[i], true, i);
@@ -5818,8 +6022,16 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     var page_widgets: [SB_COUNT]*gtk.GtkBox = undefined;
     for (bar_pages, 0..) |p, i| page_widgets[i] = p;
     for (sec_widgets, 0..) |p, i| page_widgets[BAR_COUNT + i] = p;
-    page_widgets[BOOT_PAGE_INDEX] = buildBootPage();
-    page_widgets[LY_PAGE_INDEX] = buildLoginPage();
+    if (perihelion_system_pages) {
+        // The lazy Limine/Ly setup on first visit must not run.
+        limine_inited = true;
+        ly_inited = true;
+        page_widgets[BOOT_PAGE_INDEX] = buildGrubPage();
+        page_widgets[LY_PAGE_INDEX] = buildSddmPage();
+    } else {
+        page_widgets[BOOT_PAGE_INDEX] = buildBootPage();
+        page_widgets[LY_PAGE_INDEX] = buildLoginPage();
+    }
 
     for (g_sb_names, 0..) |name, i| {
         const scrolled = gtk.gtk_scrolled_window_new();
