@@ -3,7 +3,7 @@
 // (@cImport of gtk/gtk.h + adwaita.h) fails with ~13k translate-c errors
 // because GLib's G_GNUC_BEGIN_IGNORE_DEPRECATIONS macros expand to
 // back-to-back _Pragma(...) invocations translate-c can't parse — the same
-// class of problem gdkpixbuf_shim.c works around for gdk-pixbuf, just at a
+// class of problem gdkpixbuf.zig works around for gdk-pixbuf, just at a
 // much larger scale here. The GObject C ABI itself is stable and doesn't
 // need a shim: every object is just an opaque pointer, and every "is-a"
 // relationship (AdwActionRow is-a AdwPreferencesRow is-a GtkListBoxRow is-a

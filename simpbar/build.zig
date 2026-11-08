@@ -41,18 +41,22 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     exe_mod.addImport("wayland", wayland_mod);
+    // gdk-pixbuf's hand-written Zig declarations (icontheme.zig's decoder).
+    exe_mod.addImport("gdkpixbuf", b.createModule(.{
+        .root_source_file = b.path("src/gdkpixbuf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }));
     exe_mod.linkSystemLibrary("wayland-client", .{});
     exe_mod.linkSystemLibrary("freetype2", .{}); // real Nerd Font/Unicode glyph rendering (src/font.zig)
     exe_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{}); // tray icon-name -> PNG/SVG decode (src/icontheme.zig)
     // No EGL/GLESv2/wayland-egl linkage: the bar presents exclusively through
     // the wl_shm memfd path, so no GL stack is loaded into the process.
     // gdk-pixbuf.h pulls in GLib headers that Zig's translate-c can't parse
-    // directly (G_GNUC_BEGIN_IGNORE_DEPRECATIONS expands to back-to-back
-    // _Pragma(...) invocations translate-c chokes on) — src/gdkpixbuf_shim.c
-    // wraps the parts we need behind a plain C API instead, compiled here
-    // by a real C compiler; icontheme.zig only @cImports the shim's header.
-    exe_mod.addIncludePath(b.path("src"));
-    exe_mod.addCSourceFile(.{ .file = b.path("src/gdkpixbuf_shim.c"), .flags = &.{} });
+    // (back-to-back _Pragma(...) runs), so src/gdkpixbuf.zig declares the few
+    // calls we need by hand, like welcome_gtk.zig does for GTK. No C file is
+    // compiled.
 
     const exe = b.addExecutable(.{
         .name = "perihelion-bar",

@@ -14,10 +14,8 @@
 //! implementation.
 
 const std = @import("std");
-// Not gdk-pixbuf.h directly — see the comment in build.zig on why.
-const c = @cImport({
-    @cInclude("gdkpixbuf_shim.h");
-});
+// gdk-pixbuf through hand-written Zig declarations (no C, no @cImport).
+const c = @import("gdkpixbuf");
 
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
