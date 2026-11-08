@@ -317,9 +317,17 @@ const JsonConfig = struct {
 const JsonDock = struct {
     enabled: bool = true,
     icon_size: u32 = 40,
+    corner_radius: u32 = 18,
+    border: bool = true,
+    border_size: u32 = 1,
+    colored_glass: bool = true,
 };
 var live_dock_enabled: bool = true;
 var live_dock_icon_size: u32 = 40;
+var live_dock_corner_radius: u32 = 18;
+var live_dock_border: bool = true;
+var live_dock_border_size: u32 = 1;
+var live_dock_colored_glass: bool = true;
 
 // ---------------------------------------------------------------------
 // Paths (resolved from $HOME at startup, same convention as main.zig/
@@ -1090,6 +1098,10 @@ fn loadConfigFromDisk() void {
     live_launchers.load(parsed.launchers);
     live_dock_enabled = parsed.dock.enabled;
     live_dock_icon_size = std.math.clamp(parsed.dock.icon_size, DOCK_ICON_MIN, DOCK_ICON_MAX);
+    live_dock_corner_radius = @min(parsed.dock.corner_radius, 40);
+    live_dock_border = parsed.dock.border;
+    live_dock_border_size = std.math.clamp(parsed.dock.border_size, 1, 4);
+    live_dock_colored_glass = parsed.dock.colored_glass;
 }
 
 /// Removes entries whose kind was retired (see ModuleKind.waypaper) from a
@@ -1310,6 +1322,14 @@ fn buildConfigJson() ![]u8 {
     try list.appendSlice(gpa, if (live_dock_enabled) "true" else "false");
     try list.appendSlice(gpa, ",\"icon_size\":");
     try appendJsonInt(&list, u32, live_dock_icon_size);
+    try list.appendSlice(gpa, ",\"corner_radius\":");
+    try appendJsonInt(&list, u32, live_dock_corner_radius);
+    try list.appendSlice(gpa, ",\"border\":");
+    try list.appendSlice(gpa, if (live_dock_border) "true" else "false");
+    try list.appendSlice(gpa, ",\"border_size\":");
+    try appendJsonInt(&list, u32, live_dock_border_size);
+    try list.appendSlice(gpa, ",\"colored_glass\":");
+    try list.appendSlice(gpa, if (live_dock_colored_glass) "true" else "false");
     try list.append(gpa, '}');
     try list.append(gpa, '}');
 
@@ -3800,6 +3820,30 @@ fn onDockIconSizeChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c
     saveAndSignal();
 }
 
+fn spinU32(button: *gtk.GtkSpinButton, lo: u32, hi: u32) u32 {
+    return std.math.clamp(@as(u32, @intCast(@max(0, gtk.gtk_spin_button_get_value_as_int(button)))), lo, hi);
+}
+
+fn onDockCornerRadiusChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    live_dock_corner_radius = spinU32(button, 0, 40);
+    saveAndSignal();
+}
+
+fn onDockBorderSizeChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    live_dock_border_size = spinU32(button, 1, 4);
+    saveAndSignal();
+}
+
+fn onDockBorderChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_dock_border = gtk.gtk_switch_get_active(sw) != 0;
+    saveAndSignal();
+}
+
+fn onDockGlassChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_dock_colored_glass = gtk.gtk_switch_get_active(sw) != 0;
+    saveAndSignal();
+}
+
 fn onDockAppDrawerChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     const on = gtk.gtk_switch_get_active(sw) != 0;
     if (on == launchersHave(APPDRAWER_COMMAND)) return;
@@ -3840,6 +3884,10 @@ fn buildDockGroup(outer: *gtk.GtkBox) void {
     gtk.adw_preferences_group_set_description(group, "The dock at the bottom of the screen. Its apps are the Pinned Launchers (Shortcuts tab); drag them in the dock to reorder.");
     addDockSwitchRow(group, "Show the dock", "Windows stop just above it.", "view-app-grid-symbolic", live_dock_enabled, @ptrCast(&onDockEnabledChanged));
     addSpinRow(group, "Icon size (px)", @floatFromInt(DOCK_ICON_MIN), @floatFromInt(DOCK_ICON_MAX), @floatFromInt(live_dock_icon_size), @ptrCast(&onDockIconSizeChanged));
+    addSpinRow(group, "Corner radius (px)", 0, 40, @floatFromInt(live_dock_corner_radius), @ptrCast(&onDockCornerRadiusChanged));
+    addDockSwitchRow(group, "Dock border", "A ring in the wallpaper's color around the dock.", "object-select-symbolic", live_dock_border, @ptrCast(&onDockBorderChanged));
+    addSpinRow(group, "Border size (px)", 1, 4, @floatFromInt(live_dock_border_size), @ptrCast(&onDockBorderSizeChanged));
+    addDockSwitchRow(group, "Colored glass", "A faint tint of the wallpaper's color in a slightly see-through dock.", "weather-clear-night-symbolic", live_dock_colored_glass, @ptrCast(&onDockGlassChanged));
     addDockSwitchRow(group, "App drawer", "The distro logo button that opens all your apps, first in the dock.", "view-grid-symbolic", launchersHave(APPDRAWER_COMMAND), @ptrCast(&onDockAppDrawerChanged));
     addDockSwitchRow(group, "Recycle bin", "Opens the trash, last in the dock. Its icon shows when the trash has files.", "user-trash-symbolic", launchersHave(TRASH_COMMAND), @ptrCast(&onDockTrashChanged));
     gtk.gtk_box_append(outer, @ptrCast(group));

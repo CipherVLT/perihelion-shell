@@ -2582,6 +2582,13 @@ const Config = struct {
 const DockSettings = struct {
     enabled: bool = true,
     icon_size: u32 = 40,
+    /// Roundness of the dock's corners (clamped to a capsule).
+    corner_radius: u32 = 18,
+    /// A ring in the wallpaper's accent color around the dock.
+    border: bool = true,
+    border_size: u32 = 1,
+    /// A faint wash of the wallpaper's accent in a more see-through dock.
+    colored_glass: bool = true,
 };
 
 // Today's exact hardcoded layout/order — see the header comment above.
@@ -10753,8 +10760,17 @@ fn lerpI64(a: i64, b: i64, t: f32) i64 {
 /// most.
 fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []const u8, mpris_playing: bool, volume_text: []const u8, weather_text: []const u8) void {
     const buf_h: i64 = @intCast(bar.height);
-    const bg_alpha: u32 = (@as(u32, current_config.appearance.bg_opacity_percent) * 255 / 100) << 24;
-    const bg_fill: u32 = bg_alpha | (current_config.appearance.bg_color & 0x00FFFFFF);
+    const ap = &current_config.appearance;
+    const ds = &current_config.dock;
+    // Perihelion's dock (SIMPBAR_DOCK=1): colored glass is the bar color
+    // with an accent wash, a little more see-through.
+    const glass = dock_mode and ds.colored_glass;
+    const opacity: u32 = if (glass) @min(@as(u32, ap.bg_opacity_percent), 72) else ap.bg_opacity_percent;
+    const bg_alpha: u32 = (opacity * 255 / 100) << 24;
+    const bg_rgb: u32 = if (glass) blendPixel(ap.bg_color | 0xFF000000, ap.workspace_active_color, 40) else ap.bg_color;
+    const bg_fill: u32 = bg_alpha | (bg_rgb & 0x00FFFFFF);
+    const pill_r: i64 = if (dock_mode) @min(@as(i64, ds.corner_radius), @divTrunc(buf_h, 2)) else @divTrunc(buf_h, 2);
+    const ring: i64 = if (dock_mode and ds.border) @min(@as(i64, ds.border_size), 4) else 0;
 
     // Last-frame pack span, with gaps only between non-empty groups.
     const pack = dockPack(bar);
@@ -10766,8 +10782,17 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
     // Background capsule over the pack span (skipped while degenerate —
     // groups still draw below so widths get measured for the next frame).
     if (total > 0) {
-        fillRoundedRect(pixels, bar.width, bar.height, pack_start - DOCK_PILL_PAD, 0, pack_start + total + DOCK_PILL_PAD, buf_h, @intCast(@divTrunc(buf_h, 2)), bg_fill);
-        paintBackgroundEffect(bar, pixels, bar.width, bar.height, pack_start - DOCK_PILL_PAD, pack_start + total + DOCK_PILL_PAD, 0, buf_h, @divTrunc(buf_h, 2));
+        const px0 = pack_start - DOCK_PILL_PAD;
+        const px1 = pack_start + total + DOCK_PILL_PAD;
+        if (ring > 0) {
+            // The ring, then the body inset by its width (fills overwrite,
+            // so the see-through body never shows the ring through it).
+            fillRoundedRect(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), ap.workspace_active_color | 0xFF000000);
+            fillRoundedRect(pixels, bar.width, bar.height, px0 + ring, ring, px1 - ring, buf_h - ring, @intCast(@max(0, pill_r - ring)), bg_fill);
+        } else {
+            fillRoundedRect(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), bg_fill);
+        }
+        paintBackgroundEffect(bar, pixels, bar.width, bar.height, px0 + ring, px1 - ring, ring, buf_h - ring, @max(0, pill_r - ring));
     }
 
     // Groups left to right; pens recorded back for the next frame.
