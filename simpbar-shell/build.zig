@@ -115,6 +115,7 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     exe_mod.addImport("wayland", wayland_mod);
+    exe_mod.addImport("gdkpixbuf", pixbuf_mod); // glass.zig: the blurred wallpaper behind the cards
     exe_mod.addImport("font", font_mod);
     exe_mod.addImport("logging", logging_mod);
     exe_mod.addImport("widgets", widgets_mod);
