@@ -227,6 +227,18 @@ try:
     check(len({slots["color1"].strip(), slots["color2"].strip(), slots["color3"].strip()}) == 3,
           f"kitty: OS/WM/PC colors differ ({slots['color1'].strip()}, {slots['color2'].strip()}, {slots['color3'].strip()})")
     check(pt.hsl_lighten("#808080", -20.0) == "#4d4d4d", "matugen's lighten: HSL lightness minus 20 points")
+    # the last run was the light wallpaper: the terminal stays dark and readable
+    lum = lambda h: pt.lch(pt.hex_rgb(h.strip().lstrip("#")))[0]  # noqa: E731
+    check(lum(slots["background"]) < 0.35, f"kitty, light wallpaper: dark background ({slots['background'].strip()})")
+    check(all(lum(slots[k]) > 0.6 for k in ("foreground", "color1", "color2", "color3")),
+          "kitty, light wallpaper: text and fastfetch sections readable on it")
+    check(float(slots["background_opacity"]) >= 0.9, "kitty, light wallpaper: less see-through")
+    run(home, img("dark-red.png"), "--force")
+    kc = pt.read(os.path.join(cfg, "kitty", "perihelion-colors.conf"))
+    slots = dict(line.split(None, 1) for line in kc.splitlines() if line and not line.startswith("#"))
+    check(lum(slots["color1"]) > 0.55, f"kitty: the OS color is bright enough to read ({slots['color1'].strip()})")
+    check(float(slots["background_opacity"]) <= 0.82, "kitty, dark wallpaper: Perihelion's usual glass")
+    check(pt.hsl_band("#401010", 0.56, 0.70, 0.45) != "#401010", "hsl_band lifts a too-dark red")
 
     # 6b. terminal cava, btop, cmatrix
     cava_default = "[color]\ngradient = 1\ngradient_count = 3\ngradient_color_1 = '#8aadf4'\ngradient_color_2 = '#f5bde6'\ngradient_color_3 = '#eed49f'\n"

@@ -790,13 +790,24 @@ def hsl_lighten(h, amount):
     return "#{:02x}{:02x}{:02x}".format(*(round(x * 255) for x in colorsys.hls_to_rgb(hh, ll, ss)))
 
 
+def hsl_band(h, lo, hi, smin=0.0):
+    """`h` with its HSL lightness held between lo and hi (0-1) and its
+    saturation at least smin: readable on a dark terminal, same hue."""
+    r, g, b = (x / 255 for x in hex_rgb(h.lstrip("#")))
+    hh, ll, ss = colorsys.rgb_to_hls(r, g, b)
+    ll, ss = min(hi, max(lo, ll)), max(smin, ss) if ss > 0.02 else ss
+    return "#{:02x}{:02x}{:02x}".format(*(round(x * 255) for x in colorsys.hls_to_rgb(hh, ll, ss)))
+
+
 def terminal_md(t):
     """The Material roles the terminal palette is made of: matugen's own
-    (Content scheme, dark, like Event Horizon) when it ran, else tones of
-    the theme's three accents."""
-    md = t.get("md")
-    if md and all(k in md for k in ("primary", "secondary", "tertiary")):
-        return md
+    DARK scheme (Content by default, like Event Horizon) when it ran, else
+    tones of the theme's three accents. The terminal stays dark on a light
+    theme too, so light Material roles are never used here (their light
+    "fixed" colors on a light background are what washed fastfetch out)."""
+    for md in (t.get("md_term"), None if t.get("light") else t.get("md")):
+        if md and all(k in md for k in ("primary", "secondary", "tertiary")):
+            return md
     c = t["colors"]
     a1, a2, a3 = t["accent"], t["accent2"], t["accent3"]
 
@@ -808,40 +819,62 @@ def terminal_md(t):
         "on_primary": tone(a1, 0.30), "on_secondary": tone(a2, 0.30),
         "primary_fixed": tone(a1, 0.90, 0.08), "secondary_fixed": tone(a2, 0.90, 0.08),
         "tertiary_fixed": tone(a3, 0.90, 0.08),
+        "primary_fixed_dim": tone(a1, 0.82),
         "secondary_fixed_dim": tone(a2, 0.82), "tertiary_fixed_dim": tone(a3, 0.82),
         "on_primary_fixed": tone(a1, 0.20), "on_secondary_fixed": tone(a2, 0.20),
         "on_tertiary_fixed": tone(a3, 0.20),
         "on_primary_fixed_variant": tone(a1, 0.42), "on_secondary_fixed_variant": tone(a2, 0.42),
         "on_tertiary_fixed_variant": tone(a3, 0.42),
-        "surface": c["base"], "surface_container_highest": c["surface1"],
-        "surface_container_lowest": c["crust"],
-        "on_surface": c["text"], "on_surface_variant": c["subtext0"],
+        # Always dark (see the docstring): a light palette's base would be
+        # a light terminal background.
+        "surface": c["base"] if not t.get("light") else tone(a1, 0.24, 0.03),
+        "surface_container_highest": c["surface1"] if not t.get("light") else tone(a1, 0.34, 0.03),
+        "surface_container_lowest": c["crust"] if not t.get("light") else tone(a1, 0.16, 0.03),
+        "on_surface": c["text"] if not t.get("light") else tone(a1, 0.92, 0.02),
+        "on_surface_variant": c["subtext0"] if not t.get("light") else tone(a1, 0.80, 0.03),
         "base16.base08": a1,
     }
+
+
+def terminal_opacity(wall_l):
+    """kitty's see-through amount for this wallpaper: Perihelion's 0.80 on
+    a dark picture, up to 0.94 on a bright one, so the text never sits on
+    a near-white background."""
+    if wall_l is None:
+        return "0.80"
+    f = min(1.0, max(0.0, (wall_l - 0.40) / 0.35))
+    return f"{0.80 + 0.14 * f:.2f}"
 
 
 def kitty_colors(t):
     """kitty's colors, laid out like Event Horizon's matugen kitty template,
     so Perihelion's fastfetch (Veyl OS's layout: OS = color1, WM = color2,
     PC and after = color3, Fedora logo = colors 4 and 7) follows the
-    wallpaper the same way: color1 is matugen's base16 base08 darkened 20,
-    colors 2 and 3 the light secondary and tertiary, colors 4-6 their dark
-    tones. The background is the theme's own: the palette's tinted darkest
-    shade, or Material You's surface_container_lowest."""
+    wallpaper the same way, as on Veyl OS: color1 is matugen's base16 base08
+    (the wallpaper-harmonized red) held bright enough to read, color2 the
+    light secondary, color3 the light primary (the wallpaper's own hue: the
+    tertiary could bring in a color the picture doesn't have, like green on
+    an orange wallpaper), colors 4-6 the dark tones. The terminal is always
+    dark: the palette's tinted darkest shade, or Material You's
+    surface_container_lowest, and on a bright wallpaper less see-through."""
     c, md = t["colors"], terminal_md(t)
     g = lambda k, d=None: md.get(k) or d  # noqa: E731
     b08 = g("base16.base08", g("primary"))
-    bg = c["base"] if t.get("light") else (
-        g("surface_container_lowest", c["crust"]) if t["flavor"] == "material" else c["crust"])
+    if t.get("light") or t["flavor"] == "material":
+        bg = g("surface_container_lowest", c["crust"])
+    else:
+        bg = c["crust"]
+    red = hsl_band(b08, 0.56, 0.70, 0.45)
     rows = [
         ("cursor", g("primary")), ("cursor_text_color", g("on_primary", c["base"])),
         ("foreground", g("on_surface", c["text"])), ("background", bg),
+        ("background_opacity", terminal_opacity(t.get("wall_L"))),
         ("selection_foreground", g("on_secondary", c["base"])),
         ("selection_background", g("secondary")), ("url_color", g("secondary")),
         ("color0", g("surface", c["base"])), ("color8", g("surface_container_highest", c["surface1"])),
-        ("color1", hsl_lighten(b08, -20.0)), ("color9", hsl_lighten(b08, 10.0)),
+        ("color1", red), ("color9", hsl_band(hsl_lighten(red, 10.0), 0.66, 0.80)),
         ("color2", g("secondary_fixed_dim", g("secondary"))), ("color10", g("secondary_fixed", g("secondary"))),
-        ("color3", g("tertiary_fixed_dim", g("tertiary"))), ("color11", g("tertiary_fixed", g("tertiary"))),
+        ("color3", g("primary_fixed_dim", g("primary"))), ("color11", g("primary_fixed", g("primary"))),
         ("color4", g("on_primary_fixed_variant", g("primary"))), ("color12", g("primary")),
         ("color5", g("on_secondary_fixed_variant", g("secondary"))), ("color13", g("secondary")),
         ("color6", g("on_tertiary_fixed_variant", g("tertiary"))), ("color14", g("tertiary")),
@@ -1188,7 +1221,13 @@ def main(argv=None):
     # (Content by default; Fruit salad gives Event Horizon's red OS section).
     if theme["flavor"] != "material" and kind and matugen_bin():
         try:
-            theme["md"] = run_matugen(kind, value, scheme, "dark")
+            theme["md"] = theme["md_term"] = run_matugen(kind, value, scheme, "dark")
+        except (RuntimeError, ValueError):
+            pass
+    # A light theme still gets a dark terminal: its own dark Material scheme.
+    if theme.get("light") and "md_term" not in theme and kind and matugen_bin():
+        try:
+            theme["md_term"] = run_matugen(kind, value, scheme, "dark")
         except (RuntimeError, ValueError):
             pass
     theme["wall_L"] = mean_lightness(pixels) if pixels else None

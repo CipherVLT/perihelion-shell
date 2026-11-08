@@ -310,7 +310,16 @@ const JsonConfig = struct {
     appearance: JsonAppearance = .{},
     modules: JsonModules = .{},
     launchers: []const LauncherButton = &CENTER_LAUNCHERS,
+    dock: JsonDock = .{},
 };
+
+/// Perihelion's dock (config.json "dock"; main.zig's DockSettings).
+const JsonDock = struct {
+    enabled: bool = true,
+    icon_size: u32 = 40,
+};
+var live_dock_enabled: bool = true;
+var live_dock_icon_size: u32 = 40;
 
 // ---------------------------------------------------------------------
 // Paths (resolved from $HOME at startup, same convention as main.zig/
@@ -1079,6 +1088,8 @@ fn loadConfigFromDisk() void {
     // kind-list repair already lives.
     stripRemovedKinds(&live_right);
     live_launchers.load(parsed.launchers);
+    live_dock_enabled = parsed.dock.enabled;
+    live_dock_icon_size = std.math.clamp(parsed.dock.icon_size, DOCK_ICON_MIN, DOCK_ICON_MAX);
 }
 
 /// Removes entries whose kind was retired (see ModuleKind.waypaper) from a
@@ -1295,6 +1306,11 @@ fn buildConfigJson() ![]u8 {
     try appendModuleGroup(&list, &live_right);
     try list.appendSlice(gpa, "},\"launchers\":");
     try appendLaunchers(&list, &live_launchers);
+    try list.appendSlice(gpa, ",\"dock\":{\"enabled\":");
+    try list.appendSlice(gpa, if (live_dock_enabled) "true" else "false");
+    try list.appendSlice(gpa, ",\"icon_size\":");
+    try appendJsonInt(&list, u32, live_dock_icon_size);
+    try list.append(gpa, '}');
     try list.append(gpa, '}');
 
     return list.toOwnedSlice(gpa);
@@ -3726,6 +3742,109 @@ fn addModuleGroupSection(outer: *gtk.GtkBox, title: [:0]const u8, mgroup: *Modul
     gtk.gtk_box_append(outer, @ptrCast(listbox));
 }
 
+// ---------------------------------------------------------------------
+// Perihelion: Dock (Modules tab). The dock is a second perihelion-bar
+// (SIMPBAR_DOCK=1) showing the pinned launchers; its app drawer and
+// recycle bin buttons are ordinary pins added and removed here.
+// ---------------------------------------------------------------------
+
+const DOCK_ICON_MIN: u32 = 24;
+const DOCK_ICON_MAX: u32 = 64;
+const APPDRAWER_COMMAND = "appdrawer";
+const TRASH_COMMAND = "perihelion-trash";
+
+fn commandBase(command: []const u8) []const u8 {
+    var it = std.mem.tokenizeAny(u8, command, " \t");
+    const first = it.next() orelse return "";
+    return if (std.mem.lastIndexOfScalar(u8, first, '/')) |i| first[i + 1 ..] else first;
+}
+
+fn launchersHave(base: []const u8) bool {
+    for (live_launchers.rows[0..live_launchers.len]) |*row| {
+        if (std.mem.eql(u8, commandBase(row.button().command), base)) return true;
+    }
+    return false;
+}
+
+fn launchersRemoveAll(base: []const u8) void {
+    var i: usize = 0;
+    while (i < live_launchers.len) {
+        if (std.mem.eql(u8, commandBase(live_launchers.rows[i].button().command), base)) {
+            live_launchers.removeAt(i);
+        } else i += 1;
+    }
+}
+
+const libc_kill = struct {
+    extern "c" fn kill(pid: c_int, sig: c_int) c_int;
+};
+
+fn dockRunning() bool {
+    const dir = std.fs.path.dirname(pidfile_path) orelse return false;
+    var buf: [600]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&buf, "{s}/dock.pid", .{dir}) catch return false;
+    const text = readFileAll(path) orelse return false;
+    defer gpa.free(text);
+    const pid = std.fmt.parseInt(c_int, std.mem.trim(u8, text, " \t\r\n"), 10) catch return false;
+    return pid > 0 and libc_kill.kill(pid, 0) == 0;
+}
+
+fn onDockEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_dock_enabled = gtk.gtk_switch_get_active(sw) != 0;
+    saveAndSignal(); // a running dock reads it and leaves when switched off
+    if (live_dock_enabled and !dockRunning()) launchDetached(&.{ "SIMPBAR_DOCK=1", "perihelion-bar" });
+}
+
+fn onDockIconSizeChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    live_dock_icon_size = @intCast(std.math.clamp(gtk.gtk_spin_button_get_value_as_int(button), DOCK_ICON_MIN, DOCK_ICON_MAX));
+    saveAndSignal();
+}
+
+fn onDockAppDrawerChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    if (on == launchersHave(APPDRAWER_COMMAND)) return;
+    if (on) {
+        if (live_launchers.append("Apps", APPDRAWER_COMMAND, null)) _ = live_launchers.move(live_launchers.len - 1, 0);
+    } else launchersRemoveAll(APPDRAWER_COMMAND);
+    populatePinnedLaunchers();
+    saveAndSignal();
+}
+
+fn onDockTrashChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    if (on == launchersHave(TRASH_COMMAND)) return;
+    if (on) {
+        _ = live_launchers.append("Trash", TRASH_COMMAND, "user-trash");
+    } else launchersRemoveAll(TRASH_COMMAND);
+    populatePinnedLaunchers();
+    saveAndSignal();
+}
+
+fn addDockSwitchRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, icon: [:0]const u8, active: bool, callback: gtk.GCallback) void {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), title);
+    gtk.adw_action_row_set_subtitle(row, subtitle);
+    gtk.adw_action_row_set_icon_name(row, icon);
+    const sw = gtk.gtk_switch_new();
+    gtk.gtk_switch_set_active(sw, if (active) 1 else 0);
+    gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", callback, null, null, 0);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+    gtk.adw_action_row_set_activatable_widget(row, @ptrCast(sw));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+}
+
+fn buildDockGroup(outer: *gtk.GtkBox) void {
+    const group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(group, "Dock");
+    gtk.adw_preferences_group_set_description(group, "The dock at the bottom of the screen. Its apps are the Pinned Launchers (Shortcuts tab); drag them in the dock to reorder.");
+    addDockSwitchRow(group, "Show the dock", "Windows stop just above it.", "view-app-grid-symbolic", live_dock_enabled, @ptrCast(&onDockEnabledChanged));
+    addSpinRow(group, "Icon size (px)", @floatFromInt(DOCK_ICON_MIN), @floatFromInt(DOCK_ICON_MAX), @floatFromInt(live_dock_icon_size), @ptrCast(&onDockIconSizeChanged));
+    addDockSwitchRow(group, "App drawer", "The distro logo button that opens all your apps, first in the dock.", "view-grid-symbolic", launchersHave(APPDRAWER_COMMAND), @ptrCast(&onDockAppDrawerChanged));
+    addDockSwitchRow(group, "Recycle bin", "Opens the trash, last in the dock. Its icon shows when the trash has files.", "user-trash-symbolic", launchersHave(TRASH_COMMAND), @ptrCast(&onDockTrashChanged));
+    gtk.gtk_box_append(outer, @ptrCast(group));
+}
+
 fn buildModulesPage() *gtk.GtkBox {
     loadConfigFromDisk();
 
@@ -3735,6 +3854,7 @@ fn buildModulesPage() *gtk.GtkBox {
     gtk.gtk_widget_set_margin_start(@ptrCast(outer), 24);
     gtk.gtk_widget_set_margin_end(@ptrCast(outer), 24);
 
+    buildDockGroup(outer);
     addModuleGroupSection(outer, "Left", &live_left, &left_ctx, &LEFT_MODULE_KINDS, .all, null);
     addModuleGroupSection(outer, "Center", &live_center, &center_ctx, &LEFT_CENTER_MODULE_KINDS, .all, null);
     addModuleGroupSection(outer, "Right", &live_right, &right_ctx, &RIGHT_MODULE_KINDS, .right_bar, "Modules pinned to the bar's right edge, always visible.");

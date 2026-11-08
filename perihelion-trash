@@ -1,0 +1,18 @@
+#!/bin/sh
+# perihelion-trash: the dock's recycle bin.
+#   perihelion-trash          open the trash in the file manager
+#   perihelion-trash --empty  empty it (asks first when zenity is there)
+trash="${XDG_DATA_HOME:-$HOME/.local/share}/Trash/files"
+case "$1" in
+    --empty)
+        if command -v zenity >/dev/null 2>&1; then
+            zenity --question --title="Empty the trash?" \
+                --text="Everything in the trash will be deleted for good." || exit 0
+        fi
+        exec gio trash --empty ;;
+esac
+# trash:/// lists the bin with restore support where the file manager has
+# it; the folder itself works with any file manager.
+gio open trash:/// 2>/dev/null && exit 0
+mkdir -p "$trash"
+exec xdg-open "$trash"
