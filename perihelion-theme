@@ -9,7 +9,6 @@ Material Design 3 colors made from the wallpaper (its scheme picker: tonal
 spot, vibrant, ...). Either way the colors go everywhere the shell draws:
 
   ~/.config/simpbar/matugen.json        the bar, the cava wave, desktop widgets
-  ~/.config/nwg-drawer/drawer.css       the app drawer (Super+A)
   ~/.config/fuzzel/fuzzel.ini [colors]  the launcher and the power menu
   ~/.config/strata/themes/tokyo-night.toml   Strata, the file manager
   ~/.config/mango/colors.conf           Mango's window borders
@@ -37,7 +36,7 @@ Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
   scheme=scheme-content   Material You: matugen's --type (Event Horizon's default)
   mode=dark          Material You: dark, light or auto
 
-A file you edited by hand is left alone: the drawer CSS, fuzzel colors,
+A file you edited by hand is left alone: fuzzel colors,
 Strata theme and fastfetch colors are only rewritten while they still hold Perihelion's defaults
 or this script's own output. Turning off "Match the wallpaper" in Simpbar
 Config (auto_theme "manual") stops all of it.
@@ -488,74 +487,6 @@ def matugen_json(t):
 def rgba(h, alpha):
     r, g, b = hex_rgb(h.lstrip("#"))
     return f"rgba({r}, {g}, {b}, {alpha})"
-
-
-def drawer_css(t):
-    c = t["colors"]
-    name = t["name"]
-    return f"""/* Perihelion app drawer (nwg-drawer): {name}, accents {", ".join(t["accents"])}.
- * Written by {MARKER} on every wallpaper change. To keep your own look,
- * delete this line and edit freely: the file won't be touched again. */
-
-window {{
-    background-color: {rgba(c["base"], 0.92)};
-    color: {c["text"]};
-}}
-
-/* search entry */
-entry {{
-    background-color: {c["surface0"]};
-    color: {c["text"]};
-    border: 2px solid {t["accent"]};
-    border-radius: 8px;
-    box-shadow: none;
-    padding: 6px 10px;
-    margin: 12px;
-}}
-
-button, image {{
-    background: none;
-    border: none;
-    box-shadow: none;
-}}
-
-button {{
-    color: {c["text"]};
-    padding: 6px;
-    border-radius: 8px;
-}}
-
-button:hover,
-button:focus {{
-    background-color: {rgba(t["accent"], 0.22)};
-    color: {t["accent"]};
-}}
-
-/* category row */
-#category-button {{
-    margin: 0 8px;
-}}
-
-#category-button:checked,
-#category-button:active {{
-    color: {t["accent2"]};
-}}
-
-#pinned-box {{
-    padding-bottom: 6px;
-    border-bottom: 1px dotted {c["overlay0"]};
-}}
-
-#files-box {{
-    padding: 6px;
-    border: 1px dotted {c["overlay0"]};
-    border-radius: 12px;
-}}
-
-#power-button {{
-    color: {t["accent2"]};
-}}
-"""
 
 
 def fuzzel_colors(t):
@@ -1245,10 +1176,7 @@ def main(argv=None):
              json.dumps(matugen_json(theme), indent=2) + "\n"):
         changed.append("bar")
 
-    drawer = os.path.join(CONFIG, "nwg-drawer", "drawer.css")
-    if ours_or_default(drawer, os.path.join(SHARE, "nwg-drawer", "drawer.css")):
-        if write(drawer, drawer_css(theme)):
-            changed.append("drawer")
+    # The app drawer (Quickshell) reads the popup colors in matugen.json.
 
     if update_fuzzel(os.path.join(CONFIG, "fuzzel", "fuzzel.ini"), fuzzel_colors(theme),
                      os.path.join(SHARE, "fuzzel", "fuzzel.ini")):
