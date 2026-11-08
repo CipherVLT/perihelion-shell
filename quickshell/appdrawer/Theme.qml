@@ -81,9 +81,32 @@ Singleton {
     readonly property int durHover: 120
     readonly property int durPress: 90
 
-    // Metrics. barHeight must match simpbar's appearance.bar_height so the panel
-    // sits flush above the bar instead of overlapping or leaving a gap.
-    readonly property int barHeight: 25
+    // Metrics. barHeight is the space kept free under the panel. In Perihelion
+    // the bar is at the top and the dock (when switched on) at the bottom, so
+    // the drawer rests just above the dock: its height comes from the same
+    // config.json the dock reads (icon size plus padding, its 10 px margin and
+    // a small gap), and follows changes made in Perihelion Settings.
+    FileView {
+        id: barCfg
+        path: Quickshell.env("HOME") + "/.config/simpbar/config.json"
+        watchChanges: true
+        onFileChanged: reload()
+    }
+    readonly property int barHeight: {
+        var t = barCfg.text();
+        if (!t)
+            return 12;
+        try {
+            var d = JSON.parse(t).dock;
+            if (!d || !d.enabled)
+                return 12;
+            var icon = Math.max(24, Math.min(64, d.icon_size || 40));
+            var air = (d.shrink === false) ? 18 : 10;
+            return icon + air + 10 + 8;
+        } catch (e) {
+            return 12;
+        }
+    }
     readonly property int radius: 22
     readonly property int tileRadius: 16
     readonly property int iconSize: 44

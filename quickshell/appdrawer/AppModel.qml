@@ -257,7 +257,7 @@ Singleton {
 
     readonly property var categories: {
         if (!ready)
-            return ["All", "Favourites"];
+            return ["All"];
         var counts = {};
         var order = [];
         for (var i = 0; i < apps.length; i++) {
@@ -276,7 +276,9 @@ Singleton {
             return ia - ib;
         });
 
-        var out = ["All", "Favourites"];
+        // No Favourites column: in Perihelion, favourites are dock pins
+        // (right-click an app > Pin to dock).
+        var out = ["All"];
         for (var j = 0; j < order.length; j++)
             out.push(order[j]);
         return out;

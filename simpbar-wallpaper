@@ -337,6 +337,16 @@ cmd_set() {
     [ -f "$img" ] || die "not a file: $img"
     is_image "$img" || die "unsupported image type: $img (expected one of: $IMAGE_EXTS)"
 
+    # Perihelion: perihelion-wallpaper owns the wallpaper there (swaybg, its
+    # own saved choice, the login screen and the desktop colors), so hand it
+    # the image and only remember it here for `current` and the drawer.
+    if [ -z "$monitor" ] && command -v perihelion-wallpaper >/dev/null 2>&1; then
+        perihelion-wallpaper "$img" || die "perihelion-wallpaper could not show $(basename "$img")"
+        state_set path "$img"
+        printf '%s\n' "$img"
+        return 0
+    fi
+
     local rc=0
     apply_swaybg "$img" "$monitor" || rc=$?
     case "$rc" in
