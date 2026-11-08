@@ -790,13 +790,14 @@ def hsl_lighten(h, amount):
     return "#{:02x}{:02x}{:02x}".format(*(round(x * 255) for x in colorsys.hls_to_rgb(hh, ll, ss)))
 
 
-def hsl_band(h, lo, hi, smin=0.0):
-    """`h` with its HSL lightness held between lo and hi (0-1) and its
-    saturation at least smin: readable on a dark terminal, same hue."""
-    r, g, b = (x / 255 for x in hex_rgb(h.lstrip("#")))
-    hh, ll, ss = colorsys.rgb_to_hls(r, g, b)
-    ll, ss = min(hi, max(lo, ll)), max(smin, ss) if ss > 0.02 else ss
-    return "#{:02x}{:02x}{:02x}".format(*(round(x * 255) for x in colorsys.hls_to_rgb(hh, ll, ss)))
+def ok_band(h, lo, hi, cmin=0.10, cmax=0.20):
+    """`h` with its perceived lightness (OKLCh L) held between lo and hi and
+    a clear but not neon chroma: the same hue, readable on a dark terminal
+    whatever the hue (HSL lightness makes blue far darker than yellow)."""
+    L, C, H = lch(hex_rgb(h.lstrip("#")))
+    if C < 0.02:
+        return oklch_hex(min(hi, max(lo, L)), C, H)
+    return oklch_hex(min(hi, max(lo, L)), min(cmax, max(cmin, C)), H)
 
 
 def terminal_md(t):
@@ -864,7 +865,7 @@ def kitty_colors(t):
         bg = g("surface_container_lowest", c["crust"])
     else:
         bg = c["crust"]
-    red = hsl_band(b08, 0.56, 0.70, 0.45)
+    red = ok_band(b08, 0.66, 0.78)
     rows = [
         ("cursor", g("primary")), ("cursor_text_color", g("on_primary", c["base"])),
         ("foreground", g("on_surface", c["text"])), ("background", bg),
@@ -872,7 +873,7 @@ def kitty_colors(t):
         ("selection_foreground", g("on_secondary", c["base"])),
         ("selection_background", g("secondary")), ("url_color", g("secondary")),
         ("color0", g("surface", c["base"])), ("color8", g("surface_container_highest", c["surface1"])),
-        ("color1", red), ("color9", hsl_band(hsl_lighten(red, 10.0), 0.66, 0.80)),
+        ("color1", red), ("color9", ok_band(hsl_lighten(red, 10.0), 0.74, 0.86)),
         ("color2", g("secondary_fixed_dim", g("secondary"))), ("color10", g("secondary_fixed", g("secondary"))),
         ("color3", g("primary_fixed_dim", g("primary"))), ("color11", g("primary_fixed", g("primary"))),
         ("color4", g("on_primary_fixed_variant", g("primary"))), ("color12", g("primary")),

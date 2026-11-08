@@ -238,7 +238,8 @@ try:
     slots = dict(line.split(None, 1) for line in kc.splitlines() if line and not line.startswith("#"))
     check(lum(slots["color1"]) > 0.55, f"kitty: the OS color is bright enough to read ({slots['color1'].strip()})")
     check(float(slots["background_opacity"]) <= 0.82, "kitty, dark wallpaper: Perihelion's usual glass")
-    check(pt.hsl_band("#401010", 0.56, 0.70, 0.45) != "#401010", "hsl_band lifts a too-dark red")
+    check(lum(pt.ok_band("#401010", 0.66, 0.78)) >= 0.65, "ok_band lifts a too-dark red")
+    check(lum(pt.ok_band("#20207a", 0.66, 0.78)) >= 0.65, "ok_band lifts a too-dark blue the same")
 
     # 6b. terminal cava, btop, cmatrix
     cava_default = "[color]\ngradient = 1\ngradient_count = 3\ngradient_color_1 = '#8aadf4'\ngradient_color_2 = '#f5bde6'\ngradient_color_3 = '#eed49f'\n"
