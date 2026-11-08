@@ -27,6 +27,14 @@ Singleton {
                                   + "/quickshell/appdrawer"
 
     property var apps: ([])
+    // Apps per category, counted once per change of `apps` (the category
+    // column used to recount every app for every row on each change).
+    readonly property var catCounts: {
+        var m = {};
+        for (var i = 0; i < apps.length; i++)
+            m[apps[i].cat] = (m[apps[i].cat] || 0) + 1;
+        return m;
+    }
     property bool ready: false
     property int loadTries: 0
 

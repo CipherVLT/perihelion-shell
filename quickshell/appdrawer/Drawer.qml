@@ -90,10 +90,14 @@ PanelWindow {
     // cannot animate a readonly property.
     property real t: 0
     onOpenChanged: t = open ? 1 : 0
+    // Enter with GNOME's ease-out-quint, leave a little faster accelerating
+    // away. The bindings are read when the animation starts, which is right
+    // after `open` flips, so each direction gets its own curve.
     Behavior on t {
         NumberAnimation {
-            duration: 190
-            easing.type: Easing.OutCubic
+            duration: win.open ? Theme.durEnter : Theme.durLeave
+            easing.type: Easing.BezierSpline
+            easing.bezierCurve: win.open ? Theme.curveOut : Theme.curveIn
         }
     }
 
@@ -227,7 +231,7 @@ PanelWindow {
 
     Timer {
         id: collapseTimer
-        interval: 200
+        interval: Theme.durLeave + 20
         onTriggered: if (!win.open) win.visible = false
     }
 
@@ -235,7 +239,7 @@ PanelWindow {
     Rectangle {
         anchors.fill: parent
         color: "#000000"
-        opacity: win.t * 0.35
+        opacity: win.t * 0.30
         visible: opacity > 0.01
     }
 
@@ -253,12 +257,28 @@ PanelWindow {
         // Rest on top of the bar rather than the screen bottom: the bar is
         // layer Top and we are Overlay, so a panel flush with the screen edge
         // would cover it. Slide up from below that resting position.
-        y: (parent.height - Theme.barHeight - height) + (1 - win.t) * (parent.height + height)
-        color: Theme.bg
+        // Rise a short distance while fading and settling from 97% scale
+        // (GNOME's popover entrance) instead of travelling the whole screen
+        // height: less to repaint per frame, and it reads as one motion.
+        y: (parent.height - Theme.barHeight - height) + (1 - win.t) * 64
+        opacity: win.t
+        scale: 0.97 + 0.03 * win.t
+        transformOrigin: Item.Bottom
+        color: Theme.glass
         radius: Theme.radius
         border.width: 1
-        border.color: Theme.separator
+        border.color: Theme.glassEdge
         clip: true
+
+        // Glass: a lighter hairline along the top edge, inside the border.
+        Rectangle {
+            anchors.top: parent.top
+            anchors.topMargin: 1
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: parent.width - Theme.radius * 2
+            height: 1
+            color: Theme.glassHighlight
+        }
 
         // ---- search -------------------------------------------------------
         Item {
@@ -390,7 +410,7 @@ PanelWindow {
                     border.color: win.tab === modelData.id ? Theme.accent
                                                             : Theme.separator
                     Behavior on color {
-                        ColorAnimation { duration: 80 }
+                        ColorAnimation { duration: Theme.durHover }
                     }
 
                     Text {
@@ -502,7 +522,8 @@ PanelWindow {
                     Rectangle {
                         anchors.fill: parent
                         radius: 9
-                        color: sortHover.hovered ? Theme.hover : "transparent"
+                        color: sortHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         border.width: 1
                         border.color: Theme.separator
                     }
@@ -522,7 +543,8 @@ PanelWindow {
                     Rectangle {
                         anchors.fill: parent
                         radius: 9
-                        color: rangeHover.hovered ? Theme.hover : "transparent"
+                        color: rangeHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         border.width: 1
                         border.color: Theme.separator
                     }
@@ -541,7 +563,8 @@ PanelWindow {
                     Rectangle {
                         anchors.fill: parent
                         radius: 9
-                        color: resHover.hovered ? Theme.hover : "transparent"
+                        color: resHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         border.width: 1
                         border.color: Theme.separator
                     }
@@ -560,7 +583,8 @@ PanelWindow {
                     Rectangle {
                         anchors.fill: parent
                         radius: 9
-                        color: catHover.hovered ? Theme.hover : "transparent"
+                        color: catHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         border.width: 1
                         border.color: Theme.separator
                     }
@@ -594,7 +618,8 @@ PanelWindow {
                     Rectangle {
                         anchors.fill: parent
                         radius: 9
-                        color: anyColorHover.hovered ? Theme.hover : "transparent"
+                        color: anyColorHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         border.width: 1
                         border.color: WallhavenSearch.whColor === "" ? Theme.accent : Theme.separator
                     }
@@ -657,8 +682,23 @@ PanelWindow {
                     spacing: 2
                     clip: true
                     interactive: win.open
+                    boundsBehavior: Flickable.StopAtBounds
 
                     model: AppModel.categories
+
+                    // One highlight that glides to the chosen category instead
+                    // of each row snapping its own color: the GNOME sidebar feel.
+                    currentIndex: AppModel.categories.indexOf(AppModel.category)
+                    highlightFollowsCurrentItem: true
+                    highlightMoveDuration: Theme.durMove
+                    highlightMoveVelocity: -1
+                    highlightResizeDuration: 0
+                    highlight: Rectangle {
+                        radius: 10
+                        color: Theme.selectedSoft
+                        border.width: 1
+                        border.color: Theme.alpha(Theme.accent, 0.35)
+                    }
 
                     delegate: Item {
                         required property string modelData
@@ -669,11 +709,10 @@ PanelWindow {
 
                         Rectangle {
                             anchors.fill: parent
-                            radius: 9
-                            color: AppModel.category === modelData ? Theme.accent
-                                                                  : (catHover.hovered ? Theme.hover : "transparent")
-                            opacity: AppModel.category === modelData ? 0.20 : 1.0
-                            Behavior on color { ColorAnimation { duration: 80 } }
+                            radius: 10
+                            color: catHover.hovered && AppModel.category !== modelData
+                                   ? Theme.hoverSoft : "transparent"
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         }
 
                         Text {
@@ -683,7 +722,9 @@ PanelWindow {
                             text: AppModel.labelFor(modelData)
                             color: AppModel.category === modelData ? Theme.accent : Theme.text
                             font.pixelSize: 13
+                            font.weight: AppModel.category === modelData ? Font.DemiBold : Font.Normal
                             elide: Text.ElideRight
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         }
 
                         // count badge
@@ -691,16 +732,9 @@ PanelWindow {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.right: parent.right
                             anchors.rightMargin: 12
-                            text: {
-                                if (modelData === "All")
-                                    return String(AppModel.apps.length);
-                                if (modelData === "Favourites")
-                                    return String(AppModel.favIds.length);
-                                var n = 0;
-                                for (var i = 0; i < AppModel.apps.length; i++)
-                                    if (AppModel.apps[i].cat === modelData) n++;
-                                return String(n);
-                            }
+                            text: modelData === "All" ? String(AppModel.apps.length)
+                                  : modelData === "Favourites" ? String(AppModel.favIds.length)
+                                  : String(AppModel.catCounts[modelData] || 0)
                             color: Theme.dim
                             font.pixelSize: 11
                         }
@@ -747,7 +781,34 @@ PanelWindow {
                 model: AppModel.visibleApps
                 cellWidth: Theme.tileWidth
                 cellHeight: Theme.tileHeight
-                boundsBehavior: Flickable.StopAtBounds
+
+                // Smooth, light scrolling: wheel notches glide (SmoothWheel),
+                // drags and touchpad flicks coast and settle softly, rows just
+                // outside the view are built ahead of time so tiles never pop
+                // in, and content snaps to whole pixels so text stays crisp.
+                pixelAligned: true
+                cacheBuffer: cellHeight * 2
+                flickDeceleration: 2400
+                maximumFlickVelocity: 5200
+                boundsBehavior: Flickable.DragOverBounds
+                boundsMovement: Flickable.FollowBoundsBehavior
+                rebound: Transition {
+                    NumberAnimation { properties: "x,y"; duration: Theme.durScroll; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.curveOut }
+                }
+
+                SmoothWheel { flick: grid; step: Theme.tileHeight }
+
+                // A new filter or category swaps the whole model; settle the
+                // new set in with a short fade rather than a hard cut.
+                onModelChanged: modelFade.restart()
+                NumberAnimation {
+                    id: modelFade
+                    target: grid.contentItem
+                    property: "opacity"
+                    from: 0.35; to: 1
+                    duration: Theme.durMove
+                    easing.type: Easing.OutCubic
+                }
 
                 delegate: AppTile {
                     required property var modelData
@@ -777,6 +838,11 @@ PanelWindow {
                 }
             }
 
+            // Thin scroll indicators (siblings, so they can anchor to the grid).
+            ScrollIndicator { flick: grid; visible: grid.visible && needed && opacity > 0.01 }
+            ScrollIndicator { flick: wpGrid; visible: wpGrid.visible && needed && opacity > 0.01 }
+            ScrollIndicator { flick: whGrid; visible: whGrid.visible && needed && opacity > 0.01 }
+
             // ---- wallpaper grid --------------------------------------------
             // A sibling of the app grid rather than a swap inside it: the two
             // have unrelated models and delegate types, and keeping them as
@@ -798,7 +864,22 @@ PanelWindow {
                 model: WallpaperModel.visibleItems
                 cellWidth: 156
                 cellHeight: 132
-                boundsBehavior: Flickable.StopAtBounds
+
+                // Smooth, light scrolling: wheel notches glide (SmoothWheel),
+                // drags and touchpad flicks coast and settle softly, rows just
+                // outside the view are built ahead of time so tiles never pop
+                // in, and content snaps to whole pixels so text stays crisp.
+                pixelAligned: true
+                cacheBuffer: cellHeight * 2
+                flickDeceleration: 2400
+                maximumFlickVelocity: 5200
+                boundsBehavior: Flickable.DragOverBounds
+                boundsMovement: Flickable.FollowBoundsBehavior
+                rebound: Transition {
+                    NumberAnimation { properties: "x,y"; duration: Theme.durScroll; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.curveOut }
+                }
+
+                SmoothWheel { flick: wpGrid; step: 132 }
 
                 delegate: WallpaperTile {
                     required property var modelData
@@ -835,7 +916,16 @@ PanelWindow {
                 model: WallhavenSearch.results
                 cellWidth: 156
                 cellHeight: 132
-                boundsBehavior: Flickable.StopAtBounds
+                pixelAligned: true
+                cacheBuffer: cellHeight * 2
+                flickDeceleration: 2400
+                maximumFlickVelocity: 5200
+                boundsBehavior: Flickable.DragOverBounds
+                boundsMovement: Flickable.FollowBoundsBehavior
+                rebound: Transition {
+                    NumberAnimation { properties: "x,y"; duration: Theme.durScroll; easing.type: Easing.BezierSpline; easing.bezierCurve: Theme.curveOut }
+                }
+                SmoothWheel { flick: whGrid; step: 132 }
 
                 delegate: Item {
                     required property var modelData
@@ -1018,7 +1108,8 @@ PanelWindow {
                 Rectangle {
                     anchors.fill: parent
                     radius: 8
-                    color: moreHover.hovered ? Theme.hover : "transparent"
+                    color: moreHover.hovered ? Theme.hoverSoft : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.durHover } }
                     border.width: 1
                     border.color: Theme.separator
                     opacity: (win.wpBusy || WallhavenSearch.searching) ? 0.5 : 1.0
@@ -1050,7 +1141,8 @@ PanelWindow {
                 Rectangle {
                     anchors.fill: parent
                     radius: 8
-                    color: bingHover.hovered ? Theme.hover : "transparent"
+                    color: bingHover.hovered ? Theme.hoverSoft : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.durHover } }
                     border.width: 1
                     border.color: Theme.separator
                     opacity: win.wpBusy ? 0.5 : 1.0
@@ -1083,7 +1175,8 @@ PanelWindow {
                 Rectangle {
                     anchors.fill: parent
                     radius: 8
-                    color: onlineHover.hovered ? Theme.hover : "transparent"
+                    color: onlineHover.hovered ? Theme.hoverSoft : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.durHover } }
                     border.width: 1
                     border.color: Theme.separator
                     opacity: win.wpBusy ? 0.5 : 1.0
@@ -1115,7 +1208,8 @@ PanelWindow {
                 Rectangle {
                     anchors.fill: parent
                     radius: 8
-                    color: randHover.hovered ? Theme.hover : "transparent"
+                    color: randHover.hovered ? Theme.hoverSoft : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.durHover } }
                     border.width: 1
                     border.color: Theme.separator
                     opacity: win.wpBusy ? 0.5 : 1.0
@@ -1149,7 +1243,8 @@ PanelWindow {
                 Rectangle {
                     anchors.fill: parent
                     radius: 8
-                    color: optsHover.hovered ? Theme.hover : "transparent"
+                    color: optsHover.hovered ? Theme.hoverSoft : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.durHover } }
                     border.width: 1
                     border.color: win.optionsOpen ? Theme.accent : Theme.separator
 
@@ -1177,7 +1272,8 @@ PanelWindow {
                 Rectangle {
                     anchors.fill: parent
                     radius: 8
-                    color: pwrHover.hovered ? Theme.hover : "transparent"
+                    color: pwrHover.hovered ? Theme.hoverSoft : "transparent"
+                    Behavior on color { ColorAnimation { duration: Theme.durHover } }
                     border.width: 1
                     border.color: Theme.separator
                     opacity: win.powerOpen === "menu" ? 0.5 : 1.0
@@ -1230,7 +1326,8 @@ PanelWindow {
                         Rectangle {
                             anchors.fill: parent
                             radius: 8
-                            color: pwHover.hovered ? Theme.hover : "transparent"
+                            color: pwHover.hovered ? Theme.hoverSoft : "transparent"
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                         }
 
                         Text {
@@ -1390,7 +1487,8 @@ PanelWindow {
                         width: 22
                         height: 18
                         radius: 6
-                        color: closeXHover.hovered ? Theme.hover : "transparent"
+                        color: closeXHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
 
                         Text {
                             anchors.centerIn: parent
@@ -1489,7 +1587,8 @@ PanelWindow {
                             width: chipLabel.implicitWidth + 20
                             height: 24
                             radius: 8
-                            color: chipHover.hovered ? Theme.hover : "transparent"
+                            color: chipHover.hovered ? Theme.hoverSoft : "transparent"
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                             opacity: whOpts.purity === modelData.v ? 0.22 : 1.0
                             border.width: 1
                             border.color: whOpts.purity === modelData.v
@@ -1533,7 +1632,8 @@ PanelWindow {
                         Rectangle {
                             anchors.fill: parent
                             radius: 8
-                            color: saveHover.hovered ? Theme.hover : "transparent"
+                            color: saveHover.hovered ? Theme.hoverSoft : "transparent"
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                             border.width: 1
                             border.color: Theme.accent
 
@@ -1658,7 +1758,8 @@ PanelWindow {
                         width: 22
                         height: 18
                         radius: 6
-                        color: deskXHover.hovered ? Theme.hover : "transparent"
+                        color: deskXHover.hovered ? Theme.hoverSoft : "transparent"
+                        Behavior on color { ColorAnimation { duration: Theme.durHover } }
 
                         Text {
                             anchors.centerIn: parent
@@ -1721,7 +1822,8 @@ PanelWindow {
                         Rectangle {
                             anchors.fill: parent
                             radius: 8
-                            color: deskFavHover.hovered ? Theme.hover : "transparent"
+                            color: deskFavHover.hovered ? Theme.hoverSoft : "transparent"
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                             border.width: 1
                             border.color: Theme.separator
 

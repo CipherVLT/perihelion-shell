@@ -18,8 +18,18 @@ Rectangle {
 
     width: 156
     height: 132
-    radius: 10
-    color: hover.hovered ? Theme.hover : "transparent"
+    radius: 12
+    color: hover.hovered ? Theme.hoverSoft : "transparent"
+    scale: tapScale.pressed ? 0.96 : 1.0
+    Behavior on scale {
+        NumberAnimation {
+            duration: tapScale.pressed ? Theme.durPress : Theme.durMove
+            easing.type: tapScale.pressed ? Easing.OutCubic : Easing.OutBack
+        }
+    }
+    Behavior on color {
+        ColorAnimation { duration: Theme.durHover }
+    }
     border.width: active ? 2 : 1
     // The active wallpaper gets the accent colour so "which one is showing" is
     // answerable at a glance rather than by comparing thumbnails.
@@ -53,6 +63,15 @@ Rectangle {
             source: "file://" + encodeURI(root.wp.path)
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
+            // Decode at tile size (2x for HiDPI), not the 4K original: a full
+            // decode is ~40 MB per tile and the stall that made scrolling
+            // choppy. Crop mode needs both dimensions set.
+            sourceSize.width: 288
+            sourceSize.height: 172
+            opacity: status === Image.Ready ? 1 : 0
+            Behavior on opacity {
+                NumberAnimation { duration: Theme.durMove; easing.type: Easing.OutCubic }
+            }
             // Deliberately no cache: switching tabs should not re-decode 4K
             // JPEGs, and these fill far more cache than they are worth.
             cache: false
@@ -92,8 +111,9 @@ Rectangle {
         horizontalAlignment: Text.AlignHCenter
     }
 
-    HoverHandler { id: hover }
+    HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
     TapHandler {
+        id: tapScale
         onTapped: root.picked(root.wp.path)
     }
 }

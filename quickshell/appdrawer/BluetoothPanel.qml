@@ -551,7 +551,8 @@ Item {
                         Rectangle {
                             anchors.fill: parent
                             radius: 7
-                            color: scanHover.hovered ? Theme.hover : "transparent"
+                            color: scanHover.hovered ? Theme.hoverSoft : "transparent"
+                            Behavior on color { ColorAnimation { duration: Theme.durHover } }
                             border.width: 1
                             border.color: panel.discovering ? Theme.accent : Theme.separator
                         }
