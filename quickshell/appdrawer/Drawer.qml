@@ -72,7 +72,9 @@ PanelWindow {
     // systemctl suspend from a shell can return before the machine sleeps,
     // which reads as a no-op to the user.
     readonly property var powerActions: [
-        { label: "Lock",     cmd: ["loginctl", "lock-session"] },
+        // Under MangoWM nothing answers loginctl's lock request: Perihelion's
+        // perihelion-lock (swaylock in the wallpaper's colors) when present.
+        { label: "Lock",     cmd: ["sh", "-c", "if command -v perihelion-lock >/dev/null 2>&1; then exec perihelion-lock; else exec loginctl lock-session; fi"] },
         { label: "Suspend",  cmd: ["loginctl", "suspend"] },
         // Compositor-aware logout: under Hyprland this is the Lua-wrapped
         // `hyprctl dispatch` exit (plain `exit` parses as a Lua syntax error
@@ -1829,18 +1831,21 @@ PanelWindow {
 
                             Text {
                                 anchors.centerIn: parent
-                                text: (win.deskApp && AppModel.isFav(win.deskApp.id))
-                                      ? "Remove from favourites"
-                                      : "Add to favourites"
+                                text: "Pin to dock"
                                 color: Theme.text
                                 font.pixelSize: 12
                             }
                         }
-                        HoverHandler { id: deskFavHover }
+                        HoverHandler { id: deskFavHover; cursorShape: Qt.PointingHandCursor }
+                        // Perihelion: the dock is where favourites live. The
+                        // app joins the pinned launchers (left of the trash);
+                        // perihelion-dock-pin tells the bar and dock to reload.
                         TapHandler {
                             onTapped: {
-                                if (win.deskApp)
-                                    AppModel.toggleFav(win.deskApp.id);
+                                if (!win.deskApp || dockPinner.running)
+                                    return;
+                                dockPinner.command = ["perihelion-dock-pin", String(win.deskApp.id)];
+                                dockPinner.running = true;
                             }
                         }
                     }
@@ -1996,6 +2001,14 @@ PanelWindow {
     // Writes the add-to-desktop .desktop file (content is positional arg 1,
     // dir arg 2, sanitized basename arg 3; stdout reports the final name so
     // "(n)" collision numbering is visible).
+    // "Pin to dock" (the right-click panel).
+    Process {
+        id: dockPinner
+        onExited: (code) => {
+            deskPanel.status = code === 0 ? "Pinned to the dock." : "Could not pin it (perihelion-dock-pin).";
+        }
+    }
+
     Process {
         id: deskWriter
         stdout: StdioCollector {
