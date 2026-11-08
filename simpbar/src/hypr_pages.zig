@@ -2030,7 +2030,9 @@ pub fn buildEnvPage() *gtk.GtkBox {
 // ---------------------------------------------------------------------
 
 pub fn init() void {
-    g_mango = getenv("MANGO_INSTANCE_SIGNATURE") != null;
+    // Perihelion Settings ships only with Perihelion's Mango flavor, so the
+    // Mango pages show even when it is opened from outside the session.
+    g_mango = true;
     if (g_mango) return; // nothing here applies under MangoWM; leave hypr.state alone
     hypr.loadOrInit();
     _ = hypr.ensureBootstrapped();
