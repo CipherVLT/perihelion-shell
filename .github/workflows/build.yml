@@ -51,6 +51,16 @@ jobs:
       - name: Build simpbar-shell
         working-directory: simpbar-shell
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
+      - name: Check the app drawer's QML parses
+        run: |
+          dnf5 install -y --setopt=install_weak_deps=False qt6-qtdeclarative-devel
+          qmlformat=$(command -v qmlformat6 || command -v qmlformat || ls /usr/lib64/qt6/bin/qmlformat)
+          # qmlformat parses each file fully and fails on any syntax error;
+          # Quickshell's own types need no resolving for that.
+          for f in quickshell/appdrawer/*.qml; do
+            "$qmlformat" "$f" >/dev/null || { echo "QML syntax error in $f"; exit 1; }
+          done
+          echo "QML OK"
       - name: Test perihelion-theme
         run: |
           if [ -f perihelion-theme ]; then
