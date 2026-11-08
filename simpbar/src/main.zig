@@ -137,11 +137,18 @@ fn reserveRightCell(pen: i64, content_w: i64, limit_left: i64) CellPlacement {
 const MAX_LAUNCHERS: usize = 32;
 // Perihelion: 22 px app icons for pinned launchers and the taskbar (16 was
 // hard to see); slot widths and centering are derived from this.
-const LAUNCHER_ICON_SIZE: u32 = 22;
+// Perihelion: the dock (SIMPBAR_DOCK=1) draws its icons at the size set in
+// Perihelion Settings (config.json "dock"."icon_size"), so the caches are
+// sized for the largest choice and launcher_icon_size says how much of
+// each buffer is in use (it is also the row stride).
+const LAUNCHER_ICON_BAR: u32 = 22;
+const LAUNCHER_ICON_MAX: u32 = 64;
+const LAUNCHER_ICON_MIN: u32 = 24;
+var launcher_icon_size: u32 = LAUNCHER_ICON_BAR;
 const LAUNCHER_ICON_TEXT_GAP: i64 = 5;
 
 const LauncherIconCache = struct {
-    pixels: [LAUNCHER_ICON_SIZE * LAUNCHER_ICON_SIZE]u32 = [_]u32{0} ** (LAUNCHER_ICON_SIZE * LAUNCHER_ICON_SIZE),
+    pixels: [LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32 = [_]u32{0} ** (LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX),
     has_icon: bool = false,
     resolved: bool = false,
     /// Nerd Font codepoint for the distro logo (0 = not a distro-logo
@@ -312,6 +319,17 @@ fn relaySIGUSR1(sig: posix.SIG, info: *const posix.siginfo_t, ctx: ?*anyopaque) 
 /// launchers are positional — index i in the config maps to cache slot i.
 fn invalidateLauncherIcons() void {
     for (0..launcher_icons.len) |i| launcher_icons[i].resolved = false;
+}
+
+/// Sets the drawn icon size; a change re-decodes every launcher and
+/// running-app icon at the new size (their buffers use it as the stride).
+fn setLauncherIconSize(size: u32) void {
+    const sz = std.math.clamp(size, LAUNCHER_ICON_MIN, LAUNCHER_ICON_MAX);
+    const want = if (dock_mode) sz else LAUNCHER_ICON_BAR;
+    if (want == launcher_icon_size) return;
+    launcher_icon_size = want;
+    invalidateLauncherIcons();
+    for (&tail_icons) |*c| c.* = .{};
 }
 
 /// Installed-application icon index: lowercase lookup key (executable
@@ -508,9 +526,9 @@ fn decodeIconIntoPixels(icon_name: []const u8, dst: []u32) bool {
     var path_z_buf: [520]u8 = undefined;
     @memcpy(path_z_buf[0..path_slice.len], path_slice);
     path_z_buf[path_slice.len] = 0;
-    const decoded = icontheme.decodeIcon(std.heap.page_allocator, path_z_buf[0..path_slice.len :0], LAUNCHER_ICON_SIZE) catch return false;
+    const decoded = icontheme.decodeIcon(std.heap.page_allocator, path_z_buf[0..path_slice.len :0], launcher_icon_size) catch return false;
     defer std.heap.page_allocator.free(decoded.pixels);
-    icontheme.copyIntoIconBuffer(decoded, dst, LAUNCHER_ICON_SIZE);
+    icontheme.copyIntoIconBuffer(decoded, dst, launcher_icon_size);
     return true;
 }
 
@@ -522,7 +540,7 @@ var tail_icons: [MAX_RUNNING_APPS]TailIconCache = [_]TailIconCache{.{}} ** MAX_R
 const TailIconCache = struct {
     appid_buf: [64]u8 = undefined,
     appid_len: usize = 0,
-    pixels: [LAUNCHER_ICON_SIZE * LAUNCHER_ICON_SIZE]u32 = [_]u32{0} ** (LAUNCHER_ICON_SIZE * LAUNCHER_ICON_SIZE),
+    pixels: [LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32 = [_]u32{0} ** (LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX),
     has_icon: bool = false,
     resolved: bool = false,
 };
@@ -606,7 +624,7 @@ fn ensureTailIcons() void {
 /// inline cache. Each slot is resolved at most once per config load: a null
 /// or unresolvable icon marks the slot resolved-but-without-icon so the
 /// missing-icon case doesn't retry gdk-pixbuf on every frame.
-fn ensureLauncherIcons() void {
+fn ensureLauncherIcons(font: *font_mod.Font) void {
     for (current_config.launchers, 0..) |btn, i| {
         if (i >= launcher_icons.len) break;
         const cache = &launcher_icons[i];
@@ -622,6 +640,25 @@ fn ensureLauncherIcons() void {
         // changing its icon field can't break it.
         if (launcherLaunchesAppdrawer(btn.command)) {
             cache.distro_glyph = distroLogoCodepoint();
+            // Perihelion: in the dock the app drawer is a full-size tile
+            // (accent square, distro logo cut in the bar's color), the same
+            // size as the app icons beside it.
+            if (dock_mode and renderDistroTile(font, cache.distro_glyph, &cache.pixels)) {
+                cache.distro_glyph = 0;
+                cache.has_icon = true;
+            }
+            continue;
+        }
+        // Perihelion's recycle bin pin: the theme's full or empty trash.
+        if (launcherIsTrash(btn.command)) {
+            trash_full = trashHasFiles();
+            const names = if (trash_full) [_][]const u8{ "user-trash-full", "user-trash" } else [_][]const u8{ "user-trash", "user-trash-full" };
+            for (names) |n| {
+                if (decodeIconIntoPixels(n, &cache.pixels)) {
+                    cache.has_icon = true;
+                    break;
+                }
+            }
             continue;
         }
 
@@ -632,6 +669,100 @@ fn ensureLauncherIcons() void {
         const iname = icon orelse continue;
         if (decodeIconIntoPixels(iname, &cache.pixels)) cache.has_icon = true;
     }
+}
+
+// --- Perihelion: dock extras ---------------------------------------------
+
+/// True for Perihelion's recycle-bin pin ("perihelion-trash", any path or
+/// arguments) — Perihelion Settings adds and removes it.
+fn launcherIsTrash(command: []const u8) bool {
+    var it = std.mem.tokenizeAny(u8, command, " \t");
+    const first = it.next() orelse return false;
+    const base = if (std.mem.lastIndexOfScalar(u8, first, '/')) |i| first[i + 1 ..] else first;
+    return std.mem.eql(u8, base, "perihelion-trash");
+}
+
+/// Whether ~/.local/share/Trash/files holds anything (the bin's icon).
+var trash_full: bool = false;
+const libc_dir = struct {
+    extern "c" fn opendir(name: [*:0]const u8) ?*anyopaque;
+    extern "c" fn readdir(dir: *anyopaque) ?*const Dirent;
+    extern "c" fn closedir(dir: *anyopaque) c_int;
+    const Dirent = extern struct { ino: u64, off: i64, reclen: u16, type: u8, name: [256]u8 };
+};
+fn trashHasFiles() bool {
+    const home = getenv("HOME") orelse return false;
+    var buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&buf, "{s}/.local/share/Trash/files", .{std.mem.span(home)}) catch return false;
+    const d = libc_dir.opendir(path.ptr) orelse return false;
+    defer _ = libc_dir.closedir(d);
+    while (libc_dir.readdir(d)) |e| {
+        const n = std.mem.sliceTo(&e.name, 0);
+        if (!std.mem.eql(u8, n, ".") and !std.mem.eql(u8, n, "..")) return true;
+    }
+    return false;
+}
+
+/// Re-picks the bin's icon when the trash fills or empties (slow tick).
+fn refreshTrashIcon() bool {
+    if (!dock_mode) return false;
+    const full = trashHasFiles();
+    if (full == trash_full) return false;
+    trash_full = full;
+    var any = false;
+    for (current_config.launchers, 0..) |btn, i| {
+        if (i >= launcher_icons.len) break;
+        if (launcherIsTrash(btn.command)) {
+            launcher_icons[i].resolved = false;
+            any = true;
+        }
+    }
+    return any;
+}
+
+/// Paints the dock's app drawer button into an icon buffer: a rounded
+/// square in the accent color with the distro logo in the bar's background
+/// color, filling launcher_icon_size like any app icon.
+fn renderDistroTile(font: *font_mod.Font, codepoint: u32, dst: []u32) bool {
+    const n = launcher_icon_size;
+    const ap = &current_config.appearance;
+    const tile = ap.workspace_active_color | 0xFF000000;
+    const ink = ap.bg_color | 0xFF000000;
+    const nf: f32 = @floatFromInt(n);
+    const radius: f32 = nf * 0.28;
+    @memset(dst, 0);
+    for (0..n) |y| {
+        for (0..n) |x| {
+            // Coverage of a rounded square (1px antialiased edge).
+            const fx = @as(f32, @floatFromInt(x)) + 0.5;
+            const fy = @as(f32, @floatFromInt(y)) + 0.5;
+            const cx = std.math.clamp(fx, radius, nf - radius);
+            const cy = std.math.clamp(fy, radius, nf - radius);
+            const dist = @sqrt((fx - cx) * (fx - cx) + (fy - cy) * (fy - cy));
+            const cov = std.math.clamp(radius - dist + 0.5, 0.0, 1.0);
+            if (cov <= 0) continue;
+            const a: u32 = @intFromFloat(cov * 255.0);
+            dst[y * n + x] = (a << 24) | (tile & 0x00FFFFFF);
+        }
+    }
+    const g = font.glyphAtPx(codepoint, @max(8, n * 62 / 100)) catch return true;
+    defer font.gpa.free(g.pixels);
+    const ox: i64 = @divTrunc(@as(i64, n) - @as(i64, g.width), 2);
+    const oy: i64 = @divTrunc(@as(i64, n) - @as(i64, g.height), 2);
+    for (0..g.height) |gy| {
+        for (0..g.width) |gx| {
+            const cov = g.pixels[gy * g.width + gx];
+            if (cov == 0) continue;
+            const px = ox + @as(i64, @intCast(gx));
+            const py = oy + @as(i64, @intCast(gy));
+            if (px < 0 or py < 0 or px >= n or py >= n) continue;
+            const idx: usize = @intCast(py * @as(i64, n) + px);
+            const under = dst[idx];
+            if ((under >> 24) == 0) continue;
+            dst[idx] = (under & 0xFF000000) | (blendPixel(under | 0xFF000000, ink, cov) & 0x00FFFFFF);
+        }
+    }
+    return true;
 }
 
 // getenv is enough here; no need for std.process's env-map machinery.
@@ -1530,7 +1661,7 @@ fn tailHasIcon(g: *const UnpinnedGroup) bool {
 /// the fallback. Single source for the left measure, left draw, and center
 /// compose passes so the three can never disagree.
 fn tailButtonWidth(font: *font_mod.Font, g: *const UnpinnedGroup) i64 {
-    if (tailHasIcon(g)) return LAUNCHER_ICON_SIZE;
+    if (tailHasIcon(g)) return launcher_icon_size;
     return textPixelWidth(font, g.name());
 }
 
@@ -2448,6 +2579,15 @@ const Config = struct {
     appearance: Appearance,
     modules: ModuleLists,
     launchers: []const LauncherButton,
+    dock: DockSettings = .{},
+};
+
+/// Perihelion's dock, from config.json's "dock" (Perihelion Settings,
+/// Modules tab). The app drawer and recycle bin buttons are ordinary pins
+/// in "launchers" that the settings add and remove.
+const DockSettings = struct {
+    enabled: bool = true,
+    icon_size: u32 = 40,
 };
 
 // Today's exact hardcoded layout/order — see the header comment above.
@@ -2734,6 +2874,7 @@ const JsonConfig = struct {
     appearance: JsonAppearance = .{},
     modules: JsonModules = .{},
     launchers: []const LauncherButton = &CENTER_LAUNCHERS,
+    dock: DockSettings = .{},
 };
 
 // JSON-facing shape of ~/.config/simpbar/matugen.json — the file matugen
@@ -2980,6 +3121,7 @@ fn loadConfigFromFile() ?Config {
             .right = parsed.modules.right,
         },
         .launchers = parsed.launchers,
+        .dock = parsed.dock,
     };
 }
 
@@ -3006,12 +3148,32 @@ var dock_mode: bool = false;
 const DOCK_CENTER = [_]ModuleEntry{.{ .kind = .launchers, .enabled = true }};
 const DOCK_NONE = [_]ModuleEntry{};
 
+/// Space above plus below the dock's icons.
+const DOCK_ICON_AIR: u32 = 14;
+/// Space left between a window and the dock under it. Mango adds the
+/// layer margin and its own outer gap (gappov, 10 by default) to the
+/// exclusive zone; the zone is trimmed so the window ends this far above
+/// the dock instead of a whole gap plus margin.
+const DOCK_WINDOW_GAP: i64 = 4;
+const MANGO_OUTER_GAP: i64 = 10;
+
+/// The dock was switched off in Perihelion Settings: leave quietly.
+fn dockExitIfDisabled(cfg: Config) void {
+    if (!dock_mode or cfg.dock.enabled) return;
+    logging.step("dock: turned off in Perihelion Settings, exiting", .{});
+    if (pidfile_path.len > 0) _ = std.c.unlink(pidfile_path.ptr);
+    std.process.exit(0);
+}
+
 fn dockConfig(cfg: Config) Config {
     if (!dock_mode) return cfg;
     var c = cfg;
     c.modules = .{ .left = &DOCK_NONE, .center = &DOCK_CENTER, .right = &DOCK_NONE };
     c.appearance.position = "bottom";
     c.appearance.bar_mode = "dock";
+    // Tall enough for the chosen icon size plus a little air.
+    setLauncherIconSize(cfg.dock.icon_size);
+    c.appearance.bar_height = @max(c.appearance.bar_height, @as(@TypeOf(c.appearance.bar_height), @intCast(launcher_icon_size + DOCK_ICON_AIR)));
     return c;
 }
 
@@ -4875,7 +5037,7 @@ fn applyLayerGeometry(bar: *Bar) void {
         // dock (SIMPBAR_DOCK=1) reserves its strip instead: windows stop
         // above it, like a fixed dock.
         if (dock_mode) {
-            bar.layer_surface.setExclusiveZone(@intCast(@as(i64, current_config.appearance.bar_height) + DOCK_MARGIN_EDGE));
+            bar.layer_surface.setExclusiveZone(@intCast(@max(1, @as(i64, current_config.appearance.bar_height) + DOCK_WINDOW_GAP - MANGO_OUTER_GAP)));
         } else {
             bar.layer_surface.setExclusiveZone(0);
         }
@@ -4990,6 +5152,7 @@ fn realMain() !void {
     if (dock_mode) logging.step("dock mode: launchers only, bottom center", .{});
     resolveConfigPaths();
     current_config = loadConfig();
+    dockExitIfDisabled(current_config);
     invalidateLauncherIcons();
     resetLauncherViewOrder();
     writePidfile();
@@ -5466,6 +5629,8 @@ fn realMain() !void {
                 // New arrivals get their taskbar icons outside the draw
                 // path (SVG raster would hitch frames), bounded per tick.
                 ensureTailIcons();
+                // The dock's recycle bin follows the trash (full/empty).
+                _ = refreshTrashIcon();
             }
             // pactl subscribe feed can die (pactl upgrade, PipeWire restart);
             // respawn it on the slow tick rather than wedging the OSD's
@@ -5787,6 +5952,7 @@ fn realMain() !void {
             // the bar exactly as it was, not silently discard the user's
             // working config.
             if (loadConfigFromFile()) |file_cfg| {
+                dockExitIfDisabled(file_cfg);
                 const cfg = dockConfig(file_cfg);
                 const old_font_path = current_config.appearance.font_path;
                 const font_changed = !std.mem.eql(u8, old_font_path, cfg.appearance.font_path);
@@ -7847,7 +8013,7 @@ fn drawLeftGroup(
                     const mdraw_icon = (mhas or mdistro != 0);
                     const mdraw_label = !mdraw_icon;
                     var mdg: [4]u8 = undefined;
-                    const munit: i64 = if (mhas and mdistro == 0) LAUNCHER_ICON_SIZE else if (mdistro != 0) textPixelWidth(font, encodeBmpCodepoint(mdistro, &mdg)) else 0;
+                    const munit: i64 = if (mhas and mdistro == 0) launcher_icon_size else if (mdistro != 0) textPixelWidth(font, encodeBmpCodepoint(mdistro, &mdg)) else 0;
                     const mw = (if (mdraw_label) textPixelWidth(font, mbtn.label) else 0) + (if (mdraw_icon) munit + (if (mdraw_label) LAUNCHER_ICON_TEXT_GAP else 0) else 0);
                     if (run_first) {
                         run_start = run_x - @divTrunc(LAUNCHER_GAP, 2);
@@ -7886,7 +8052,7 @@ fn drawLeftGroup(
                     // its pill.
                     var dg_buf: [4]u8 = undefined;
                     const dg_str: []const u8 = if (distro != 0) encodeBmpCodepoint(distro, &dg_buf) else "";
-                    const icon_unit: i64 = if (draw_png) LAUNCHER_ICON_SIZE else if (draw_glyph) textPixelWidth(font, dg_str) else 0;
+                    const icon_unit: i64 = if (draw_png) launcher_icon_size else if (draw_glyph) textPixelWidth(font, dg_str) else 0;
                     const icon_w: i64 = if (draw_icon) icon_unit + (if (draw_label) LAUNCHER_ICON_TEXT_GAP else 0) else 0;
                     const label_w = (if (draw_label) textPixelWidth(font, btn.label) else 0) + icon_w;
                     const region_start = x0;
@@ -8103,7 +8269,7 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                     // it so icon_w (and everything downstream — centering,
                     // hover bounds, pen advance) stays exact.
                     var dg_buf: [4]u8 = undefined;
-                    const icon_unit: i64 = if (draw_png) LAUNCHER_ICON_SIZE else if (draw_glyph) textPixelWidth(font, encodeBmpCodepoint(distro, &dg_buf)) else 0;
+                    const icon_unit: i64 = if (draw_png) launcher_icon_size else if (draw_glyph) textPixelWidth(font, encodeBmpCodepoint(distro, &dg_buf)) else 0;
                     out.items[out.len] = .{
                         .label = if (draw_label) btn.label else "",
                         .command = btn.command,
@@ -8124,7 +8290,7 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                     seg.* = .{ .label = "", .gap_after = LAUNCHER_GAP, .focus_idx = g.client_idx, .task_focused = g.focused };
                     if (tailHasIcon(&g)) {
                         // Icon-only: no label, no icon→text gap.
-                        seg.icon_w = LAUNCHER_ICON_SIZE;
+                        seg.icon_w = launcher_icon_size;
                     } else {
                         const nl = @min(g.name().len, seg.task_buf.len);
                         @memcpy(seg.task_buf[0..nl], g.name()[0..nl]);
@@ -8346,20 +8512,20 @@ fn drawCenterGroup(
     return x0;
 }
 
-/// Blits a launcher's decoded app icon (a LAUNCHER_ICON_SIZE square, row-0
+/// Blits a launcher's decoded app icon (a launcher_icon_size square, row-0
 /// at top) with its left edge at `x0`, vertically centered, alpha-blended
 /// against the bar's background the same way the tray path blends its icons
 /// (dst is always opaque here, so coverage-weighted RGB is exact).
-/// Blits a LAUNCHER_ICON_SIZE square (row-0 at top) with its left edge at
+/// Blits a launcher_icon_size square (row-0 at top) with its left edge at
 /// `x0`, vertically centered, alpha-blended against the bar's background
 /// the same way the tray path blends its icons (dst is always opaque here,
 /// so coverage-weighted RGB is exact). Shared by launcher pins and the
 /// taskbar tail — both caches hold the same 16px format.
 fn blitIcon16(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, icon: []const u32) void {
-    const y0 = @divTrunc(@as(i64, @intCast(buf_height)) - LAUNCHER_ICON_SIZE, 2);
-    for (0..LAUNCHER_ICON_SIZE) |iy| {
-        for (0..LAUNCHER_ICON_SIZE) |ix| {
-            const src = icon[iy * LAUNCHER_ICON_SIZE + ix];
+    const y0 = @divTrunc(@as(i64, @intCast(buf_height)) - launcher_icon_size, 2);
+    for (0..launcher_icon_size) |iy| {
+        for (0..launcher_icon_size) |ix| {
+            const src = icon[iy * launcher_icon_size + ix];
             const coverage: u8 = @intCast((src >> 24) & 0xFF);
             if (coverage == 0) continue;
             const px = x0 + @as(i64, @intCast(ix));
@@ -10236,7 +10402,12 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                         handleAction(bar, r.action);
                     }
                 } else if (e.button == BTN_RIGHT) {
-                    if (r.right_action) |ra| handleAction(bar, ra);
+                    // Perihelion: right-click the dock's recycle bin to empty it.
+                    if (r.action == .launcher and r.action.launcher < current_config.launchers.len and
+                        launcherIsTrash(current_config.launchers[r.action.launcher].command))
+                    {
+                        spawnDetached("perihelion-trash --empty");
+                    } else if (r.right_action) |ra| handleAction(bar, ra);
                 }
                 return;
             }
@@ -10732,7 +10903,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
 
     // Decode any pinned-launcher icons that haven't been resolved since the
     // last config load, before any width measuring or drawing consults them.
-    ensureLauncherIcons();
+    ensureLauncherIcons(bar.font);
 
     // Four independent border edges (originally just window#waybar's
     // top-only border-width: 2px 0px 0px 0px). Which edge "faces the
