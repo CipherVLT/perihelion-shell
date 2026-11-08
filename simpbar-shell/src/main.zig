@@ -20,6 +20,7 @@ const zwlr = wayland.client.zwlr;
 const font_mod = @import("font");
 const logging = @import("logging");
 const widgets_mod = @import("widgets");
+const glass = @import("glass.zig");
 const overview_mod = @import("overview");
 
 pub const panic = std.debug.FullPanic(logging.panicHandler);
@@ -97,7 +98,7 @@ const WidgetCfg = struct {
 const ShellConfig = struct {
     font_path: []const u8 = "",
     card_bg_opacity: u8 = 55,
-    corner_radius: u32 = 12,
+    corner_radius: u32 = 18, // Perihelion: soft glass cards (simpbar: 12)
     holiday_country: []const u8 = "AU",
     holiday_region: []const u8 = "",
     /// Overview dash launch commands (shell.json `overview_favorites`).
@@ -470,6 +471,7 @@ fn reloadTheme(host: *Host) void {
         return;
     }
     host.theme = theme;
+    host.backdrop_checked = false; // the wallpaper may have changed with it
     // Every cached tile still holds the old colours, so invalidate all of
     // them — the same frame-wide reset the hover path uses.
     markAllDirty(host);
@@ -574,6 +576,13 @@ const Host = struct {
     /// output (measured: 12% -> ~3% of a core).
     tiles: [MAX_WIDGETS]?[]u32 = [_]?[]u32{null} ** MAX_WIDGETS,
     tile_dirty: u16 = 0xFFFF, // all dirty until first paint; MAX_WIDGETS ≤ 16
+    /// Frosted glass behind the cards: the wallpaper, decoded small and
+    /// blurred once (glass.zig). Re-read on startup and on each palette
+    /// reload (a wallpaper change always comes with one). A card shows the
+    /// part under it, so a tile that moves (drag) re-renders at its new spot.
+    backdrop: glass.Backdrop = .{},
+    backdrop_checked: bool = false,
+    tile_origin: [MAX_WIDGETS][2]i32 = [_][2]i32{.{ std.math.minInt(i32), 0 }} ** MAX_WIDGETS,
     /// Per-widget zoomed fonts (corner resize scales content, not just the
     /// card): slot i holds a face at the integer pixel size matching the
     /// widget's current zoom, or null when it renders at base size / the
@@ -805,6 +814,51 @@ fn saveConfig(host: *Host) void {
     logging.step("config: saved widget positions to {s}", .{shell_config_path});
 }
 
+/// The wallpaper swaybg shows: Perihelion's ~/.config/perihelion/wallpaper
+/// ("image <path>"), else simpbar's ~/.config/simpbar/wallpaper
+/// ("path=<path>"). Empty for a plain color or none.
+fn currentWallpaper(gpa: std.mem.Allocator, out: []u8) []const u8 {
+    const home = std.mem.span(getenv("HOME") orelse return "");
+    var pbuf: [512]u8 = undefined;
+    if (std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelion/wallpaper", .{home})) |p| {
+        if (readFileAlloc(gpa, p)) |text| {
+            defer gpa.free(text);
+            const line = std.mem.trim(u8, text, " \t\r\n");
+            if (std.mem.startsWith(u8, line, "image ")) {
+                const v = std.mem.trim(u8, line[6..], " \t");
+                if (v.len <= out.len) {
+                    @memcpy(out[0..v.len], v);
+                    return out[0..v.len];
+                }
+            }
+            if (std.mem.startsWith(u8, line, "color ")) return "";
+        } else |_| {}
+    } else |_| {}
+    if (std.fmt.bufPrintZ(&pbuf, "{s}/.config/simpbar/wallpaper", .{home})) |p| {
+        if (readFileAlloc(gpa, p)) |text| {
+            defer gpa.free(text);
+            var lines = std.mem.splitScalar(u8, text, '\n');
+            while (lines.next()) |raw| {
+                const line = std.mem.trim(u8, raw, " \t\r");
+                if (!std.mem.startsWith(u8, line, "path=")) continue;
+                const v = line[5..];
+                if (v.len <= out.len) {
+                    @memcpy(out[0..v.len], v);
+                    return out[0..v.len];
+                }
+            }
+        } else |_| {}
+    } else |_| {}
+    return "";
+}
+
+fn refreshBackdrop(host: *Host, d: *const Desktop) void {
+    host.backdrop_checked = true;
+    var buf: [512]u8 = undefined;
+    const path = currentWallpaper(host.gpa, &buf);
+    if (host.backdrop.loadIfChanged(host.gpa, path, @max(d.width, d.height))) markAllDirty(host);
+}
+
 fn paintDesktop(host: *Host, d: *Desktop) !void {
     const stride = d.width * 4; // ARGB8888
     const size: usize = @as(usize, stride) * d.height;
@@ -834,6 +888,17 @@ fn paintDesktop(host: *Host, d: *Desktop) !void {
     // 0) Content-driven icons: the grid's tile grows/shrinks with the
     //    scanned shortcut count before its dirty-bit tile renders.
     applyIconsSize(host);
+
+    // Glass: (re)load the blurred wallpaper when due, and re-render any card
+    // that moved since its last render (what shows through it changed).
+    if (!host.backdrop_checked) refreshBackdrop(host, d);
+    if (host.backdrop.ready()) {
+        for (0..host.widget_count) |i| {
+            const r = host.widget_rects[i];
+            if (host.tile_origin[i][0] != r.x or host.tile_origin[i][1] != r.y)
+                host.tile_dirty |= @as(u16, 1) << @intCast(i);
+        }
+    }
 
     // 1) Re-render the tiles whose widgets asked for it (state change from
     //    tick/onPipe/click, or a frame-wide hover/theme change). A tile is
@@ -870,13 +935,16 @@ fn paintDesktop(host: *Host, d: *Desktop) !void {
         switch (std.meta.activeTag(host.widgets[i])) {
             .watch, .icons => {},
             else => {
-                const fill = widgets_mod.withAlpha(
-                    host.theme.bg_color,
-                    host.theme.card_alpha,
-                );
-                tc.card(tr, fill, host.theme.border_color);
+                // Frosted glass card (glass.zig): the blurred wallpaper under
+                // it, tinted with the theme, smooth corners, a light edge.
+                glass.paintCard(tile, rect.w, rect.h, rect.x, rect.y, d.width, d.height, &host.backdrop, .{
+                    .tint = host.theme.bg_color,
+                    .tint_pct = host.theme.card_alpha,
+                    .radius = host.theme.radius_px,
+                });
             },
         }
+        host.tile_origin[i] = .{ rect.x, rect.y };
         host.widgets[i].paint(tc, tr);
         // Resize affordance over the content (tile-local): visible while
         // hovered or grabbed, repainted away with the tile otherwise. The
@@ -2026,6 +2094,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     };
     initWidgets(&host, cfg);
     defer for (host.tiles) |t| if (t) |buf| gpa.free(buf); // leak-check clean
+    defer host.backdrop.deinit(gpa);
     defer for (&host.zoom_fonts) |*slot| {
         if (slot.*) |*f| f.deinit();
         slot.* = null;
