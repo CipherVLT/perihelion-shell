@@ -70,7 +70,14 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    art_mod.addIncludePath(b.path("../simpbar/src")); // gdkpixbuf_shim.h lives with the bar's sources
+    // gdk-pixbuf's Zig declarations live with the bar's sources.
+    const pixbuf_mod = b.createModule(.{
+        .root_source_file = b.path("../simpbar/src/gdkpixbuf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    art_mod.addImport("gdkpixbuf", pixbuf_mod);
     widgets_mod.addImport("art", art_mod);
 
     // Desktop icons: icon NAME -> file resolution + pixbuf decode, straight
@@ -84,7 +91,7 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    icontheme_mod.addIncludePath(b.path("../simpbar/src")); // gdkpixbuf_shim.h
+    icontheme_mod.addImport("gdkpixbuf", pixbuf_mod);
     widgets_mod.addImport("icontheme", icontheme_mod);
 
     // Overview mode (Alt+W): the second layer surface on the overlay layer,
@@ -120,11 +127,8 @@ pub fn build(b: *Build) !void {
     // Sticky-note typing decodes the compositor's keymap through xkb; the
     // bar links the same library for its input handling.
     exe_mod.linkSystemLibrary("xkbcommon", .{});
-    // Same translate-c workaround as the bar: gdk-pixbuf.h itself is only
-    // ever included from gdkpixbuf_shim.c, compiled by a real C compiler;
-    // art.zig @cImports the shim's plain-C header.
-    exe_mod.addIncludePath(b.path("../simpbar/src"));
-    exe_mod.addCSourceFile(.{ .file = b.path("../simpbar/src/gdkpixbuf_shim.c"), .flags = &.{} });
+    // gdk-pixbuf is called through ../simpbar/src/gdkpixbuf.zig (pure Zig
+    // extern declarations); no C file is compiled.
 
     const exe = b.addExecutable(.{
         .name = "perihelion-shell",

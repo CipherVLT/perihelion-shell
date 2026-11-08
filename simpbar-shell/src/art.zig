@@ -1,5 +1,5 @@
 //! Album-art decoding for the media card, via the same gdk-pixbuf shim the
-//! bar uses for tray icons (../simpbar/src/gdkpixbuf_shim.{c,h}).
+//! bar uses for tray icons (../simpbar/src/gdkpixbuf.zig).
 //!
 //! gdk-pixbuf sniffs the image format from content, so JPEG/PNG/WebP from
 //! MPRIS art URLs all decode through one call. The caller hands over a file
@@ -8,7 +8,8 @@
 
 const std = @import("std");
 
-const c = @cImport(@cInclude("gdkpixbuf_shim.h"));
+// gdk-pixbuf through the bar's hand-written Zig declarations.
+const c = @import("gdkpixbuf");
 
 /// Cover tile interior in px (64px tile minus the 1px card border ring).
 pub const COVER_PX: u8 = 62;
