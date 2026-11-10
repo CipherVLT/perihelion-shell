@@ -142,4 +142,20 @@ You are helping improve **Perihelion Shell** — a feather-lightweight Zig Wayla
 - Fix the trash icon (currently has black smudged artifacts with Numix Circle). Make it clean and robust across icon packs.
 - Target look: soft rounded glass dock, subtle transparency/blur, clean icon presentation, no heavy drop shadow underneath.
 
-  
+  ## Bar & Dock Layout Rules
+
+### Top Bar
+- Provide a clear settings toggle to completely hide the workspace indicator/switcher.
+- Left side Application Launcher must dynamically show the logo of the current distribution (Fedora, Arch, CachyOS, Nobara, Bazzite, Pika OS, etc.).
+- Add a far-left spacer so the launcher is not flush against the screen edge.
+
+Left-side order:
+1. Spacer
+2. Distro-logo Application Launcher
+
+### Bottom Dock
+- Completely independent from the Top Bar.
+- Far left of the Dock contains its own Application Launcher (with dynamic distro logo) + Media Control Center widget next to it.
+- This left block is structurally separate from pinned/running application icons.
+- Maintain bookend symmetry with the far right side (spacer + Trash).
+- Give both ends proper breathing room.
