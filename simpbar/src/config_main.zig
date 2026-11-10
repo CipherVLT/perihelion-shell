@@ -105,10 +105,12 @@ const ModuleKind = enum {
 // tab always shows every possible right-side module, not just whichever
 // ones happen to already be in config.json. Keep this in sync with
 // drawRightGroup's switch if a new right-side kind is ever added.
+// Perihelion keeps the bar minimal: no CPU, RAM, disk, CPU temperature or
+// package-update modules (the desktop's System widget shows the stats).
 const RIGHT_MODULE_KINDS = [_]ModuleKind{
-    .power, .drawer_toggle, .volume, .pacman, .tray,
-    .weather, .cpu, .ram, .network, .disk,
-    .battery, .custom_script, .cpu_temp, .cava, .layout,
+    .power, .drawer_toggle, .volume, .tray,
+    .weather, .network,
+    .battery, .custom_script, .cava, .layout,
     // Perihelion: the clock can sit on the right too (superdock style).
     .clock,
 };
@@ -123,8 +125,10 @@ const RIGHT_MODULE_KINDS = [_]ModuleKind{
 // right-aligned module like volume, and no right-aligned renderer for a
 // left-anchored workspaces — permitting such a drop would recreate the
 // "moves in the GUI but the bar silently ignores it" trap.
+// Perihelion: no Pinned Launchers on the bar; pinned apps live on the dock
+// (Modules > Dock and the Shortcuts tab's list, which is the dock's).
 const LEFT_CENTER_MODULE_KINDS = [_]ModuleKind{
-    .workspaces, .mpris, .clock, .launchers,
+    .workspaces, .mpris, .clock,
 };
 
 // Perihelion: the Left group also draws cava (as a waveform), so its list
@@ -313,7 +317,11 @@ const JsonConfig = struct {
     modules: JsonModules = .{},
     launchers: []const LauncherButton = &CENTER_LAUNCHERS,
     dock: JsonDock = .{},
+    bar: JsonBar = .{},
 };
+
+const JsonBar = struct { enabled: bool = true };
+var live_bar_enabled: bool = true;
 
 /// Perihelion's dock (config.json "dock"; main.zig's DockSettings).
 const JsonDock = struct {
@@ -1110,8 +1118,12 @@ fn loadConfigFromDisk() void {
     // keeps load() a faithful copy and puts the migration where the other
     // kind-list repair already lives.
     stripRemovedKinds(&live_right);
+    stripRemovedKinds(&live_left);
+    stripRemovedKinds(&live_center);
     live_launchers.load(parsed.launchers);
     live_dock_enabled = parsed.dock.enabled;
+    live_bar_enabled = parsed.bar.enabled;
+    live_bar_mode = "taskbar"; // Bar Mode is retired
     // A config with both at the bottom: the bar keeps it, the dock is off
     // (written back on the next save; the dock process does the same).
     if (std.mem.eql(u8, live_position, "bottom")) live_dock_enabled = false;
@@ -1139,10 +1151,20 @@ fn loadConfigFromDisk() void {
 /// Removes entries whose kind was retired (see ModuleKind.waypaper) from a
 /// loaded group, in place, preserving order. Pure group surgery (no GUI
 /// calls) so tests can pin it.
+/// Kinds the bar no longer draws: the waypaper tombstone, and Perihelion's
+/// retired ones (bar launchers, CPU, RAM, disk, CPU temperature, package
+/// updates). Dropped on load; the next save cleans config.json.
+fn kindRemoved(kind: ModuleKind) bool {
+    return switch (kind) {
+        .waypaper, .launchers, .cpu, .ram, .disk, .cpu_temp, .pacman => true,
+        else => false,
+    };
+}
+
 fn stripRemovedKinds(group: *ModuleGroup) void {
     var w: usize = 0;
     while (w < group.len) {
-        if (group.rows[w].entry.kind == .waypaper) {
+        if (kindRemoved(group.rows[w].entry.kind)) {
             _ = group.removeAt(w);
         } else {
             w += 1;
@@ -1350,6 +1372,9 @@ fn buildConfigJson() ![]u8 {
     try appendModuleGroup(&list, &live_right);
     try list.appendSlice(gpa, "},\"launchers\":");
     try appendLaunchers(&list, &live_launchers);
+    try list.appendSlice(gpa, ",\"bar\":{\"enabled\":");
+    try list.appendSlice(gpa, if (live_bar_enabled) "true" else "false");
+    try list.append(gpa, '}');
     try list.appendSlice(gpa, ",\"dock\":{\"enabled\":");
     try list.appendSlice(gpa, if (live_dock_enabled) "true" else "false");
     try list.appendSlice(gpa, ",\"icon_size\":");
@@ -2944,8 +2969,9 @@ fn buildAppearancePage() *gtk.GtkBox {
 
     const position_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(position_group, "Position and Clock");
+    buildBarEnabledRow(position_group);
     buildPositionRow(position_group);
-    buildBarModeRow(position_group);
+    // Bar Mode is gone: the Dock (Modules > Dock) is the real dock.
     buildAutoHideRow(position_group);
     buildClockFormatRow(position_group);
     buildMonitorRow(position_group);
@@ -3446,7 +3472,7 @@ fn buildShortcutsPage() *gtk.GtkBox {
     gtk.gtk_box_append(outer, @ptrCast(form_group));
     gtk.gtk_box_append(outer, @ptrCast(create_row));
 
-    const pinned_heading = gtk.gtk_label_new("Pinned Launchers");
+    const pinned_heading = gtk.gtk_label_new("Dock Pins");
     gtk.gtk_widget_add_css_class(@ptrCast(pinned_heading), "heading");
     gtk.gtk_label_set_xalign(pinned_heading, 0);
     gtk.gtk_widget_set_margin_top(@ptrCast(pinned_heading), 12);
@@ -3941,6 +3967,37 @@ fn launchersRemoveAll(base: []const u8) void {
 const libc_kill = struct {
     extern "c" fn kill(pid: c_int, sig: c_int) c_int;
 };
+
+fn pidfileAlive(name: []const u8) bool {
+    const dir = std.fs.path.dirname(pidfile_path) orelse return false;
+    var buf: [600]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ dir, name }) catch return false;
+    const text = readFileAll(path) orelse return false;
+    defer gpa.free(text);
+    const pid = std.fmt.parseInt(c_int, std.mem.trim(u8, text, " \t\r\n"), 10) catch return false;
+    return pid > 0 and libc_kill.kill(pid, 0) == 0;
+}
+
+fn onBarEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    if (on == live_bar_enabled) return;
+    live_bar_enabled = on;
+    saveAndSignal(); // a running bar reads it and leaves when switched off
+    if (on and !pidfileAlive(std.fs.path.basename(pidfile_path))) launchDetached(&.{"perihelion-bar"});
+}
+
+fn buildBarEnabledRow(group: *gtk.AdwPreferencesGroup) void {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Show the Perihelion Bar");
+    gtk.adw_action_row_set_subtitle(row, "Off hides the top bar completely; the dock and desktop widgets stay.");
+    const sw = gtk.gtk_switch_new();
+    gtk.gtk_switch_set_active(sw, if (live_bar_enabled) 1 else 0);
+    gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onBarEnabledChanged), null, null, 0);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+    gtk.adw_action_row_set_activatable_widget(row, @ptrCast(sw));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+}
 
 fn dockRunning() bool {
     const dir = std.fs.path.dirname(pidfile_path) orelse return false;

@@ -265,9 +265,24 @@ fn distroLogoCodepoint() u32 {
     return cp;
 }
 
+/// Perihelion keeps the bar minimal: pinned apps belong to the dock, and the
+/// system-stat modules (CPU, RAM, disk, CPU temperature, package updates)
+/// are gone from the bar — the desktop's System widget shows the stats. An
+/// old config naming them still parses; the bar just draws nothing for
+/// them (like the waypaper tombstone), and Perihelion Settings drops them.
+fn retiredOnBar(kind: ModuleKind) bool {
+    return switch (kind) {
+        .cpu, .ram, .disk, .cpu_temp, .pacman => true,
+        .launchers => !dock_mode, // the dock's own module
+        else => false,
+    };
+}
+
 /// The bar's distro launcher: the distro logo in the accent color with a
 /// little air on both sides, a hover wash, and a click that toggles the app
 /// drawer. Returns the pen after it.
+const DISTRO_EDGE_SPACER: i64 = 6;
+
 fn drawDistroLauncher(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mod.Font, y0: i64, x0: i64, click_regions: *ClickRegions) i64 {
     const cp = distroLogoCodepoint();
     const adv: i64 = if (font.glyph(cp)) |g| g.advance_x else |_| 12;
@@ -2728,6 +2743,7 @@ const Config = struct {
     modules: ModuleLists,
     launchers: []const LauncherButton,
     dock: DockSettings = .{},
+    bar: BarSettings = .{},
 };
 
 /// Perihelion's dock, from config.json's "dock" (Perihelion Settings,
@@ -2757,20 +2773,26 @@ const DockSettings = struct {
     media: bool = true,
 };
 
+/// Perihelion: the top bar can be switched off (Perihelion Settings,
+/// Appearance) — config.json "bar"."enabled".
+const BarSettings = struct {
+    enabled: bool = true,
+};
+
 // Today's exact hardcoded layout/order — see the header comment above.
 const DEFAULT_LEFT = [_]ModuleEntry{
+    .{ .kind = .distro, .enabled = true },
     .{ .kind = .workspaces, .enabled = true },
     .{ .kind = .mpris, .enabled = true },
 };
+// Perihelion: pinned apps live on the dock only.
 const DEFAULT_CENTER = [_]ModuleEntry{
-    .{ .kind = .launchers, .enabled = true },
     .{ .kind = .clock, .enabled = true },
 };
 const DEFAULT_RIGHT = [_]ModuleEntry{
     .{ .kind = .power, .enabled = true },
     .{ .kind = .drawer_toggle, .enabled = true },
     .{ .kind = .volume, .enabled = true, .in_drawer = true },
-    .{ .kind = .pacman, .enabled = true, .in_drawer = true },
     .{ .kind = .tray, .enabled = true, .in_drawer = true },
     .{ .kind = .weather, .enabled = true },
 };
@@ -3042,6 +3064,7 @@ const JsonConfig = struct {
     modules: JsonModules = .{},
     launchers: []const LauncherButton = &CENTER_LAUNCHERS,
     dock: DockSettings = .{},
+    bar: BarSettings = .{},
 };
 
 // JSON-facing shape of ~/.config/simpbar/matugen.json — the file matugen
@@ -3201,7 +3224,10 @@ fn parseAppearance(j: JsonAppearance) ?Appearance {
         .font_path = j.font_path,
         .bg_opacity_percent = @min(j.bg_opacity_percent, 100),
         .position = if (std.mem.eql(u8, j.position, "top")) "top" else "bottom",
-        .bar_mode = if (std.mem.eql(u8, j.bar_mode, BAR_MODE_DOCK)) BAR_MODE_DOCK else BAR_MODE_TASKBAR,
+        // Perihelion: Bar Mode is retired (the Dock is the real dock), so the
+        // bar is always the full-width taskbar; dockConfig sets "dock" for
+        // the dock process itself.
+        .bar_mode = BAR_MODE_TASKBAR,
         .auto_hide = j.auto_hide,
         .corner_radius_px = j.corner_radius_px,
         .clock_format = validClockFormat(j.clock_format),
@@ -3289,6 +3315,7 @@ fn loadConfigFromFile() ?Config {
         },
         .launchers = parsed.launchers,
         .dock = parsed.dock,
+        .bar = parsed.bar,
     };
 }
 
@@ -3346,6 +3373,15 @@ fn readMangoOuterGap() i64 {
 }
 
 /// The dock was switched off in Perihelion Settings: leave quietly.
+/// The top bar was switched off in Perihelion Settings: leave quietly
+/// (Settings starts it again when it is switched back on).
+fn barExitIfDisabled(cfg: Config) void {
+    if (dock_mode or cfg.bar.enabled) return;
+    logging.step("bar: turned off in Perihelion Settings, exiting", .{});
+    if (pidfile_path.len > 0) _ = std.c.unlink(pidfile_path.ptr);
+    std.process.exit(0);
+}
+
 fn dockExitIfDisabled(cfg: Config) void {
     // The bar and the dock never share the bottom edge: with the bar at the
     // bottom the dock stays off (Perihelion Settings greys it out too).
@@ -5500,6 +5536,7 @@ fn realMain() !void {
     resolveConfigPaths();
     current_config = loadConfig();
     dockExitIfDisabled(current_config);
+    barExitIfDisabled(current_config);
     invalidateLauncherIcons();
     resetLauncherViewOrder();
     writePidfile();
@@ -5651,7 +5688,8 @@ fn realMain() !void {
     var weather: PolledCommand = .{};
     if (!dock_mode) startWeatherFetch(&weather);
     var pacman_updates: PolledCommand = .{};
-    if (!dock_mode) startPacmanFetch(&pacman_updates);
+    // Perihelion: no package-updates module on the bar, so no polling
+    // (checkupdates is Arch's pacman-contrib; on Fedora it only failed).
     var volume: PolledCommand = .{};
     startVolumeFetch(&volume);
     startVolumeSubscribe();
@@ -6067,7 +6105,6 @@ fn realMain() !void {
         if (poll_fds[5].revents & posix.POLL.IN != 0) {
             var expirations: u64 = undefined;
             _ = posix.read(pacman_timer_fd, std.mem.asBytes(&expirations)) catch {};
-            if (!dock_mode) startPacmanFetch(&pacman_updates);
         }
         if (poll_fds[6].revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
             if (pacman_updates.onReadable()) {
@@ -6300,6 +6337,7 @@ fn realMain() !void {
             // working config.
             if (loadConfigFromFile()) |file_cfg| {
                 dockExitIfDisabled(file_cfg);
+                barExitIfDisabled(file_cfg);
                 const cfg = dockConfig(file_cfg);
                 const old_font_path = current_config.appearance.font_path;
                 const font_changed = !std.mem.eql(u8, old_font_path, cfg.appearance.font_path);
@@ -8312,13 +8350,15 @@ fn drawLeftGroup(
     // place in the list (GNOME's Activities corner).
     for (current_config.modules.left) |entry| {
         if (entry.kind != .distro or !entry.enabled) continue;
+        // A spacer first, so the logo isn't flush against the screen edge.
+        x0 += DISTRO_EDGE_SPACER;
         x0 = drawDistroLauncher(pixels, buf_width, buf_height, font, y0, x0, click_regions);
         any_drawn = true;
         last_end = x0;
         break;
     }
     for (current_config.modules.left) |entry| {
-        if (!entry.enabled or entry.kind == .distro) continue;
+        if (!entry.enabled or entry.kind == .distro or retiredOnBar(entry.kind)) continue;
         const pen_before = x0;
         // Guaranteed module→module padding (mirroring the center group's
         // boundary gap): whatever pen the previous module's own trailing gap
@@ -8618,7 +8658,7 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
     out.* = .{};
     var emitted_any = false;
     for (current_config.modules.center) |entry| {
-        if (!entry.enabled) continue;
+        if (!entry.enabled or retiredOnBar(entry.kind)) continue;
         // Module-boundary padding: the segment that closed the previous
         // module always gets at least MODULE_GAP of trailing space, so two
         // modules never collide no matter which kinds a cross-group drag
@@ -10286,7 +10326,7 @@ fn drawRightGroup(
     var island_now = IslandSpan{};
 
     for (current_config.modules.right) |entry| {
-        if (!entry.enabled) continue;
+        if (!entry.enabled or retiredOnBar(entry.kind)) continue;
         if (entry.in_drawer and drawer_anim <= 0.0) continue;
         // Unlike the original hardcoded modules (which each had a fixed
         // in-drawer-or-not identity baked into which call site drew them),
