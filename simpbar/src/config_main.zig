@@ -1103,6 +1103,9 @@ fn loadConfigFromDisk() void {
     stripRemovedKinds(&live_right);
     live_launchers.load(parsed.launchers);
     live_dock_enabled = parsed.dock.enabled;
+    // A config with both at the bottom: the bar keeps it, the dock is off
+    // (written back on the next save; the dock process does the same).
+    if (std.mem.eql(u8, live_position, "bottom")) live_dock_enabled = false;
     live_dock_icon_size = std.math.clamp(parsed.dock.icon_size, DOCK_ICON_MIN, DOCK_ICON_MAX);
     live_dock_corner_radius = @min(parsed.dock.corner_radius, 40);
     live_dock_border = parsed.dock.border;
@@ -1564,7 +1567,44 @@ fn onModuleBorderWidthChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callco
 
 fn onPositionChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     live_position = if (gtk.adw_combo_row_get_selected(row) == 0) "top" else "bottom";
+    // The bar and the dock never share the bottom edge: the bar going to
+    // the bottom switches the dock off (and greys its switch).
+    if (std.mem.eql(u8, live_position, "bottom")) live_dock_enabled = false;
+    syncBottomRule();
     saveAndSignal();
+}
+
+// ---------------------------------------------------------------------
+// Perihelion: one bottom edge. With the dock on, the bar's Position row is
+// greyed (Top is the only choice left, so this is "Bottom disabled"); with
+// the bar at the bottom, the dock's switch is off and greyed. The bar's
+// dock process enforces the same rule from config.json.
+// ---------------------------------------------------------------------
+
+var g_position_row: ?*gtk.AdwComboRow = null;
+var g_dock_switch: ?*gtk.GtkSwitch = null;
+var g_dock_switch_row: ?*gtk.AdwActionRow = null;
+
+fn syncBottomRule() void {
+    const bar_bottom = std.mem.eql(u8, live_position, "bottom");
+    if (g_position_row) |row| {
+        gtk.gtk_widget_set_sensitive(@ptrCast(row), if (live_dock_enabled) 0 else 1);
+        gtk.adw_action_row_set_subtitle(@ptrCast(row), if (live_dock_enabled)
+            "Bottom is taken by the dock. Turn the dock off (Modules > Dock) to move the bar there."
+        else
+            "");
+    }
+    if (g_dock_switch) |sw| {
+        if ((gtk.gtk_switch_get_active(sw) != 0) != live_dock_enabled)
+            gtk.gtk_switch_set_active(sw, if (live_dock_enabled) 1 else 0);
+    }
+    if (g_dock_switch_row) |row| {
+        gtk.gtk_widget_set_sensitive(@ptrCast(row), if (bar_bottom) 0 else 1);
+        gtk.adw_action_row_set_subtitle(row, if (bar_bottom)
+            "The bar is at the bottom. Move it to the top (Appearance > Position) to use the dock."
+        else
+            "Windows stop just above it.");
+    }
 }
 
 fn onBarModeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
@@ -1619,6 +1659,8 @@ fn buildPositionRow(group: *gtk.AdwPreferencesGroup) void {
     _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onPositionChanged), null, null, 0);
 
     gtk.adw_preferences_group_add(group, @ptrCast(row));
+    g_position_row = row;
+    syncBottomRule();
 }
 
 const CLOCK_FORMAT_CHOICES = [_][]const u8{
@@ -3831,7 +3873,16 @@ fn dockRunning() bool {
 }
 
 fn onDockEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    live_dock_enabled = gtk.gtk_switch_get_active(sw) != 0;
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    if (on == live_dock_enabled) return; // set by syncBottomRule
+    // Greyed while the bar is at the bottom, so it can only come on with the
+    // bar at the top; guard anyway.
+    if (on and std.mem.eql(u8, live_position, "bottom")) {
+        gtk.gtk_switch_set_active(sw, 0);
+        return;
+    }
+    live_dock_enabled = on;
+    syncBottomRule();
     saveAndSignal(); // a running dock reads it and leaves when switched off
     if (live_dock_enabled and !dockRunning()) launchDetached(&.{ "SIMPBAR_DOCK=1", "perihelion-bar" });
 }
@@ -3891,6 +3942,12 @@ fn onDockWindowGapChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.
 }
 
 fn addDockSwitchRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, icon: [:0]const u8, active: bool, callback: gtk.GCallback) void {
+    _ = addDockSwitchRowRef(group, title, subtitle, icon, active, callback);
+}
+
+const DockSwitchRef = struct { row: *gtk.AdwActionRow, sw: *gtk.GtkSwitch };
+
+fn addDockSwitchRowRef(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, icon: [:0]const u8, active: bool, callback: gtk.GCallback) DockSwitchRef {
     const row = gtk.adw_action_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), title);
     if (subtitle.len > 0) gtk.adw_action_row_set_subtitle(row, subtitle);
@@ -3902,13 +3959,17 @@ fn addDockSwitchRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtit
     gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
     gtk.adw_action_row_set_activatable_widget(row, @ptrCast(sw));
     gtk.adw_preferences_group_add(group, @ptrCast(row));
+    return .{ .row = row, .sw = sw };
 }
 
 fn buildDockGroup(outer: *gtk.GtkBox) void {
     const group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(group, "Dock");
     gtk.adw_preferences_group_set_description(group, "The dock at the bottom of the screen. Right-click an app in the app drawer to pin it; drag pins in the dock to reorder (the trash stays at the end). Exclusive zone is the space between windows and the dock.");
-    addDockSwitchRow(group, "Show the dock", "Windows stop just above it.", "view-app-grid-symbolic", live_dock_enabled, @ptrCast(&onDockEnabledChanged));
+    const show = addDockSwitchRowRef(group, "Show the dock", "Windows stop just above it.", "view-app-grid-symbolic", live_dock_enabled, @ptrCast(&onDockEnabledChanged));
+    g_dock_switch = show.sw;
+    g_dock_switch_row = show.row;
+    syncBottomRule();
     addSpinRow(group, "Icon size (px)", @floatFromInt(DOCK_ICON_MIN), @floatFromInt(DOCK_ICON_MAX), @floatFromInt(live_dock_icon_size), @ptrCast(&onDockIconSizeChanged));
     addDockSwitchRow(group, "Shrink the dash", "Tighter padding and spacing around the icons.", "view-restore-symbolic", live_dock_shrink, @ptrCast(&onDockShrinkChanged));
     addSpinRow(group, "Exclusive zone (px)", 0, 40, @floatFromInt(live_dock_window_gap), @ptrCast(&onDockWindowGapChanged));
