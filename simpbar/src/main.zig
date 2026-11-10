@@ -281,12 +281,12 @@ fn retiredOnBar(kind: ModuleKind) bool {
 /// The bar's distro launcher: the distro logo in the accent color with a
 /// little air on both sides, a hover wash, and a click that toggles the app
 /// drawer. Returns the pen after it.
-const DISTRO_EDGE_SPACER: i64 = 6;
+const DISTRO_EDGE_SPACER: i64 = 4;
 
 fn drawDistroLauncher(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mod.Font, y0: i64, x0: i64, click_regions: *ClickRegions) i64 {
     const cp = distroLogoCodepoint();
     const adv: i64 = if (font.glyph(cp)) |g| g.advance_x else |_| 12;
-    const pad: i64 = 8;
+    const pad: i64 = 4;
     const start = x0;
     const end = x0 + pad + adv + pad;
     drawPill(pixels, buf_width, buf_height, start, end, click_regions.nextHover());
@@ -2488,7 +2488,10 @@ const CENTER_LAUNCHERS = [_]LauncherButton{
 // custom/power from "modules-right" — icon only in the real config, no text.
 // The power menu lives in the app drawer (lock / log out / reboot / power
 // off); wlogout is no longer installed, so this opens that menu instead.
-const POWER_BUTTON = LauncherButton{ .label = "\u{f0425}", .command = "appdrawer power" };
+// Perihelion: the power button opens the power menu only (fuzzel: Lock,
+// Log out, Suspend, Reboot, Power off), not the app drawer. Upstream's
+// drawer power page is the fallback where perihelion-power-menu is absent.
+const POWER_BUTTON = LauncherButton{ .label = "\u{f0425}", .command = "perihelion-power-menu || appdrawer power" };
 
 // Drawer toggle chevrons (Nerd Font Font Awesome, matching the power and
 // launcher icon language — not text glyphs). Up chevron while the drawer is
@@ -5548,9 +5551,16 @@ fn realMain() !void {
     if (getenv("SIMPBAR_DOCK")) |v| dock_mode = v[0] == '1';
     if (dock_mode) logging.step("dock mode: launchers only, bottom center", .{});
     resolveConfigPaths();
+    // The on/off and bottom-edge checks read the file as written: loadConfig
+    // runs dockConfig, which sets the dock's own position to "bottom", and
+    // checking that made the dock think the bar was at the bottom and quit
+    // at every start.
+    {
+        const file_cfg = loadConfigFromFile() orelse defaultConfig();
+        dockExitIfDisabled(file_cfg);
+        barExitIfDisabled(file_cfg);
+    }
     current_config = loadConfig();
-    dockExitIfDisabled(current_config);
-    barExitIfDisabled(current_config);
     invalidateLauncherIcons();
     resetLauncherViewOrder();
     writePidfile();
@@ -8364,8 +8374,9 @@ fn drawLeftGroup(
     // place in the list (GNOME's Activities corner).
     for (current_config.modules.left) |entry| {
         if (entry.kind != .distro or !entry.enabled) continue;
-        // A spacer first, so the logo isn't flush against the screen edge.
-        x0 += DISTRO_EDGE_SPACER;
+        // Near the left corner: a small spacer from the screen edge instead
+        // of the bar's usual module inset, so the logo sits in the corner.
+        x0 = @min(x0_start, DISTRO_EDGE_SPACER);
         x0 = drawDistroLauncher(pixels, buf_width, buf_height, font, y0, x0, click_regions);
         any_drawn = true;
         last_end = x0;
