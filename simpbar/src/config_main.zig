@@ -95,6 +95,8 @@ const ModuleKind = enum {
     cava,
     /// Mango layout switcher (right-side only; hidden under Hyprland).
     layout,
+    /// Perihelion: the distro-logo app launcher at the far left.
+    distro,
 };
 
 // Every ModuleKind valid in the "right" group per main.zig's drawRightGroup
@@ -127,7 +129,7 @@ const LEFT_CENTER_MODULE_KINDS = [_]ModuleKind{
 
 // Perihelion: the Left group also draws cava (as a waveform), so its list
 // carries a cava row of its own. That lets cava be on at both ends at once.
-const LEFT_MODULE_KINDS = LEFT_CENTER_MODULE_KINDS ++ [_]ModuleKind{.cava};
+const LEFT_MODULE_KINDS = LEFT_CENTER_MODULE_KINDS ++ [_]ModuleKind{ .cava, .distro };
 
 const ModuleEntry = struct {
     kind: ModuleKind,
@@ -324,7 +326,11 @@ const JsonDock = struct {
     trash: bool = true,
     window_gap: u32 = 0,
     shrink: bool = true,
+    app_drawer: bool = true,
+    media: bool = true,
 };
+var live_dock_app_drawer: bool = true;
+var live_dock_media: bool = true;
 var live_dock_trash: bool = true;
 var live_dock_window_gap: u32 = 0;
 var live_dock_shrink: bool = true;
@@ -694,6 +700,9 @@ const MAX_ROW_TEXT = 256;
 
 const ModuleRow = struct {
     entry: ModuleEntry = .{ .kind = .clock },
+    /// Its on/off switch in the Modules page, so the Top bar group's
+    /// dedicated switches can keep it in step.
+    enabled_switch: ?*gtk.GtkSwitch = null,
     label_buf: [MAX_ROW_TEXT]u8 = undefined,
     command_buf: [MAX_ROW_TEXT]u8 = undefined,
 };
@@ -1114,6 +1123,11 @@ fn loadConfigFromDisk() void {
     live_dock_trash = parsed.dock.trash;
     live_dock_window_gap = @min(parsed.dock.window_gap, 40);
     live_dock_shrink = parsed.dock.shrink;
+    live_dock_app_drawer = parsed.dock.app_drawer;
+    live_dock_media = parsed.dock.media;
+    // The dock's launcher is its own fixed button now (left bookend), not a
+    // pin: an older config's app drawer pin goes (saved on the next change).
+    if (launchersHave(APPDRAWER_COMMAND)) launchersRemoveAll(APPDRAWER_COMMAND);
     // An older Perihelion kept the trash as a pin: it is the dock's own
     // fixed button now (saved on the next change).
     if (launchersHave(TRASH_COMMAND)) {
@@ -1352,6 +1366,10 @@ fn buildConfigJson() ![]u8 {
     try appendJsonInt(&list, u32, live_dock_window_gap);
     try list.appendSlice(gpa, ",\"shrink\":");
     try list.appendSlice(gpa, if (live_dock_shrink) "true" else "false");
+    try list.appendSlice(gpa, ",\"app_drawer\":");
+    try list.appendSlice(gpa, if (live_dock_app_drawer) "true" else "false");
+    try list.appendSlice(gpa, ",\"media\":");
+    try list.appendSlice(gpa, if (live_dock_media) "true" else "false");
     try list.appendSlice(gpa, ",\"colored_glass\":");
     try list.appendSlice(gpa, if (live_dock_colored_glass) "true" else "false");
     try list.append(gpa, '}');
@@ -3502,6 +3520,7 @@ fn moduleKindDisplayName(kind: ModuleKind) [:0]const u8 {
         .cpu_temp => "CPU Temperature",
         .cava => "Audio Visualizer",
         .layout => "Mango Layout",
+        .distro => "App Launcher (distro logo)",
     };
 }
 
@@ -3521,8 +3540,68 @@ fn setEntryText(buffer: *gtk.GtkEntryBuffer, text: []const u8) void {
 
 fn onModuleEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
     const row: *ModuleRow = @ptrCast(@alignCast(user_data.?));
-    row.entry.enabled = gtk.gtk_switch_get_active(sw) != 0;
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    if (on == row.entry.enabled) return; // already in step (Top bar group)
+    row.entry.enabled = on;
+    syncTopBarSwitches();
     saveAndSignal();
+}
+
+// ---------------------------------------------------------------------
+// Perihelion: Top bar group (Modules tab). Dedicated switches for the two
+// left-edge pieces people look for first: the workspace indicator and the
+// distro-logo app launcher. Each flips the Left group's own row (the bar
+// skips a disabled module entirely), and the two stay in step.
+// ---------------------------------------------------------------------
+
+var g_ws_switch: ?*gtk.GtkSwitch = null;
+var g_distro_switch: ?*gtk.GtkSwitch = null;
+
+fn leftRow(kind: ModuleKind) ?*ModuleRow {
+    for (live_left.rows[0..live_left.len]) |*row| {
+        if (row.entry.kind == kind) return row;
+    }
+    return null;
+}
+
+fn setLeftEnabled(kind: ModuleKind, on: bool) void {
+    const row = leftRow(kind) orelse return;
+    if (row.entry.enabled == on) return;
+    row.entry.enabled = on;
+    if (row.enabled_switch) |sw| {
+        if ((gtk.gtk_switch_get_active(sw) != 0) != on) gtk.gtk_switch_set_active(sw, if (on) 1 else 0);
+    }
+    saveAndSignal();
+}
+
+fn syncTopBarSwitches() void {
+    for ([_]struct { sw: ?*gtk.GtkSwitch, kind: ModuleKind }{
+        .{ .sw = g_ws_switch, .kind = .workspaces },
+        .{ .sw = g_distro_switch, .kind = .distro },
+    }) |p| {
+        const sw = p.sw orelse continue;
+        const on = if (leftRow(p.kind)) |r| r.entry.enabled else false;
+        if ((gtk.gtk_switch_get_active(sw) != 0) != on) gtk.gtk_switch_set_active(sw, if (on) 1 else 0);
+    }
+}
+
+fn onTopBarWorkspaces(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    setLeftEnabled(.workspaces, gtk.gtk_switch_get_active(sw) != 0);
+}
+
+fn onTopBarDistro(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    setLeftEnabled(.distro, gtk.gtk_switch_get_active(sw) != 0);
+}
+
+fn buildTopBarGroup(outer: *gtk.GtkBox) void {
+    const group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(group, "Top bar");
+    gtk.adw_preferences_group_set_description(group, "The left edge of the Perihelion Bar. The same switches are in the Left list below.");
+    const ws_on = if (leftRow(.workspaces)) |r| r.entry.enabled else false;
+    const distro_on = if (leftRow(.distro)) |r| r.entry.enabled else false;
+    g_distro_switch = addDockSwitchRowRef(group, "App launcher", "Your distro's logo at the far left; opens the app drawer.", "view-app-grid-symbolic", distro_on, @ptrCast(&onTopBarDistro)).sw;
+    g_ws_switch = addDockSwitchRowRef(group, "Workspace indicator", "The workspace switcher. Off removes it from the bar completely.", "view-paged-symbolic", ws_on, @ptrCast(&onTopBarWorkspaces)).sw;
+    gtk.gtk_box_append(outer, @ptrCast(group));
 }
 
 fn onCustomLabelChanged(buffer: *gtk.GtkEntryBuffer, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
@@ -3745,6 +3824,7 @@ fn addModuleRow(listbox: *gtk.GtkListBox, row: *ModuleRow, reorderable: bool) vo
     gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
     _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onModuleEnabledChanged), @ptrCast(row), null, 0);
     gtk.adw_action_row_add_suffix(arow, @ptrCast(sw));
+    row.enabled_switch = sw;
 
     gtk.gtk_list_box_append(listbox, @ptrCast(arow));
 
@@ -3917,12 +3997,12 @@ fn onDockGlassChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) ca
 }
 
 fn onDockAppDrawerChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    const on = gtk.gtk_switch_get_active(sw) != 0;
-    if (on == launchersHave(APPDRAWER_COMMAND)) return;
-    if (on) {
-        if (live_launchers.append("Apps", APPDRAWER_COMMAND, null)) _ = live_launchers.move(live_launchers.len - 1, 0);
-    } else launchersRemoveAll(APPDRAWER_COMMAND);
-    populatePinnedLaunchers();
+    live_dock_app_drawer = gtk.gtk_switch_get_active(sw) != 0;
+    saveAndSignal();
+}
+
+fn onDockMediaChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_dock_media = gtk.gtk_switch_get_active(sw) != 0;
     saveAndSignal();
 }
 
@@ -3977,7 +4057,8 @@ fn buildDockGroup(outer: *gtk.GtkBox) void {
     addDockSwitchRow(group, "Dock border", "A ring in the wallpaper's color around the dock.", "object-select-symbolic", live_dock_border, @ptrCast(&onDockBorderChanged));
     addSpinRow(group, "Border size (px)", 1, 4, @floatFromInt(live_dock_border_size), @ptrCast(&onDockBorderSizeChanged));
     addDockSwitchRow(group, "Colored glass", "A faint tint of the wallpaper's color in a slightly see-through dock.", "weather-clear-night-symbolic", live_dock_colored_glass, @ptrCast(&onDockGlassChanged));
-    addDockSwitchRow(group, "App drawer", "The distro logo button that opens all your apps, first in the dock.", "view-grid-symbolic", launchersHave(APPDRAWER_COMMAND), @ptrCast(&onDockAppDrawerChanged));
+    addDockSwitchRow(group, "App launcher", "Your distro's logo at the far left; opens the app drawer.", "view-grid-symbolic", live_dock_app_drawer, @ptrCast(&onDockAppDrawerChanged));
+    addDockSwitchRow(group, "Media controls", "Previous, play/pause, next and the track, beside the launcher.", "media-playback-start-symbolic", live_dock_media, @ptrCast(&onDockMediaChanged));
     addDockSwitchRow(group, "Trash", "", "user-trash-symbolic", live_dock_trash, @ptrCast(&onDockTrashChanged));
     gtk.gtk_box_append(outer, @ptrCast(group));
 }
@@ -3991,6 +4072,7 @@ fn buildModulesPage() *gtk.GtkBox {
     gtk.gtk_widget_set_margin_start(@ptrCast(outer), 24);
     gtk.gtk_widget_set_margin_end(@ptrCast(outer), 24);
 
+    buildTopBarGroup(outer);
     buildDockGroup(outer);
     addModuleGroupSection(outer, "Left", &live_left, &left_ctx, &LEFT_MODULE_KINDS, .all, null);
     addModuleGroupSection(outer, "Center", &live_center, &center_ctx, &LEFT_CENTER_MODULE_KINDS, .all, null);
