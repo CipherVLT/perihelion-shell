@@ -123,3 +123,23 @@ You are helping improve **Perihelion Shell** — a feather-lightweight Zig Wayla
 - Improve all desktop widgets (weather, calendar, media, system, etc.) to have a clean modern glass/blur style
 - Target look: soft rounded glass panels, good blur, refined spacing, clean typography, and high visual quality (inspired by clean Event Horizon / modern glass widgets)
 - Make widgets feel polished and professionally coded rather than basic
+
+## Bar & Dock Rules (Important)
+
+### Mutual Exclusion
+- The Perihelion Bar and the Dock cannot both be active at the bottom at the same time.
+- If the Dock is enabled → the “Bottom” position option for the Perihelion Bar must be greyed out / disabled.
+- If the Perihelion Bar is set to Bottom → the Dock must automatically turn off and be greyed out.
+- This prevents overlapping and keeps the desktop clean.
+
+### Visual Style (Glass & Clean)
+- Remove all solid/heavy shadows from both the Perihelion Bar and the Dock.
+- The Dock should have a clean, floating, see-through glass look (inspired by Event Horizon super dock).
+- The Perihelion Bar should also be clean glass with no shadows under the clock, weather, or system icons.
+- Both should let the wallpaper show through clearly.
+
+### Dock Specific
+- Fix the trash icon (currently has black smudged artifacts with Numix Circle). Make it clean and robust across icon packs.
+- Target look: soft rounded glass dock, subtle transparency/blur, clean icon presentation, no heavy drop shadow underneath.
+
+  
