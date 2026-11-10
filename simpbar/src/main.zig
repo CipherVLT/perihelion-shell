@@ -7801,8 +7801,8 @@ fn blendPixel(dst: u32, color: u32, coverage: u8) u32 {
 /// fills used to keep full-strength rgb under a lower alpha, which the
 /// compositor reads as brighter and more solid than asked: the "glass"
 /// barely showed the wallpaper.
+fn premulPct(color: u32, pct: u32) u32 {
     const a: u32 = @as(u32, @min(pct, 100)) * 255 / 100;
-    const a: u32 = @min(pct, 100) * 255 / 100;
     const r = ((color >> 16) & 0xFF) * a / 255;
     const g = ((color >> 8) & 0xFF) * a / 255;
     const b = (color & 0xFF) * a / 255;
