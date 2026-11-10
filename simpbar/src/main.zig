@@ -180,6 +180,8 @@ const DISTRO_GLYPHS = std.StaticStringMap(u32).initComptime(.{
     .{ "pop_os", 0xF32A }, .{ "linuxmint", 0xF30E }, .{ "zorin", 0xF32F },
     .{ "elementary", 0xF309 }, .{ "kubuntu", 0xF333 }, .{ "kde_neon", 0xF331 },
     .{ "neon", 0xF331 }, .{ "fedora", 0xF30A }, .{ "nobara", 0xF380 },
+    // No Nerd Font logo of their own: their parent's.
+    .{ "bazzite", 0xF30A }, .{ "pika", 0xF31B }, .{ "pikaos", 0xF31B },
     .{ "rhel", 0xF316 }, .{ "redhat", 0xF316 }, .{ "centos", 0xF304 },
     .{ "rocky", 0xF32B }, .{ "almalinux", 0xF31D },
     .{ "opensuse", 0xF314 }, .{ "tumbleweed", 0xF37D },
@@ -212,7 +214,9 @@ fn osReleaseValue(key: []const u8, out: []u8) ?[]const u8 {
     const raw = posix.system.open("/etc/os-release", .{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
     if (raw < 0) return null;
     defer _ = posix.system.close(raw);
-    var fbuf: [256]u8 = undefined;
+    // The whole file: ID_LIKE sits past the first 256 bytes on distros with
+    // long os-release files (Bazzite, Nobara), and was never found.
+    var fbuf: [2048]u8 = undefined;
     const n = posix.system.read(raw, &fbuf, fbuf.len);
     if (n <= 0) return null;
     const text = fbuf[0..@as(usize, @intCast(n))];
@@ -259,6 +263,21 @@ fn distroLogoCodepoint() u32 {
     }
     g_distro_glyph = cp;
     return cp;
+}
+
+/// The bar's distro launcher: the distro logo in the accent color with a
+/// little air on both sides, a hover wash, and a click that toggles the app
+/// drawer. Returns the pen after it.
+fn drawDistroLauncher(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mod.Font, y0: i64, x0: i64, click_regions: *ClickRegions) i64 {
+    const cp = distroLogoCodepoint();
+    const adv: i64 = if (font.glyph(cp)) |g| g.advance_x else |_| 12;
+    const pad: i64 = 8;
+    const start = x0;
+    const end = x0 + pad + adv + pad;
+    drawPill(pixels, buf_width, buf_height, start, end, click_regions.nextHover());
+    _ = drawGlyphAt(pixels, buf_width, buf_height, font, start + pad, y0, cp, current_config.appearance.workspace_active_color, 0, buf_width);
+    click_regions.add(@intCast(start), @intCast(end), .{ .spawn = "appdrawer" });
+    return end;
 }
 
 /// True when `command` launches the app drawer: the first
@@ -322,6 +341,7 @@ fn relaySIGUSR1(sig: posix.SIG, info: *const posix.siginfo_t, ctx: ?*anyopaque) 
 /// launchers are positional — index i in the config maps to cache slot i.
 fn invalidateLauncherIcons() void {
     for (0..launcher_icons.len) |i| launcher_icons[i].resolved = false;
+    dock_drawer_icon.resolved = false; // theme colors or icon size changed
 }
 
 /// Sets the drawn icon size; a change re-decodes every launcher and
@@ -647,6 +667,7 @@ fn ensureTrashIcon() void {
 
 fn ensureLauncherIcons(font: *font_mod.Font) void {
     ensureTrashIcon();
+    ensureDockDrawerIcon(font);
     for (current_config.launchers, 0..) |btn, i| {
         if (i >= launcher_icons.len) break;
         const cache = &launcher_icons[i];
@@ -682,6 +703,86 @@ fn ensureLauncherIcons(font: *font_mod.Font) void {
 }
 
 // --- Perihelion: dock extras ---------------------------------------------
+
+/// The dock's launcher tile (accent square with the distro logo), drawn at
+/// the dock's icon size; re-rendered when the size or theme changes.
+var dock_drawer_icon: LauncherIconCache = .{};
+
+fn ensureDockDrawerIcon(font: *font_mod.Font) void {
+    if (!dock_mode or dock_drawer_icon.resolved) return;
+    dock_drawer_icon = .{ .resolved = true };
+    dock_drawer_icon.has_icon = renderDistroTile(font, distroLogoCodepoint(), &dock_drawer_icon.pixels);
+}
+
+// --- Dock media controls (left bookend) --------------------------------
+// A glass chip: previous / play-pause / next, then the track (or "No
+// media"), capped so a long title can't push the pins around.
+
+const DOCK_MEDIA_PAD: i64 = 10;
+const DOCK_MEDIA_BTN_GAP: i64 = 6;
+const DOCK_MEDIA_TEXT_GAP: i64 = 10;
+const DOCK_MEDIA_TEXT_MAX: i64 = 180;
+
+fn dockMediaButtonW(font: *font_mod.Font) i64 {
+    const adv: i64 = if (font.glyph(0xf04b)) |g| g.advance_x else |_| 10;
+    return adv + 8;
+}
+
+fn dockMediaText(text: []const u8) []const u8 {
+    return if (text.len > 0) text else "No media";
+}
+
+fn dockMediaWidth(font: *font_mod.Font, mpris_text: []const u8) i64 {
+    const text_w = @min(DOCK_MEDIA_TEXT_MAX, textPixelWidth(font, dockMediaText(mpris_text)));
+    return DOCK_MEDIA_PAD + 3 * dockMediaButtonW(font) + 2 * DOCK_MEDIA_BTN_GAP + DOCK_MEDIA_TEXT_GAP + text_w + DOCK_MEDIA_PAD;
+}
+
+/// Glyphs of `text` until `max_w` px; past it the run ends in an ellipsis.
+fn drawTextCapped(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mod.Font, x_start: i64, y0: i64, text: []const u8, max_w: i64, color: u32) void {
+    const ell: u32 = 0x2026;
+    const ell_w: i64 = if (font.glyph(ell)) |g| g.advance_x else |_| 6;
+    const full = textPixelWidth(font, text) <= max_w;
+    var x = x_start;
+    var i: usize = 0;
+    while (nextUtf8Codepoint(text, &i)) |cp| {
+        const adv: i64 = if (font.glyph(cp)) |g| g.advance_x else |_| 0;
+        if (!full and x + adv > x_start + max_w - ell_w) {
+            _ = drawGlyphAt(pixels, buf_width, buf_height, font, x, y0, ell, color, 0, buf_width);
+            return;
+        }
+        x += drawGlyphAt(pixels, buf_width, buf_height, font, x, y0, cp, color, 0, buf_width);
+    }
+}
+
+fn drawDockMedia(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mod.Font, y0: i64, x_start: i64, width: i64, mpris_text: []const u8, playing: bool, click_regions: *ClickRegions) i64 {
+    const ap = &current_config.appearance;
+    const h: i64 = @intCast(buf_height);
+    const top = @divTrunc(h - launcher_icon_size, 2);
+    const bottom = top + launcher_icon_size;
+    // The chip: a light glass wash composited over the dock (not a cut-out).
+    fillRoundedRectOver(pixels, buf_width, buf_height, x_start, top, x_start + width, bottom, @intCast(@divTrunc(launcher_icon_size, 2)), ap.text_color, 26);
+
+    const bw = dockMediaButtonW(font);
+    var x = x_start + DOCK_MEDIA_PAD;
+    const controls = [_]struct { cp: u32, ctl: MprisControl }{
+        .{ .cp = 0xf048, .ctl = .previous }, // fa-step-backward
+        .{ .cp = if (playing) 0xf04c else 0xf04b, .ctl = .play_pause },
+        .{ .cp = 0xf051, .ctl = .next }, // fa-step-forward
+    };
+    const has_player = mpris_text.len > 0;
+    for (controls, 0..) |c, k| {
+        drawPill(pixels, buf_width, buf_height, x, x + bw, click_regions.nextHover());
+        const adv: i64 = if (font.glyph(c.cp)) |g| g.advance_x else |_| 0;
+        const col = if (has_player) ap.text_color else ap.workspace_inactive_color;
+        _ = drawGlyphAt(pixels, buf_width, buf_height, font, x + @divTrunc(bw - adv, 2), y0, c.cp, col, 0, buf_width);
+        click_regions.add(@intCast(x), @intCast(x + bw), .{ .mpris_control = c.ctl });
+        x += bw;
+        if (k < controls.len - 1) x += DOCK_MEDIA_BTN_GAP;
+    }
+    x += DOCK_MEDIA_TEXT_GAP;
+    drawTextCapped(pixels, buf_width, buf_height, font, x, y0, dockMediaText(mpris_text), DOCK_MEDIA_TEXT_MAX, if (has_player) ap.text_color else ap.workspace_inactive_color);
+    return x_start + width;
+}
 
 /// True for Perihelion's recycle-bin pin ("perihelion-trash", any path or
 /// arguments) — Perihelion Settings adds and removes it.
@@ -2415,6 +2516,9 @@ const ModuleKind = enum {
     /// icon is unknown (hidden) under Hyprland, which has no per-tag layout
     /// in the IPC this bar reads.
     layout,
+    /// Perihelion: the distro-logo app launcher (GNOME's Activities / Arc
+    /// Menu spot). Always drawn first in the left group; opens the app drawer.
+    distro,
 };
 
 /// One entry in a left/center/right module list. Flat + all-optional
@@ -2646,6 +2750,11 @@ const DockSettings = struct {
     window_gap: u32 = 0,
     /// "Shrink the dash": tighter padding and spacing.
     shrink: bool = true,
+    /// The left bookend: the distro-logo launcher (opens the app drawer) and
+    /// the media controls beside it. Fixed, not pins: they never mix with
+    /// the pinned and running apps, and the trash mirrors them on the right.
+    app_drawer: bool = true,
+    media: bool = true,
 };
 
 // Today's exact hardcoded layout/order — see the header comment above.
@@ -8199,8 +8308,17 @@ fn drawLeftGroup(
     // so the cava wave keeps one fixed distance from it (an empty mpris
     // module no longer adds a gap of its own) and the right group can mirror it.
     var last_end: ?i64 = null;
+    // Perihelion: the distro-logo launcher sits at the far left whatever its
+    // place in the list (GNOME's Activities corner).
     for (current_config.modules.left) |entry| {
-        if (!entry.enabled) continue;
+        if (entry.kind != .distro or !entry.enabled) continue;
+        x0 = drawDistroLauncher(pixels, buf_width, buf_height, font, y0, x0, click_regions);
+        any_drawn = true;
+        last_end = x0;
+        break;
+    }
+    for (current_config.modules.left) |entry| {
+        if (!entry.enabled or entry.kind == .distro) continue;
         const pen_before = x0;
         // Guaranteed module→module padding (mirroring the center group's
         // boundary gap): whatever pen the previous module's own trailing gap
@@ -8474,6 +8592,10 @@ const CenterSegment = struct {
     /// an mpris label, 0 when the seg isn't mpris. Measured at compose time
     /// so centering accounts for it exactly like any other width.
     mpris_toggle_w: i64 = 0,
+    /// Perihelion dock: the distro launcher and the media controls (left
+    /// bookend).
+    dock_launcher: bool = false,
+    dock_media: bool = false,
     /// Perihelion dock: the spacer line before the trash, and the trash.
     separator: bool = false,
     trash: bool = false,
@@ -8515,13 +8637,32 @@ fn composeCenterSegments(out: *CenterSegments, font: *font_mod.Font, time_text: 
                 }
             },
             .launchers => {
+                // Perihelion dock, left bookend: the distro launcher, then the
+                // media controls, then a spacer before the pins — mirrored on
+                // the right by a spacer and the trash.
+                if (dock_mode and out.len + 3 <= out.items.len) {
+                    const ds = &current_config.dock;
+                    if (ds.app_drawer) {
+                        out.items[out.len] = .{ .label = "", .gap_after = launcher_gap, .icon_w = launcher_icon_size, .dock_launcher = true };
+                        out.len += 1;
+                    }
+                    if (ds.media) {
+                        out.items[out.len] = .{ .label = "", .gap_after = launcher_gap, .icon_w = dockMediaWidth(font, mpris_text), .dock_media = true };
+                        out.len += 1;
+                    }
+                    if (ds.app_drawer or ds.media) {
+                        out.items[out.len] = .{ .label = "", .gap_after = launcher_gap, .icon_w = 1, .separator = true };
+                        out.len += 1;
+                    }
+                }
                 for (0..launcher_view_len) |vp| {
                     const i = launcher_view_order[vp];
                     if (i >= current_config.launchers.len) continue;
                     const btn = current_config.launchers[i];
-                    // The dock draws its own trash at the end (below); an
-                    // older config's trash pin is not shown as a pin.
-                    if (dock_mode and launcherIsTrash(btn.command)) continue;
+                    // The dock draws its own trash at the end (below) and its
+                    // own launcher at the start (above); an older config's
+                    // pins for them are not shown as pins.
+                    if (dock_mode and (launcherIsTrash(btn.command) or launcherLaunchesAppdrawer(btn.command))) continue;
                     if (out.len >= out.items.len) break;
                     const has_icon = i < launcher_icons.len and launcher_icons[i].has_icon;
                     const distro: u32 = if (i < launcher_icons.len) launcher_icons[i].distro_glyph else 0;
@@ -8711,6 +8852,16 @@ fn drawCenterGroup(
                 }
             }
             x0 += seg.icon_w;
+        } else if (seg.dock_launcher) {
+            const region_start = x0;
+            const hover_start = region_start - @divTrunc(launcher_gap, 2);
+            const hover_end = region_start + seg.icon_w + @divTrunc(launcher_gap, 2);
+            drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            if (dock_drawer_icon.has_icon) drawLauncherIcon(pixels, buf_width, buf_height, x0, &dock_drawer_icon);
+            x0 += seg.icon_w;
+            click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .spawn = "appdrawer" });
+        } else if (seg.dock_media) {
+            x0 = drawDockMedia(pixels, buf_width, buf_height, font, y0, x0, seg.icon_w, mpris_text, mpris_playing, click_regions);
         } else if (seg.trash) {
             const region_start = x0;
             const hover_start = region_start - @divTrunc(launcher_gap, 2);
@@ -9245,6 +9396,36 @@ fn fillRoundedRectAA(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y
                 continue;
             }
             pixels[idx] = lerpArgb(pixels[idx], color, cov);
+        }
+    }
+}
+
+/// Like fillRoundedRectAA but composited "over" what is there at `alpha`
+/// (0-255): a translucent wash (the dock's media chip) that lightens the
+/// glass instead of replacing it.
+fn fillRoundedRectOver(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i64, x1: i64, y1: i64, radius: i32, color: u32, alpha: u8) void {
+    if (x1 <= x0 or y1 <= y0) return;
+    const fx0: f32 = @floatFromInt(x0);
+    const fy0: f32 = @floatFromInt(y0);
+    const hw = (@as(f32, @floatFromInt(x1)) - fx0) / 2.0;
+    const hh = (@as(f32, @floatFromInt(y1)) - fy0) / 2.0;
+    const r: f32 = @min(@as(f32, @floatFromInt(@max(radius, 0))), @min(hw, hh));
+    const cx = fx0 + hw;
+    const cy = fy0 + hh;
+    const fa: f32 = @floatFromInt(alpha);
+    var py: i64 = @max(0, y0);
+    while (py < @min(@as(i64, @intCast(buf_height)), y1)) : (py += 1) {
+        const qy = @abs(@as(f32, @floatFromInt(py)) + 0.5 - cy) - (hh - r);
+        var px: i64 = @max(0, x0);
+        while (px < @min(@as(i64, @intCast(buf_width)), x1)) : (px += 1) {
+            const qx = @abs(@as(f32, @floatFromInt(px)) + 0.5 - cx) - (hw - r);
+            const ox = @max(qx, 0.0);
+            const oy = @max(qy, 0.0);
+            const dist = @sqrt(ox * ox + oy * oy) + @min(@max(qx, qy), 0.0) - r;
+            const cov = std.math.clamp(0.5 - dist, 0.0, 1.0);
+            if (cov <= 0.0) continue;
+            const idx = @as(usize, @intCast(py)) * buf_width + @as(usize, @intCast(px));
+            pixels[idx] = blendPixel(pixels[idx], color | 0xFF000000, @intFromFloat(cov * fa));
         }
     }
 }
@@ -10416,7 +10597,7 @@ fn drawRightGroup(
                     _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, time_text, color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
                 }
             },
-            .workspaces, .mpris, .launchers => {}, // not valid in the right group; ignore defensively
+            .workspaces, .mpris, .launchers, .distro => {}, // not valid in the right group; ignore defensively
         }
     }
     // Publish this frame's island span for the next frame's pill (or clear
