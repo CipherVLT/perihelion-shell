@@ -60,7 +60,9 @@ Singleton {
     // hairline of the accent and a lighter top highlight, the way GNOME's
     // shell and libadwaita cards read as raised glass without a shadow pass.
     function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
-    readonly property color glass: alpha(bg, 0.88)
+    // Over Mango's frosted wallpaper (Perihelion blurs the drawer's layer), so
+    // it can be more see-through without busy content showing through.
+    readonly property color glass: alpha(bg, 0.76)
     readonly property color glassEdge: alpha(accent, 0.22)
     readonly property color glassHighlight: Qt.rgba(1, 1, 1, 0.07)
     readonly property color hoverSoft: alpha(hover, 0.60)

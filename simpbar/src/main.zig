@@ -733,9 +733,16 @@ fn ensureDockDrawerIcon(font: *font_mod.Font) void {
 // A glass chip: previous / play-pause / next, then the track (or "No
 // media"), capped so a long title can't push the pins around.
 
-const DOCK_MEDIA_PAD: i64 = 10;
-const DOCK_MEDIA_BTN_GAP: i64 = 6;
-const DOCK_MEDIA_TEXT_GAP: i64 = 10;
+// The chip tightens with "Shrink the dash" like the rest of the dock.
+fn dockMediaPad() i64 {
+    return if (current_config.dock.shrink) 6 else 10;
+}
+fn dockMediaBtnGap() i64 {
+    return if (current_config.dock.shrink) 2 else 6;
+}
+fn dockMediaTextGap() i64 {
+    return if (current_config.dock.shrink) 6 else 10;
+}
 const DOCK_MEDIA_TEXT_MAX: i64 = 180;
 
 fn dockMediaButtonW(font: *font_mod.Font) i64 {
@@ -749,7 +756,7 @@ fn dockMediaText(text: []const u8) []const u8 {
 
 fn dockMediaWidth(font: *font_mod.Font, mpris_text: []const u8) i64 {
     const text_w = @min(DOCK_MEDIA_TEXT_MAX, textPixelWidth(font, dockMediaText(mpris_text)));
-    return DOCK_MEDIA_PAD + 3 * dockMediaButtonW(font) + 2 * DOCK_MEDIA_BTN_GAP + DOCK_MEDIA_TEXT_GAP + text_w + DOCK_MEDIA_PAD;
+    return dockMediaPad() + 3 * dockMediaButtonW(font) + 2 * dockMediaBtnGap() + dockMediaTextGap() + text_w + dockMediaPad();
 }
 
 /// Glyphs of `text` until `max_w` px; past it the run ends in an ellipsis.
@@ -778,7 +785,7 @@ fn drawDockMedia(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mo
     fillRoundedRectOver(pixels, buf_width, buf_height, x_start, top, x_start + width, bottom, @intCast(@divTrunc(launcher_icon_size, 2)), ap.text_color, 26);
 
     const bw = dockMediaButtonW(font);
-    var x = x_start + DOCK_MEDIA_PAD;
+    var x = x_start + dockMediaPad();
     const controls = [_]struct { cp: u32, ctl: MprisControl }{
         .{ .cp = 0xf048, .ctl = .previous }, // fa-step-backward
         .{ .cp = if (playing) 0xf04c else 0xf04b, .ctl = .play_pause },
@@ -792,9 +799,9 @@ fn drawDockMedia(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mo
         _ = drawGlyphAt(pixels, buf_width, buf_height, font, x + @divTrunc(bw - adv, 2), y0, c.cp, col, 0, buf_width);
         click_regions.add(@intCast(x), @intCast(x + bw), .{ .mpris_control = c.ctl });
         x += bw;
-        if (k < controls.len - 1) x += DOCK_MEDIA_BTN_GAP;
+        if (k < controls.len - 1) x += dockMediaBtnGap();
     }
-    x += DOCK_MEDIA_TEXT_GAP;
+    x += dockMediaTextGap();
     drawTextCapped(pixels, buf_width, buf_height, font, x, y0, dockMediaText(mpris_text), DOCK_MEDIA_TEXT_MAX, if (has_player) ap.text_color else ap.workspace_inactive_color);
     return x_start + width;
 }
@@ -3343,7 +3350,7 @@ const DOCK_CENTER = [_]ModuleEntry{.{ .kind = .launchers, .enabled = true }};
 const DOCK_NONE = [_]ModuleEntry{};
 
 /// Space above plus below the dock's icons (shrunk / normal).
-const DOCK_ICON_AIR_SHRUNK: u32 = 10;
+const DOCK_ICON_AIR_SHRUNK: u32 = 6;
 const DOCK_ICON_AIR: u32 = 18;
 /// Mango adds the layer margin and its own outer gap (gap_outer_vertical,
 /// 10 by default, 4 in Perihelion) to the exclusive zone; the zone is
@@ -3403,13 +3410,20 @@ fn dockConfig(cfg: Config) Config {
     const air: u32 = if (cfg.dock.shrink) DOCK_ICON_AIR_SHRUNK else DOCK_ICON_AIR;
     const h: u32 = launcher_icon_size + air;
     c.appearance.bar_height = @intCast(h);
-    launcher_gap = if (cfg.dock.shrink) 10 else 18;
-    // Ends: far enough in that an icon's corners clear the rounded end
-    // (circle of radius r around the end's center), plus a little air.
+    // "Shrink the dash": a compact dock, not just a slightly shorter one —
+    // 3 px of air above and below the icons (was 5), 6 px between them
+    // (was 10), and ends sized for the icon's round body rather than its
+    // square bounds. Off: the roomy layout (9 px air, 18 px spacing).
+    launcher_gap = if (cfg.dock.shrink) 6 else 18;
+    // Ends: far enough in that the icon clears the rounded end (circle of
+    // radius r around the end's center). Shrunk, it clears the icon's round
+    // body (most icon themes draw a circle or squircle inside the square,
+    // ~80% of it); otherwise the full square plus air.
     const r: f32 = @floatFromInt(@min(cfg.dock.corner_radius, h / 2));
-    const half: f32 = @as(f32, @floatFromInt(launcher_icon_size)) / 2.0 + 1.0;
+    const icon_half: f32 = @as(f32, @floatFromInt(launcher_icon_size)) / 2.0;
+    const half: f32 = if (cfg.dock.shrink) icon_half * 0.8 else icon_half + 1.0;
     const clear: f32 = if (half >= r) r else r - @sqrt(r * r - half * half);
-    const base: i64 = if (cfg.dock.shrink) 6 else 10;
+    const base: i64 = if (cfg.dock.shrink) 4 else 10;
     dock_pill_pad = @max(base, @as(i64, @intFromFloat(@ceil(clear))) + @divTrunc(base, 2));
     return c;
 }
@@ -9114,7 +9128,10 @@ const BAR_MODE_DOCK = "dock";
 /// Dock-mode gaps: edge = space between the dock and its screen edge,
 /// side = inset from the left/right screen edges. Taskbar keeps today's
 /// exact zeros (MARGIN_SIDE).
-const DOCK_MARGIN_EDGE: i32 = 10;
+// Perihelion: the dock floats just off the bottom edge (Event Horizon's
+// superdock sits about this close); windows still stop dock.window_gap px
+// above it (the exclusive zone math is independent of this margin).
+const DOCK_MARGIN_EDGE: i32 = 4;
 const DOCK_MARGIN_SIDE: i32 = 16;
 /// Gap between packed groups in dock mode (same rhythm as MODULE_GAP).
 const DOCK_GAP: i64 = 12;
