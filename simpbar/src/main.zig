@@ -3238,7 +3238,9 @@ fn readMangoOuterGap() i64 {
 
 /// The dock was switched off in Perihelion Settings: leave quietly.
 fn dockExitIfDisabled(cfg: Config) void {
-    if (!dock_mode or cfg.dock.enabled) return;
+    // The bar and the dock never share the bottom edge: with the bar at the
+    // bottom the dock stays off (Perihelion Settings greys it out too).
+    if (!dock_mode or (cfg.dock.enabled and !std.mem.eql(u8, cfg.appearance.position, "bottom"))) return;
     logging.step("dock: turned off in Perihelion Settings, exiting", .{});
     if (pidfile_path.len > 0) _ = std.c.unlink(pidfile_path.ptr);
     std.process.exit(0);
@@ -7784,7 +7786,27 @@ fn blendPixel(dst: u32, color: u32, coverage: u8) u32 {
     const r = (cr * a + dr * inv) / 255;
     const g = (cg * a + dg * inv) / 255;
     const b = (cb * a + db * inv) / 255;
-    return 0xFF000000 | (r << 16) | (g << 8) | b;
+    // Perihelion: "over" keeps what was under it see-through. This used to
+    // return alpha 0xFF for every touched pixel, which on the glass bar and
+    // dock turned each antialiased icon/glyph edge and soft icon shadow
+    // (Numix's trash, any pack with drop shadows) into opaque dark specks.
+    // Opaque destinations stay opaque (da = 255 gives 255).
+    const da = (dst >> 24) & 0xFF;
+    const out_a = (255 * a + da * inv) / 255;
+    return (out_a << 24) | (r << 16) | (g << 8) | b;
+}
+
+/// `color` at `pct` percent opacity, premultiplied (rgb scaled with alpha),
+/// which is what the compositor expects of an ARGB8888 buffer. Background
+/// fills used to keep full-strength rgb under a lower alpha, which the
+/// compositor reads as brighter and more solid than asked: the "glass"
+/// barely showed the wallpaper.
+fn premulPct(color: u32, pct: u32) u32 {
+    const a: u32 = @min(pct, 100) * 255 / 100;
+    const r = ((color >> 16) & 0xFF) * a / 255;
+    const g = ((color >> 8) & 0xFF) * a / 255;
+    const b = (color & 0xFF) * a / 255;
+    return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
 /// Draws one glyph with its pen origin at (`pen_x`, `baseline_y`),
@@ -11120,9 +11142,8 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
     // with an accent wash, a little more see-through.
     const glass = dock_mode and ds.colored_glass;
     const opacity: u32 = if (glass) @min(@as(u32, ap.bg_opacity_percent), 72) else ap.bg_opacity_percent;
-    const bg_alpha: u32 = (opacity * 255 / 100) << 24;
     const bg_rgb: u32 = if (glass) blendPixel(ap.bg_color | 0xFF000000, ap.workspace_active_color, 40) else ap.bg_color;
-    const bg_fill: u32 = bg_alpha | (bg_rgb & 0x00FFFFFF);
+    const bg_fill: u32 = premulPct(bg_rgb, opacity);
     const pill_r: i64 = if (dock_mode) @min(@as(i64, ds.corner_radius), @divTrunc(buf_h, 2)) else @divTrunc(buf_h, 2);
     const ring: i64 = if (dock_mode and ds.border) @min(@as(i64, ds.border_size), 4) else 0;
 
@@ -11191,8 +11212,7 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
 fn paintMorph(bar: *Bar, pixels: [*]u32, e: f32, time_text: []const u8, mpris_text: []const u8, mpris_playing: bool, volume_text: []const u8, weather_text: []const u8) void {
     const buf_w: i64 = @intCast(bar.width);
     const buf_h: i64 = @intCast(bar.height);
-    const bg_alpha: u32 = (@as(u32, current_config.appearance.bg_opacity_percent) * 255 / 100) << 24;
-    const bg_fill: u32 = bg_alpha | (current_config.appearance.bg_color & 0x00FFFFFF);
+    const bg_fill: u32 = premulPct(current_config.appearance.bg_color, current_config.appearance.bg_opacity_percent);
     const pack = dockPack(bar);
 
     // Taskbar endpoints (today's exact anchors) and dock endpoints.
@@ -11239,8 +11259,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
     // Only the background fill and borders follow bg_opacity_percent — every
     // module (pills, text, icons, hover, bezels) stays fully opaque, so at 0
     // the bar body is gone but the modules float over the wallpaper.
-    const bg_alpha: u32 = (@as(u32, current_config.appearance.bg_opacity_percent) * 255 / 100) << 24;
-    const bg_fill: u32 = bg_alpha | (current_config.appearance.bg_color & 0x00FFFFFF);
+    const bg_fill: u32 = premulPct(current_config.appearance.bg_color, current_config.appearance.bg_opacity_percent);
     // Eased taskbar↔dock blend (see mode_blend): endpoints render through
     // the exact legacy paths so both modes stay pixel-identical at rest.
     const e = bar.mode_blend;
@@ -11261,7 +11280,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
         const sy: u32 = if (std.mem.eql(u8, current_config.appearance.position, "top")) 0 else bar.height - strip_u;
         // Same alpha as the background: at opacity 0 a hidden bar leaves no
         // trace at all.
-        const strip_col: u32 = ((@as(u32, current_config.appearance.bg_opacity_percent) * 255 / 100) << 24) | (current_config.appearance.border_color & 0x00FFFFFF);
+        const strip_col: u32 = premulPct(current_config.appearance.border_color, current_config.appearance.bg_opacity_percent);
         var yy: u32 = sy;
         while (yy < sy + strip_u and yy < bar.height) : (yy += 1) {
             const xx: i64 = @max(0, strip.x);
@@ -11288,7 +11307,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
     // everything else that clamps rather than errors).
     // Borders fade with the background (same alpha): at 0 only modules,
     // pills, text and icons remain — the bar body is gone.
-    const bc = ((@as(u32, current_config.appearance.bg_opacity_percent) * 255 / 100) << 24) | (current_config.appearance.border_color & 0x00FFFFFF);
+    const bc = premulPct(current_config.appearance.border_color, current_config.appearance.bg_opacity_percent);
     // Full-width borders only at the taskbar endpoint — dock and morph carry
     // their own bezel, and border rects would stripe the transparent gaps.
     const top_px = if (e <= 0.0) @min(current_config.appearance.border_top_px, bar.height) else 0;
