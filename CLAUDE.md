@@ -159,3 +159,15 @@ Left-side order:
 - This left block is structurally separate from pinned/running application icons.
 - Maintain bookend symmetry with the far right side (spacer + Trash).
 - Give both ends proper breathing room.
+
+## Dock Positioning & Behavior
+
+- The Dock should sit low and close to the bottom edge of the screen (not floating too high).
+- “Shrink the dash” must meaningfully reduce padding and spacing around icons, making the dock noticeably more compact.
+- Prefer a clean floating glass style with proper distance from the bottom edge.
+
+## Glass / Blur Quality
+
+- Glass and blur effects must be clean and high-quality.
+- Avoid heavy distortion, warping, or dirty-looking blur.
+- Target a soft, elegant frosted glass appearance.
