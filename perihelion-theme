@@ -18,6 +18,7 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
   ~/.config/btop/themes/perihelion.theme   btop (btop.conf picks "perihelion")
   ~/.config/perihelion/cmatrix-color    cmatrix's color (Perihelion's wrapper)
   ~/.config/mako/config                 notifications (Mango), reloaded live
+  ~/.config/gtk-{3,4}.0/perihelion-glass.css   frosted GTK windows (Mango)
   the login screen (SDDM, Pixie)        through perihelion-greeter-sync
 
 and tells Perihelion Bar (bar and dock) and Perihelion Shell to reload (SIGUSR1).
@@ -35,6 +36,8 @@ Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
                      colors) or flavor (the palette's own defaults)
   scheme=scheme-content   Material You: matugen's --type (Event Horizon's default)
   mode=dark          Material You: dark, light or auto
+  glass=on           Window glass (Mango): frosted GTK windows, tinted with
+                     the theme; menus and popovers stay nearly solid
 
 A file you edited by hand is left alone: fuzzel colors,
 Strata theme and fastfetch colors are only rewritten while they still hold Perihelion's defaults
@@ -46,7 +49,7 @@ Usage:
   perihelion-theme IMAGE           theme from IMAGE
   perihelion-theme --color '#RRGGBB'
   options: --style catppuccin|material  --flavor F  --accent wallpaper|flavor
-           --scheme TYPE  --force  --dry-run (print
+           --scheme TYPE  --glass on|off  --force  --dry-run (print
            the chosen palette as JSON, write nothing)
 """
 
@@ -59,6 +62,7 @@ import os
 import re
 import shutil
 import signal
+import string
 import subprocess
 import sys
 import tempfile
@@ -545,6 +549,214 @@ def mango_conf(t):
     ])
 
 
+# --- GTK frosted glass (Mango) ---------------------------------------------
+# Event Horizon's frosted GTK apps, adapted to Mango. Hyprland gets there by
+# fading the whole window (opacity 0.82) and blurring behind it, which also
+# fades the text. Here only the backgrounds go see-through, so text, icons
+# and images stay fully crisp, and the tint is the theme's own base color.
+# Mango blurs behind every window (the cached frosted wallpaper with
+# blur_optimized, like Hyprland's xray), but never behind popups, so menus,
+# popovers and tooltips stay nearly solid: a see-through menu would show the
+# window under it sharp, which is what reads as messy glass. Layers stack
+# (window, then sidebar / header bar / view on top), so only the window
+# background carries the frost and the rest are light washes over it.
+GLASS_RADIUS = 12  # Mango's border_radius (cfg/appearance.conf): the frost ends where the window does
+GLASS_MARK = f"/* Written by {MARKER}: frosted glass for GTK"
+
+
+def glass_alpha(t):
+    """The window frost: more of the tint on light wallpapers (they wash light
+    glass out), and a little more for light themes."""
+    a = 0.80 if t.get("light") else 0.76
+    wall = t.get("wall_L") or 0
+    if wall > 0.55:
+        a += min(1.0, (wall - 0.55) / 0.30) * 0.12
+    return round(min(a, 0.90), 2)
+
+
+def _glass_values(t):
+    c = t["colors"]
+    a = glass_alpha(t)
+    hl = "rgba(255, 255, 255, 0.%s)" % ("10" if t.get("light") else "06")
+    return {
+        "mark": GLASS_MARK, "radius": GLASS_RADIUS,
+        "window": rgba(c["base"], a),
+        "header": rgba(c["crust"], 0.16),
+        "sidebar": rgba(c["mantle"], 0.38),
+        "sidebar2": rgba(c["mantle"], 0.22),
+        "view": rgba(c["base"], 0.18),
+        "card": rgba(c["surface0"], 0.48),
+        "dialog": rgba(c["base"], 0.97),
+        "popover": rgba(c["mantle"], 0.96),
+        "tooltip": rgba(c["crust"], 0.95),
+        "thumb": rgba(c["surface0"], 0.70),
+        "fg": c["text"], "dim": c["subtext0"],
+        "accent": t["accent"], "accent_fg": "#ffffff" if t.get("light") else c["crust"],
+        "edge": hl,
+        "name": t["name"],
+    }
+
+
+GTK4_GLASS = string.Template("""$mark 4 ($name). */
+/* Turn it off: Window glass in Perihelion Settings, or Super+G. */
+
+:root {
+  --window-bg-color: $window;
+  --window-fg-color: $fg;
+  --view-bg-color: $view;
+  --view-fg-color: $fg;
+  --headerbar-bg-color: $header;
+  --headerbar-backdrop-color: $header;
+  --headerbar-fg-color: $fg;
+  --sidebar-bg-color: $sidebar;
+  --sidebar-backdrop-color: $sidebar;
+  --sidebar-fg-color: $fg;
+  --secondary-sidebar-bg-color: $sidebar2;
+  --secondary-sidebar-backdrop-color: $sidebar2;
+  --secondary-sidebar-fg-color: $fg;
+  --card-bg-color: $card;
+  --card-fg-color: $fg;
+  --thumbnail-bg-color: $thumb;
+  --thumbnail-fg-color: $fg;
+  --dialog-bg-color: $dialog;
+  --dialog-fg-color: $fg;
+  --popover-bg-color: $popover;
+  --popover-fg-color: $fg;
+  --overview-bg-color: $window;
+  --overview-fg-color: $fg;
+  --accent-bg-color: $accent;
+  --accent-fg-color: $accent_fg;
+}
+
+/* For apps that style themselves with the named colors. */
+@define-color window_bg_color $window;
+@define-color window_fg_color $fg;
+@define-color view_bg_color $view;
+@define-color view_fg_color $fg;
+@define-color headerbar_bg_color $header;
+@define-color headerbar_fg_color $fg;
+@define-color sidebar_bg_color $sidebar;
+@define-color card_bg_color $card;
+@define-color popover_bg_color $popover;
+@define-color dialog_bg_color $dialog;
+@define-color accent_bg_color $accent;
+@define-color accent_fg_color $accent_fg;
+
+/* Corners match Mango's, and the heavy CSD shadow (Mango draws a faint one)
+   becomes a hairline glass edge, so nothing dark or blurry rims the frost. */
+window.csd {
+  border-radius: ${radius}px;
+  box-shadow: inset 0 0 0 1px $edge;
+}
+window.csd.maximized, window.csd.fullscreen, window.csd.tiled,
+window.csd.tiled-top, window.csd.tiled-bottom, window.csd.tiled-left, window.csd.tiled-right {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Tooltips are popups too: no blur behind them, so nearly solid. */
+tooltip.background { background-color: $tooltip; color: $fg; }
+""")
+
+GTK3_GLASS = string.Template("""$mark 3 ($name). */
+/* Turn it off: Window glass in Perihelion Settings, or Super+G. */
+
+@define-color theme_bg_color $window;
+@define-color theme_fg_color $fg;
+@define-color theme_base_color $view;
+@define-color theme_text_color $fg;
+@define-color theme_selected_bg_color $accent;
+@define-color theme_selected_fg_color $accent_fg;
+
+/* GTK 3's Adwaita has its colors built in, so the frost goes on by widget. */
+window.background, window.background.csd { background-color: $window; color: $fg; }
+headerbar, .titlebar:not(headerbar) { background: $header; border-color: transparent; box-shadow: none; color: $fg; }
+.sidebar, placessidebar, placessidebar list, stacksidebar list, .navigation-sidebar { background-color: $sidebar; }
+.view, iconview, textview text, treeview.view, scrolledwindow viewport { background-color: transparent; }
+treeview.view:selected, iconview:selected, .view:selected { background-color: $accent; color: $accent_fg; }
+
+/* Menus and popovers are popups (no blur behind them): nearly solid. */
+menu, .menu, .context-menu, popover.background, popover.menu, .csd popover.background {
+  background-color: $popover; color: $fg;
+}
+tooltip.background, tooltip { background-color: $tooltip; color: $fg; }
+
+window.csd > decoration, decoration { border-radius: ${radius}px; box-shadow: 0 0 0 1px $edge; }
+.maximized decoration, .tiled decoration, .fullscreen decoration { border-radius: 0; box-shadow: none; }
+""")
+
+
+def gtk_glass_css(t, version):
+    tpl = GTK4_GLASS if version == 4 else GTK3_GLASS
+    return tpl.substitute(_glass_values(t))
+
+
+GLASS_IMPORT = '@import url("perihelion-glass.css");'
+
+
+def gtk_css_ours(path):
+    """gtk.css is ours to manage while it's missing or still the stub we wrote
+    (Event Horizon, matugen or your own gtk.css are left alone: add the
+    GLASS_IMPORT line to the top of yours to get the glass there too)."""
+    cur = read(path)
+    return cur is None or f"Written by {MARKER}" in cur
+
+
+def gtk_css_stub():
+    return (f"/* Written by {MARKER}. Your own GTK rules can go below the import;\n"
+            f"   remove this first line to keep the file as yours. */\n{GLASS_IMPORT}\n")
+
+
+def apply_gtk_glass(t, on):
+    """Write perihelion-glass.css (empty when off) for GTK 3 and 4. Returns
+    True when anything changed. The last frosted CSS is cached, so turning
+    glass back on works without a recolor (Match the wallpaper off)."""
+    changed = False
+    cache = os.path.join(CACHE, "perihelion-theme")
+    for ver in (3, 4):
+        d = os.path.join(CONFIG, f"gtk-{ver}.0")
+        cached = os.path.join(cache, f"glass-gtk{ver}.css")
+        if t is not None:
+            css = gtk_glass_css(t, ver)
+            write(cached, css)
+        else:
+            css = read(cached) or ""
+        body = css if on else (f"/* Written by {MARKER}: window glass is off "
+                               "(Perihelion Settings or Super+G). */\n")
+        if write(os.path.join(d, "perihelion-glass.css"), body):
+            changed = True
+        main_css = os.path.join(d, "gtk.css")
+        if gtk_css_ours(main_css):
+            if write(main_css, gtk_css_stub()):
+                changed = True
+    return changed
+
+
+def refresh_gtk():
+    """Ask running GTK apps to reload their styles: a theme-name round trip
+    (most apps restyle; the rest on their next start)."""
+    if not shutil.which("gsettings"):
+        return
+    def gs(*a):
+        try:
+            return subprocess.run(["gsettings", *a], capture_output=True, text=True,
+                                  timeout=5, check=False).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    cur = gs("get", "org.gnome.desktop.interface", "gtk-theme").strip("'")
+    if not cur:
+        return
+    gs("set", "org.gnome.desktop.interface", "gtk-theme", "Default" if cur != "Default" else "Adwaita")
+    gs("set", "org.gnome.desktop.interface", "gtk-theme", cur)
+
+
+def glass_wanted():
+    """Window glass needs Mango's blur behind windows; elsewhere (Niri, or
+    Hyprland, which Event Horizon styles itself) it stays off."""
+    return os.path.isdir(os.path.join(CONFIG, "mango")) and (
+        shutil.which("mango") is not None or os.environ.get("PERIHELION_GLASS_FORCE") == "1")
+
+
 # --- Material You, through matugen ----------------------------------------
 def matugen_bin():
     found = shutil.which("matugen")
@@ -1010,7 +1222,7 @@ def signal_procs(names, sig):
 # --- settings and inputs ---------------------------------------------------
 def read_settings():
     s = {"style": "catppuccin", "palette": "catppuccin-auto", "tint": True,
-         "accent": "wallpaper", "scheme": "scheme-content", "mode": "dark"}
+         "accent": "wallpaper", "scheme": "scheme-content", "mode": "dark", "glass": True}
     text = read(os.path.join(SIMPBAR, "theme")) or ""
     for line in text.splitlines():
         k, sep, v = line.partition("=")
@@ -1023,6 +1235,8 @@ def read_settings():
             s["palette"], s["palette_set"] = v, True
         elif k == "tint" and v in ("on", "off"):
             s["tint"] = v == "on"
+        elif k == "glass" and v in ("on", "off"):
+            s["glass"] = v == "on"
         elif k == "mode" and v in ("dark", "light", "auto"):
             s["mode"] = v
         elif k == "accent" and v in ("wallpaper", "flavor"):
@@ -1074,15 +1288,20 @@ def main(argv=None):
     ap.add_argument("--accent", choices=("wallpaper", "flavor"))
     ap.add_argument("--style", choices=("catppuccin", "material"))
     ap.add_argument("--scheme", choices=MATUGEN_SCHEMES)
+    ap.add_argument("--glass", choices=("on", "off"))
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
+    settings = read_settings()
+    glass_on = settings["glass"] if args.glass is None else args.glass == "on"
     if not args.dry_run and auto_theme_off():
+        # No recolor, but Window glass still turns on and off (last colors).
+        if glass_wanted() and apply_gtk_glass(None, glass_on):
+            refresh_gtk()
         print("perihelion-theme: 'Match the wallpaper' is off in Perihelion Settings; nothing to do")
         return 0
 
-    settings = read_settings()
     palette_setting = (args.palette or ("catppuccin-" + args.flavor if args.flavor else None)
                        or settings["palette"])
     tint_on = (args.tint == "on") if args.tint else settings["tint"]
@@ -1104,7 +1323,7 @@ def main(argv=None):
 
     # Skip the work when nothing changed since the last run (login restores).
     stamp_src = (f"{kind}|{value}|{style}|{scheme}|{mode_setting}|{palette_setting}|"
-                 f"{tint_on}|{accent_setting}|11")
+                 f"{tint_on}|{accent_setting}|{glass_on}|12")
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
@@ -1201,6 +1420,12 @@ def main(argv=None):
                                    capture_output=True, check=False, timeout=5)
                 except (OSError, subprocess.SubprocessError):
                     pass
+
+    # GTK windows, file manager panels and dialogs: frosted glass on Mango.
+    if glass_wanted():
+        if apply_gtk_glass(theme, glass_on):
+            changed.append("window glass" if glass_on else "window glass off")
+            refresh_gtk()
 
     if update_fastfetch(os.path.join(CONFIG, "fastfetch", "config.jsonc"), theme,
                         os.path.join(SHARE, "fastfetch", "config.jsonc")):

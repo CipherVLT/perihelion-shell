@@ -1737,7 +1737,7 @@ fn buildGeneralPage() *gtk.GtkBox {
     const decor = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(decor, "Borders and Opacity");
     addSpinField(decor, "Border Size (px)", 0, 32, 1, &doc_appearance, "border_px", 4, false);
-    addSpinField(decor, "Corner Radius (px)", 0, 64, 1, &doc_appearance, "border_radius", 6, false);
+    addSpinField(decor, "Corner Radius (px)", 0, 64, 1, &doc_appearance, "border_radius", 12, false);
     addSwitchField(decor, "No Radius When Single", &doc_appearance, "no_radius_when_single", false);
     addSpinField(decor, "Focused Opacity", 0.1, 1.0, 0.05, &doc_appearance, "focused_opacity", 1.0, true);
     addSpinField(decor, "Unfocused Opacity", 0.1, 1.0, 0.05, &doc_appearance, "unfocused_opacity", 1.0, true);
@@ -1752,7 +1752,7 @@ fn buildGeneralPage() *gtk.GtkBox {
     addSurfaceBlurSwitch(blur, "Dock Blur", "perihelion-dock");
     addSurfaceBlurSwitch(blur, "Desktop Widgets Blur", "perihelion-shell");
     addSpinField(blur, "Blur Radius", 1, 32, 1, &doc_appearance, "blur_params_radius", 4, false);
-    addSpinField(blur, "Blur Passes", 1, 8, 1, &doc_appearance, "blur_params_num_passes", 2, false);
+    addSpinField(blur, "Blur Passes", 1, 8, 1, &doc_appearance, "blur_params_num_passes", 4, false);
     gtk.gtk_box_append(outer, @ptrCast(blur));
 
     const colors = gtk.adw_preferences_group_new();

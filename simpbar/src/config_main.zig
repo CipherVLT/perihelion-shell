@@ -685,6 +685,8 @@ var live_theme_style: []const u8 = "catppuccin";
 var live_theme_scheme: []const u8 = "scheme-content";
 var live_theme_palette: []const u8 = "catppuccin-auto";
 var live_theme_tint: bool = true;
+/// Frosted-glass GTK windows (theme file glass=on|off, read by perihelion-theme).
+var live_theme_glass: bool = true;
 var live_theme_mode: []const u8 = "dark";
 var live_theme_accent: []const u8 = "wallpaper";
 // Desktop widgets on/off, one bit per WIDGET_TABLE row below (bit i =
@@ -1091,6 +1093,8 @@ fn loadConfigFromDisk() void {
                 }
             } else if (std.mem.eql(u8, key, "tint")) {
                 live_theme_tint = !std.mem.eql(u8, value, "off");
+            } else if (std.mem.eql(u8, key, "glass")) {
+                live_theme_glass = !std.mem.eql(u8, value, "off");
             } else if (std.mem.eql(u8, key, "mode")) {
                 for (THEME_MODE_CHOICES) |choice| {
                     if (std.mem.eql(u8, choice, value)) live_theme_mode = choice;
@@ -1792,9 +1796,10 @@ const THEME_ACCENT_LABELS = [_][*:0]const u8{
 /// shows up right away instead of at the next wallpaper switch.
 fn saveThemeSettings() void {
     var buf: [256]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "style={s}\npalette={s}\ntint={s}\naccent={s}\nscheme={s}\nmode={s}\n", .{
+    const text = std.fmt.bufPrint(&buf, "style={s}\npalette={s}\ntint={s}\naccent={s}\nscheme={s}\nmode={s}\nglass={s}\n", .{
         live_theme_style,  live_theme_palette, if (live_theme_tint) "on" else "off",
         live_theme_accent, live_theme_scheme,  live_theme_mode,
+        if (live_theme_glass) "on" else "off",
     }) catch return;
     if (writeFileAll(theme_path, text)) {
         launchDetached(&.{ "perihelion-theme", "--force" });
@@ -1848,6 +1853,27 @@ fn buildThemeTintRow(group: *gtk.AdwPreferencesGroup) void {
     gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
+fn onThemeGlassChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    live_theme_glass = gtk.gtk_switch_get_active(sw) != 0;
+    saveThemeSettings();
+}
+
+/// Frosted app windows (Super+G flips the same setting): GTK windows,
+/// sidebars and header bars turn see-through over the compositor's blur,
+/// tinted with the theme; text stays fully crisp (only the backgrounds are
+/// translucent, unlike whole-window opacity).
+fn buildThemeGlassRow(group: *gtk.AdwPreferencesGroup) void {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Window glass");
+    gtk.adw_action_row_set_subtitle(row, "Frosted GTK app windows, file manager panels and dialogs, tinted with the theme. Text stays sharp; menus stay nearly solid so they read cleanly. Open windows update after a moment. Also Super+G.");
+    const sw = gtk.gtk_switch_new();
+    gtk.gtk_switch_set_active(sw, if (live_theme_glass) 1 else 0);
+    gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onThemeGlassChanged), null, null, 0);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+}
+
 fn onThemeAccentChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     const idx = gtk.adw_combo_row_get_selected(row);
     if (idx >= THEME_ACCENT_CHOICES.len) return;
@@ -1887,6 +1913,7 @@ fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
     buildThemeComboRow(group, "Style", "Palette: a color scheme below, its accents picked from the wallpaper. Material You: matugen's Material Design colors made from the wallpaper.", &THEME_STYLE_LABELS, &THEME_STYLE_CHOICES, live_theme_style, &onThemeStyleChanged);
     buildThemeComboRow(group, "Palette", "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night. Auto picks a light variant for light wallpapers and a darker one otherwise.", &THEME_PALETTE_LABELS, &THEME_PALETTE_CHOICES, live_theme_palette, &onThemePaletteChanged);
     buildThemeTintRow(group);
+    buildThemeGlassRow(group);
     buildThemeComboRow(group, "Accent colors", "Palette only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or the palette's own.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
     buildThemeComboRow(group, "Matugen color scheme", "The palette matugen derives from the wallpaper: Material You's colors, and in both styles the terminal's (fastfetch sections). Fruit salad gives a red OS section.", &MATUGEN_TYPE_LABELS, &MATUGEN_TYPE_CHOICES, live_theme_scheme, &onMatugenTypeChanged);
     buildThemeComboRow(group, "Theme mode", "Material You only: dark, light, or picked from how light the wallpaper is.", &THEME_MODE_LABELS, &THEME_MODE_CHOICES, live_theme_mode, &onThemeModeChanged);
