@@ -1,0 +1,28 @@
+{
+  "id": "google/flatland",
+  "name": "Flatland",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#141511",
+    "foreground": "#d9d9e6",
+    "surface": "#181915",
+    "surface_text": "#9999a6",
+    "hover": "#1b1c17",
+    "hover_text": "#d9d9e6",
+    "outline": "#676767",
+    "shadow": "#000000",
+    "accent": "#0085bf",
+    "accent_text": "#e6e6f2",
+    "accent2": "#850085",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#008585",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.12,
+  "origin": "event-horizon@0e596b0"
+}

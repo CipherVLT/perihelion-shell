@@ -1,0 +1,28 @@
+{
+  "id": "nord/light",
+  "name": "Nord Light",
+  "family": "nord",
+  "family_name": "Nord",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#eeeff4",
+    "foreground": "#26262b",
+    "surface": "#d6d7dc",
+    "surface_text": "#737380",
+    "hover": "#bebfc3",
+    "hover_text": "#26262b",
+    "outline": "#a8b0bf",
+    "shadow": "#000000",
+    "accent": "#52a0ad",
+    "accent_text": "#ffffff",
+    "accent2": "#95708e",
+    "accent2_text": "#ffffff",
+    "accent3": "#89a66f",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.11,
+  "origin": "event-horizon@0e596b0"
+}

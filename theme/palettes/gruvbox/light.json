@@ -1,0 +1,28 @@
+{
+  "id": "gruvbox/light",
+  "name": "Gruvbox Light",
+  "family": "gruvbox",
+  "family_name": "Gruvbox",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#fbf2c7",
+    "foreground": "#3c3836",
+    "surface": "#efe0b3",
+    "surface_text": "#7c7569",
+    "hover": "#e5d5a3",
+    "hover_text": "#3c3836",
+    "outline": "#b4aa8b",
+    "shadow": "#000000",
+    "accent": "#db923d",
+    "accent_text": "#282828",
+    "accent2": "#95956c",
+    "accent2_text": "#ebdbb2",
+    "accent3": "#78a278",
+    "accent3_text": "#282828",
+    "error": "#ca4545",
+    "error_text": "#ebdbb2"
+  },
+  "contrast": 10.29,
+  "origin": "event-horizon@0e596b0"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "google/tango-light",
+  "name": "Tango",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f7f7f7",
+    "foreground": "#26262b",
+    "surface": "#dedede",
+    "surface_text": "#737380",
+    "hover": "#c6c6c6",
+    "hover_text": "#26262b",
+    "outline": "#565656",
+    "shadow": "#000000",
+    "accent": "#0085bf",
+    "accent_text": "#ffffff",
+    "accent2": "#850085",
+    "accent2_text": "#ffffff",
+    "accent3": "#008585",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 14.06,
+  "origin": "event-horizon@0e596b0"
+}

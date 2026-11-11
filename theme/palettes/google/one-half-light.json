@@ -1,0 +1,28 @@
+{
+  "id": "google/one-half-light",
+  "name": "One Half Light",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f4f4f3",
+    "foreground": "#26262b",
+    "surface": "#dcdcdb",
+    "surface_text": "#737380",
+    "hover": "#c3c3c2",
+    "hover_text": "#26262b",
+    "outline": "#6b6b6b",
+    "shadow": "#000000",
+    "accent": "#60aeee",
+    "accent_text": "#ffffff",
+    "accent2": "#e4bf7a",
+    "accent2_text": "#ffffff",
+    "accent3": "#97c278",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.68,
+  "origin": "event-horizon@0e596b0"
+}

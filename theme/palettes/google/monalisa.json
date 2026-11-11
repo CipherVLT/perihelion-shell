@@ -1,0 +1,28 @@
+{
+  "id": "google/monalisa",
+  "name": "MonaLisa",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#121212",
+    "foreground": "#d9d9e6",
+    "surface": "#161616",
+    "surface_text": "#9999a6",
+    "hover": "#181818",
+    "hover_text": "#d9d9e6",
+    "outline": "#535353",
+    "shadow": "#000000",
+    "accent": "#0883ff",
+    "accent_text": "#e6e6f2",
+    "accent2": "#8308ff",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#08ff83",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.4,
+  "origin": "event-horizon@0e596b0"
+}

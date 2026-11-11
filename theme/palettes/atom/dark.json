@@ -1,0 +1,28 @@
+{
+  "id": "atom/dark",
+  "name": "Atom One Dark",
+  "family": "atom",
+  "family_name": "Atom",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#282c34",
+    "foreground": "#d9d9e6",
+    "surface": "#30353e",
+    "surface_text": "#9999a6",
+    "hover": "#363c46",
+    "hover_text": "#d9d9e6",
+    "outline": "#5c6370",
+    "shadow": "#000000",
+    "accent": "#61afef",
+    "accent_text": "#e6e6f2",
+    "accent2": "#e5c07b",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#98c379",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 10.01,
+  "origin": "event-horizon@0e596b0"
+}

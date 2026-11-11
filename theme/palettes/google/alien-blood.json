@@ -1,0 +1,28 @@
+{
+  "id": "google/alien-blood",
+  "name": "Alien Blood",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#0e1412",
+    "foreground": "#d9d9e6",
+    "surface": "#111816",
+    "surface_text": "#9999a6",
+    "hover": "#131b18",
+    "hover_text": "#d9d9e6",
+    "outline": "#445f52",
+    "shadow": "#000000",
+    "accent": "#678ede",
+    "accent_text": "#e6e6f2",
+    "accent2": "#de678e",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#50fa7b",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.32,
+  "origin": "event-horizon@0e596b0"
+}

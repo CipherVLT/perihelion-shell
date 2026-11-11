@@ -1,0 +1,28 @@
+{
+  "id": "google/belafonte-light",
+  "name": "Belafonte",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f6f6f5",
+    "foreground": "#26262b",
+    "surface": "#dddddd",
+    "surface_text": "#737380",
+    "hover": "#c5c5c4",
+    "hover_text": "#26262b",
+    "outline": "#7e7971",
+    "shadow": "#000000",
+    "accent": "#048be9",
+    "accent_text": "#ffffff",
+    "accent2": "#9e4fdc",
+    "accent2_text": "#ffffff",
+    "accent3": "#0085bf",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.93,
+  "origin": "event-horizon@0e596b0"
+}

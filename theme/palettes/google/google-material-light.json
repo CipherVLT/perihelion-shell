@@ -1,0 +1,28 @@
+{
+  "id": "google/google-material-light",
+  "name": "Google Material Light",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#fef7ff",
+    "foreground": "#1d1b20",
+    "surface": "#ede2f2",
+    "surface_text": "#7e7684",
+    "hover": "#ede2f2",
+    "hover_text": "#1d1b20",
+    "outline": "#bcb3c2",
+    "shadow": "#000000",
+    "accent": "#673ab7",
+    "accent_text": "#ffffff",
+    "accent2": "#c1b6ce",
+    "accent2_text": "#1d1b20",
+    "accent3": "#7673e1",
+    "accent3_text": "#ffffff",
+    "error": "#ea5252",
+    "error_text": "#ffffff"
+  },
+  "contrast": 16.23,
+  "origin": "event-horizon@0e596b0"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "rose-pine/dawn",
+  "name": "Rosé Pine Dawn",
+  "family": "rose-pine",
+  "family_name": "Rosé Pine",
+  "variant": "dawn",
+  "light": true,
+  "colors": {
+    "background": "#faf4ed",
+    "foreground": "#555169",
+    "surface": "#fffaf3",
+    "surface_text": "#797593",
+    "hover": "#dfdad9",
+    "hover_text": "#555169",
+    "outline": "#9893a5",
+    "shadow": "#000000",
+    "accent": "#907aa9",
+    "accent_text": "#faf4ed",
+    "accent2": "#d7827e",
+    "accent2_text": "#faf4ed",
+    "accent3": "#56949f",
+    "accent3_text": "#faf4ed",
+    "error": "#b4637a",
+    "error_text": "#faf4ed"
+  },
+  "contrast": 6.95,
+  "origin": "event-horizon@0e596b0"
+}

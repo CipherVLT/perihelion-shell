@@ -1,0 +1,28 @@
+{
+  "id": "google/google-brand-light",
+  "name": "Google Brand Light",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "brand-light",
+  "light": true,
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#202124",
+    "surface": "#f1f3f4",
+    "surface_text": "#5f6368",
+    "hover": "#e8eaed",
+    "hover_text": "#202124",
+    "outline": "#dadce0",
+    "shadow": "#000000",
+    "accent": "#1a73e8",
+    "accent_text": "#ffffff",
+    "accent2": "#188038",
+    "accent2_text": "#ffffff",
+    "accent3": "#f9ab00",
+    "accent3_text": "#202124",
+    "error": "#d93025",
+    "error_text": "#ffffff"
+  },
+  "contrast": 16.1,
+  "origin": "event-horizon@0e596b0"
+}

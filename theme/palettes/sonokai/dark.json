@@ -1,0 +1,28 @@
+{
+  "id": "sonokai/dark",
+  "name": "Sonokai",
+  "family": "sonokai",
+  "family_name": "Sonokai",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#252425",
+    "foreground": "#d9d9e6",
+    "surface": "#2c2b2c",
+    "surface_text": "#9999a6",
+    "hover": "#323132",
+    "hover_text": "#d9d9e6",
+    "outline": "#5f5d62",
+    "shadow": "#000000",
+    "accent": "#bac5e2",
+    "accent_text": "#e6e6f2",
+    "accent2": "#fab697",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#99cd9a",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 11.06,
+  "origin": "event-horizon@0e596b0"
+}
