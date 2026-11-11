@@ -1,0 +1,28 @@
+{
+  "id": "rose-pine/moon",
+  "name": "Rosé Pine Moon",
+  "family": "rose-pine",
+  "family_name": "Rosé Pine",
+  "variant": "moon",
+  "light": false,
+  "colors": {
+    "background": "#232136",
+    "foreground": "#e0def4",
+    "surface": "#2a273f",
+    "surface_text": "#908caa",
+    "hover": "#56526e",
+    "hover_text": "#e0def4",
+    "outline": "#6e6a86",
+    "shadow": "#000000",
+    "accent": "#c4a7e7",
+    "accent_text": "#2a273f",
+    "accent2": "#ea9a97",
+    "accent2_text": "#2a273f",
+    "accent3": "#9ccfd8",
+    "accent3_text": "#2a273f",
+    "error": "#eb6f92",
+    "error_text": "#232136"
+  },
+  "contrast": 11.86,
+  "origin": "event-horizon@0e596b0"
+}

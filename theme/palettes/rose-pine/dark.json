@@ -1,0 +1,28 @@
+{
+  "id": "rose-pine/dark",
+  "name": "Rosé Pine",
+  "family": "rose-pine",
+  "family_name": "Rosé Pine",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#191724",
+    "foreground": "#e0def4",
+    "surface": "#1f1d2e",
+    "surface_text": "#908caa",
+    "hover": "#524f67",
+    "hover_text": "#e0def4",
+    "outline": "#6e6a86",
+    "shadow": "#000000",
+    "accent": "#c4a7e7",
+    "accent_text": "#1f1d2e",
+    "accent2": "#ebbcba",
+    "accent2_text": "#1f1d2e",
+    "accent3": "#9ccfd8",
+    "accent3_text": "#1f1d2e",
+    "error": "#eb6f92",
+    "error_text": "#191724"
+  },
+  "contrast": 13.39,
+  "origin": "event-horizon@0e596b0"
+}

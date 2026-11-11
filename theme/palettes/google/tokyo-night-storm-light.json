@@ -1,0 +1,30 @@
+{
+  "id": "google/tokyo-night-storm-light",
+  "name": "Tokyo Night Storm",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#1d1f29",
+    "foreground": "#26262b",
+    "surface": "#1a1c25",
+    "surface_text": "#737380",
+    "hover": "#171921",
+    "hover_text": "#26262b",
+    "outline": "#5f5f5f",
+    "shadow": "#000000",
+    "accent": "#678ede",
+    "accent_text": "#ffffff",
+    "accent2": "#de678e",
+    "accent2_text": "#ffffff",
+    "accent3": "#678ede",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 1.09,
+  "origin": "event-horizon@0e596b0",
+  "low_contrast": true,
+  "light_mismatch": true
+}

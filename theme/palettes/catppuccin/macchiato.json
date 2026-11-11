@@ -1,0 +1,28 @@
+{
+  "id": "catppuccin/macchiato",
+  "name": "Catppuccin Macchiato",
+  "family": "catppuccin",
+  "family_name": "Catppuccin",
+  "variant": "macchiato",
+  "light": false,
+  "colors": {
+    "background": "#24273a",
+    "foreground": "#cad3f5",
+    "surface": "#292c41",
+    "surface_text": "#9b9fb3",
+    "hover": "#2f3347",
+    "hover_text": "#cad3f5",
+    "outline": "#787b8e",
+    "shadow": "#000000",
+    "accent": "#cad3f5",
+    "accent_text": "#212436",
+    "accent2": "#bd9eb2",
+    "accent2_text": "#212436",
+    "accent3": "#a1c0a9",
+    "accent3_text": "#212436",
+    "error": "#ea5862",
+    "error_text": "#212436"
+  },
+  "contrast": 9.92,
+  "origin": "event-horizon@0e596b0"
+}

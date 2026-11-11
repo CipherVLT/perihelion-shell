@@ -1,0 +1,30 @@
+{
+  "id": "google/monokai-pro-light",
+  "name": "Monokai Pro",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#1d1d1d",
+    "foreground": "#26262b",
+    "surface": "#1a1a1a",
+    "surface_text": "#737380",
+    "hover": "#171717",
+    "hover_text": "#26262b",
+    "outline": "#75715e",
+    "shadow": "#000000",
+    "accent": "#678ede",
+    "accent_text": "#ffffff",
+    "accent2": "#de678e",
+    "accent2_text": "#ffffff",
+    "accent3": "#678ede",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 1.12,
+  "origin": "event-horizon@0e596b0",
+  "low_contrast": true,
+  "light_mismatch": true
+}

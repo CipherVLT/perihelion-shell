@@ -1,0 +1,28 @@
+{
+  "id": "google/nord-light",
+  "name": "Nord",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#eceef1",
+    "foreground": "#26262b",
+    "surface": "#d4d6d9",
+    "surface_text": "#737380",
+    "hover": "#bdbec1",
+    "hover_text": "#26262b",
+    "outline": "#5f6779",
+    "shadow": "#000000",
+    "accent": "#4b8f9b",
+    "accent_text": "#ffffff",
+    "accent2": "#95708e",
+    "accent2_text": "#ffffff",
+    "accent3": "#8eab76",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 12.96,
+  "origin": "event-horizon@0e596b0"
+}

@@ -353,5 +353,83 @@ try:
 finally:
     shutil.rmtree(tmp)
 
+# Palette files: Event Horizon's imported themes (theme/palettes) and your own.
+PAL = os.path.join(ROOT, "theme", "palettes")
+with open(os.path.join(PAL, "SOURCE.json")) as f:
+    source = json.load(f)
+files = []
+for root_dir, _d, names in os.walk(PAL):
+    files += [os.path.join(root_dir, n) for n in names if n.endswith(".json") and n != "SOURCE.json"]
+check(len(files) == source["count"] == 268, f"palettes: {len(files)} files, SOURCE.json says {source['count']}")
+bad, flagged = [], set()
+for p in files:
+    with open(p) as f:
+        d = json.load(f)
+    pid = os.path.relpath(p, PAL)[:-5].replace(os.sep, "/")
+    ok = (d.get("id") == pid and set(d["colors"]) == set(pt.PALETTE_ROLES)
+          and all(re.fullmatch(r"#[0-9a-f]{6}", v) for v in d["colors"].values())
+          and isinstance(d.get("light"), bool) and d.get("low_contrast", False) == (d["contrast"] < 4.5))
+    if not ok:
+        bad.append(pid)
+    if d.get("low_contrast"):
+        flagged.add(pid)
+check(not bad, f"palettes: id = path, 16 #rrggbb roles, flags match the contrast ({bad[:3]})")
+check(flagged == {x["id"] for x in source["low_contrast"]}, "palettes: SOURCE.json lists the low-contrast ones")
+with open(os.path.join(PAL, "catppuccin", "mocha.json")) as f:
+    mocha = json.load(f)["colors"]
+check(mocha["background"] == "#1e1e2e" and mocha["error"] == "#eb535d",
+      "palettes: Catppuccin Mocha is Event Horizon's own values")
+
+tmp = tempfile.mkdtemp()
+try:
+    listed = run(tmp, "--list-palettes").stdout.splitlines()
+    every = run(tmp, "--list-palettes", "--all").stdout.splitlines()
+    check(len(listed) == 268 - len(flagged) and len(every) == 268,
+          f"--list-palettes: {len(listed)} (low contrast left out), --all: {len(every)}")
+    check(all(len(line.split("\t")) == 4 for line in every), "--list-palettes: id, label, light, yours")
+    check(any(line.startswith("google/tokyo-night\t") for line in listed)
+          and any(line.startswith("catppuccin/mocha-sky\t") for line in listed), "--list-palettes: stable ids")
+    d = dry(tmp, "--color", "#3366cc", "--palette", "google/tokyo-night", "--tint", "off")
+    with open(os.path.join(PAL, "google", "tokyo-night.json")) as f:
+        tn = json.load(f)["colors"]
+    check(d["palette"] == "google/tokyo-night" and d["matugen"]["bg_color"] == tn["background"]
+          and d["matugen"]["text_color"] == tn["foreground"], "imported palette: its background and text")
+    check(set(d["accents"]) == {"accent", "accent2", "accent3"}, f"imported palette: three accents ({d['accents']})")
+    mine = os.path.join(tmp, ".local", "share", "perihelion", "palettes")
+    os.makedirs(os.path.join(mine, "catppuccin"))
+    with open(os.path.join(mine, "sunset.json"), "w") as f:
+        json.dump({"name": "Sunset", "colors": {"background": "#1b1020", "foreground": "#f5e6ff",
+                                                 "accent": "#ff7a59"}}, f)
+    with open(os.path.join(mine, "catppuccin", "mocha.json"), "w") as f:
+        json.dump({"name": "My Mocha", "colors": {"background": "#000000", "foreground": "#ffffff",
+                                                   "accent": "#00ff00"}}, f)
+    with open(os.path.join(mine, "broken.json"), "w") as f:
+        f.write('{"colors": {"background": "nope"}}')
+    listed = run(tmp, "--list-palettes").stdout.splitlines()
+    check(listed[0].startswith("catppuccin/mocha\tCatppuccin · My Mocha (yours)") and "custom/sunset\tCustom · Sunset (yours)\t0\t1" in listed,
+          "your palettes: listed first, yours win over the shipped id")
+    check(not any(line.startswith("custom/broken") for line in listed), "your palettes: a broken file isn't offered")
+    d = dry(tmp, "--color", "#3366cc", "--palette", "custom/sunset", "--tint", "off")
+    check(d["matugen"]["bg_color"] == "#1b1020" and d["matugen"]["border_color"] == "#ff7a59",
+          "your palette: background and accent used, the rest derived")
+    os.makedirs(os.path.join(tmp, ".config", "simpbar"), exist_ok=True)
+    with open(os.path.join(tmp, ".config", "simpbar", "theme"), "w") as f:
+        f.write("style=catppuccin\npalette=custom/sunset\ntint=off\n")
+    r = run(tmp, "--color", "#3366cc")
+    mj = json.load(open(os.path.join(tmp, ".config", "simpbar", "matugen.json")))
+    check(r.returncode == 0 and mj["bg_color"] == "#1b1020", "theme file palette=custom/sunset: full run")
+    with open(os.path.join(mine, "sunset.json"), "w") as f:
+        json.dump({"colors": {"background": "#102030", "foreground": "#ffffff", "accent": "#ff7a59"}}, f)
+    os.utime(os.path.join(mine, "sunset.json"), (1, 2_000_000_000))
+    run(tmp, "--color", "#3366cc")
+    mj = json.load(open(os.path.join(tmp, ".config", "simpbar", "matugen.json")))
+    check(mj["bg_color"] == "#102030", "your palette edited: recolored at the next run")
+    with open(os.path.join(tmp, ".config", "simpbar", "theme"), "w") as f:
+        f.write("palette=custom/broken\ntint=off\n")
+    r = run(tmp, "--color", "#1e1e2e", "--force")
+    check(r.returncode == 0 and "colors.background" in r.stderr, "broken palette: says why, falls back to Catppuccin")
+finally:
+    shutil.rmtree(tmp)
+
 print(f"\n{failures} failure(s)")
 sys.exit(1 if failures else 0)
