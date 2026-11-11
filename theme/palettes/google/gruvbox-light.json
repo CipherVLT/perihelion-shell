@@ -1,0 +1,28 @@
+{
+  "id": "google/gruvbox-light",
+  "name": "Gruvbox",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f4ecca",
+    "foreground": "#26262b",
+    "surface": "#dcd4b6",
+    "surface_text": "#737380",
+    "hover": "#c3bda2",
+    "hover_text": "#26262b",
+    "outline": "#9a9482",
+    "shadow": "#000000",
+    "accent": "#0781c5",
+    "accent_text": "#ffffff",
+    "accent2": "#a84ea3",
+    "accent2_text": "#ffffff",
+    "accent3": "#2fa692",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 12.69,
+  "origin": "event-horizon@0e596b0"
+}

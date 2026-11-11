@@ -1082,9 +1082,7 @@ fn loadConfigFromDisk() void {
                     if (std.mem.eql(u8, choice, value)) live_theme_scheme = choice;
                 }
             } else if (std.mem.eql(u8, key, "palette")) {
-                for (THEME_PALETTE_CHOICES) |choice| {
-                    if (std.mem.eql(u8, choice, value)) live_theme_palette = choice;
-                }
+                setLivePalette(value);
             } else if (std.mem.eql(u8, key, "flavor")) {
                 // Older theme files: flavor=<auto|latte|...> is the Catppuccin palette.
                 for (THEME_PALETTE_CHOICES) |choice| {
@@ -1823,10 +1821,104 @@ fn onMatugenTypeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaqu
 }
 
 fn onThemePaletteChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    const idx = gtk.adw_combo_row_get_selected(row);
-    if (idx >= THEME_PALETTE_CHOICES.len) return;
-    live_theme_palette = THEME_PALETTE_CHOICES[idx];
+    const idx: usize = gtk.adw_combo_row_get_selected(row);
+    if (idx < THEME_PALETTE_CHOICES.len) {
+        live_theme_palette = THEME_PALETTE_CHOICES[idx];
+    } else if (idx - THEME_PALETTE_CHOICES.len < palette_file_count) {
+        live_theme_palette = palette_files[idx - THEME_PALETTE_CHOICES.len].id();
+    } else return;
     saveThemeSettings();
+}
+
+// ---------------------------------------------------------------------
+// Palette files: Event Horizon's colour themes (shipped in
+// /usr/share/perihelion/palettes) and your own (~/.local/share/perihelion/
+// palettes), listed by `perihelion-theme --list-palettes` as
+// "id<TAB>label<TAB>light<TAB>yours" lines. They follow the 14 built-in
+// choices in the Palette row; perihelion-theme owns the format, so this
+// file only ever stores an id and a label.
+// ---------------------------------------------------------------------
+const MAX_PALETTE_FILES = 512;
+const MAX_PALETTE_ID = 96;
+const MAX_PALETTE_LABEL = 128;
+
+const PaletteFile = struct {
+    id_buf: [MAX_PALETTE_ID]u8 = undefined,
+    id_len: usize = 0,
+    label_buf: [MAX_PALETTE_LABEL:0]u8 = undefined,
+    label_len: usize = 0,
+
+    fn id(self: *const PaletteFile) []const u8 {
+        return self.id_buf[0..self.id_len];
+    }
+    fn label(self: *const PaletteFile) [:0]const u8 {
+        return self.label_buf[0..self.label_len :0];
+    }
+};
+
+var palette_files: [MAX_PALETTE_FILES]PaletteFile = undefined;
+var palette_file_count: usize = 0;
+// A palette file id read from the theme file before the list is built.
+var live_palette_buf: [MAX_PALETTE_ID]u8 = undefined;
+
+fn setLivePalette(value: []const u8) void {
+    for (THEME_PALETTE_CHOICES) |choice| {
+        if (std.mem.eql(u8, choice, value)) {
+            live_theme_palette = choice;
+            return;
+        }
+    }
+    // family/name: checked by perihelion-theme when it's used.
+    if (value.len == 0 or value.len > MAX_PALETTE_ID or std.mem.indexOfScalar(u8, value, '/') == null) return;
+    @memcpy(live_palette_buf[0..value.len], value);
+    live_theme_palette = live_palette_buf[0..value.len];
+}
+
+fn discoverPaletteFiles() void {
+    palette_file_count = 0;
+    const output = runCaptured(&.{ "perihelion-theme", "--list-palettes" }, 3000) orelse return;
+    defer gpa.free(output);
+    var lines = std.mem.splitScalar(u8, output, '\n');
+    while (lines.next()) |line| {
+        if (palette_file_count == MAX_PALETTE_FILES) break;
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        const pid = fields.next() orelse continue;
+        const lbl = fields.next() orelse continue;
+        if (pid.len == 0 or pid.len > MAX_PALETTE_ID or lbl.len == 0) continue;
+        const e = &palette_files[palette_file_count];
+        @memcpy(e.id_buf[0..pid.len], pid);
+        e.id_len = pid.len;
+        const n = @min(lbl.len, MAX_PALETTE_LABEL);
+        @memcpy(e.label_buf[0..n], lbl[0..n]);
+        e.label_buf[n] = 0;
+        e.label_len = n;
+        palette_file_count += 1;
+    }
+}
+
+fn buildPaletteRow(group: *gtk.AdwPreferencesGroup) void {
+    discoverPaletteFiles();
+    const row = gtk.adw_combo_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), "Palette");
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night (Auto picks a light variant for light wallpapers), then Event Horizon's colour themes and your own palettes from ~/.local/share/perihelion/palettes. Type to search.");
+
+    var buf: [THEME_PALETTE_LABELS.len + MAX_PALETTE_FILES + 1]?[*:0]const u8 = undefined;
+    var selected_idx: c_uint = 0;
+    for (THEME_PALETTE_LABELS, 0..) |lbl, i| {
+        buf[i] = lbl;
+        if (std.mem.eql(u8, THEME_PALETTE_CHOICES[i], live_theme_palette)) selected_idx = @intCast(i);
+    }
+    for (palette_files[0..palette_file_count], 0..) |*e, i| {
+        buf[THEME_PALETTE_LABELS.len + i] = e.label().ptr;
+        if (std.mem.eql(u8, e.id(), live_theme_palette)) selected_idx = @intCast(THEME_PALETTE_LABELS.len + i);
+    }
+    buf[THEME_PALETTE_LABELS.len + palette_file_count] = null;
+    gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&buf))));
+    gtk.adw_combo_row_set_expression(row, gtk.gtk_property_expression_new(gtk.gtk_string_object_get_type(), null, "string"));
+    gtk.adw_combo_row_set_enable_search(row, 1);
+    gtk.adw_combo_row_set_selected(row, selected_idx);
+    _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onThemePaletteChanged), null, null, 0);
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
 fn onThemeModeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
@@ -1911,7 +2003,7 @@ fn buildThemeComboRow(
 
 fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
     buildThemeComboRow(group, "Style", "Palette: a color scheme below, its accents picked from the wallpaper. Material You: matugen's Material Design colors made from the wallpaper.", &THEME_STYLE_LABELS, &THEME_STYLE_CHOICES, live_theme_style, &onThemeStyleChanged);
-    buildThemeComboRow(group, "Palette", "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night. Auto picks a light variant for light wallpapers and a darker one otherwise.", &THEME_PALETTE_LABELS, &THEME_PALETTE_CHOICES, live_theme_palette, &onThemePaletteChanged);
+    buildPaletteRow(group);
     buildThemeTintRow(group);
     buildThemeGlassRow(group);
     buildThemeComboRow(group, "Accent colors", "Palette only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or the palette's own.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);

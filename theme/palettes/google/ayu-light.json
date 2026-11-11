@@ -1,0 +1,28 @@
+{
+  "id": "google/ayu-light",
+  "name": "Ayu",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f8f8f8",
+    "foreground": "#26262b",
+    "surface": "#dfdfdf",
+    "surface_text": "#737380",
+    "hover": "#c6c6c6",
+    "hover_text": "#26262b",
+    "outline": "#8492a3",
+    "shadow": "#000000",
+    "accent": "#208bf2",
+    "accent_text": "#ffffff",
+    "accent2": "#8d519e",
+    "accent2_text": "#ffffff",
+    "accent3": "#99ae45",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 14.18,
+  "origin": "event-horizon@0e596b0"
+}

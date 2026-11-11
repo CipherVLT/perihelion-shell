@@ -1,0 +1,30 @@
+{
+  "id": "google/monokai-remastered-light",
+  "name": "Monokai Remastered",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#121212",
+    "foreground": "#26262b",
+    "surface": "#101010",
+    "surface_text": "#737380",
+    "hover": "#0e0e0e",
+    "hover_text": "#26262b",
+    "outline": "#6c6c6c",
+    "shadow": "#000000",
+    "accent": "#0683ff",
+    "accent_text": "#ffffff",
+    "accent2": "#8306ff",
+    "accent2_text": "#ffffff",
+    "accent3": "#06ff83",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 1.24,
+  "origin": "event-horizon@0e596b0",
+  "low_contrast": true,
+  "light_mismatch": true
+}

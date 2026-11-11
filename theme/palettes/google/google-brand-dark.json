@@ -1,0 +1,28 @@
+{
+  "id": "google/google-brand-dark",
+  "name": "Google Brand Dark",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "brand-dark",
+  "light": false,
+  "colors": {
+    "background": "#202124",
+    "foreground": "#e8eaed",
+    "surface": "#303134",
+    "surface_text": "#9aa0a6",
+    "hover": "#393b3e",
+    "hover_text": "#e8eaed",
+    "outline": "#5f6368",
+    "shadow": "#000000",
+    "accent": "#4285f4",
+    "accent_text": "#ffffff",
+    "accent2": "#34a853",
+    "accent2_text": "#ffffff",
+    "accent3": "#fbbc04",
+    "accent3_text": "#202124",
+    "error": "#ea4335",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.36,
+  "origin": "event-horizon@0e596b0"
+}

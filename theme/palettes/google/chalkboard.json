@@ -1,0 +1,28 @@
+{
+  "id": "google/chalkboard",
+  "name": "Chalkboard",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#2b2311",
+    "foreground": "#d9d9e6",
+    "surface": "#342a15",
+    "surface_text": "#9999a6",
+    "hover": "#3a2f17",
+    "hover_text": "#d9d9e6",
+    "outline": "#4a4a4a",
+    "shadow": "#000000",
+    "accent": "#0085bf",
+    "accent_text": "#e6e6f2",
+    "accent2": "#850085",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#1a5692",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 11.11,
+  "origin": "event-horizon@0e596b0"
+}

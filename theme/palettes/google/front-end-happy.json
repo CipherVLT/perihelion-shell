@@ -1,0 +1,28 @@
+{
+  "id": "google/front-end-happy",
+  "name": "Front End Happy",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#1f1e14",
+    "foreground": "#d9d9e6",
+    "surface": "#252418",
+    "surface_text": "#9999a6",
+    "hover": "#2a291b",
+    "hover_text": "#d9d9e6",
+    "outline": "#676767",
+    "shadow": "#000000",
+    "accent": "#0085bf",
+    "accent_text": "#e6e6f2",
+    "accent2": "#850085",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#008585",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 11.98,
+  "origin": "event-horizon@0e596b0"
+}

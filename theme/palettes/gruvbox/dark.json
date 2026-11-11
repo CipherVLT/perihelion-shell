@@ -1,0 +1,28 @@
+{
+  "id": "gruvbox/dark",
+  "name": "Gruvbox Dark",
+  "family": "gruvbox",
+  "family_name": "Gruvbox",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#282828",
+    "foreground": "#ebdbb2",
+    "surface": "#333333",
+    "surface_text": "#a99a76",
+    "hover": "#3c3c3c",
+    "hover_text": "#ebdbb2",
+    "outline": "#5d5d5d",
+    "shadow": "#000000",
+    "accent": "#da8d3d",
+    "accent_text": "#282828",
+    "accent2": "#95956c",
+    "accent2_text": "#282828",
+    "accent3": "#75a175",
+    "accent3_text": "#282828",
+    "error": "#ca4545",
+    "error_text": "#282828"
+  },
+  "contrast": 10.75,
+  "origin": "event-horizon@0e596b0"
+}

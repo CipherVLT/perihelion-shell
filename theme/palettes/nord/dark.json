@@ -1,0 +1,28 @@
+{
+  "id": "nord/dark",
+  "name": "Nord Dark",
+  "family": "nord",
+  "family_name": "Nord",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#2e3440",
+    "foreground": "#d9d9e6",
+    "surface": "#373e4d",
+    "surface_text": "#9999a6",
+    "hover": "#3e4656",
+    "hover_text": "#d9d9e6",
+    "outline": "#4c566a",
+    "shadow": "#000000",
+    "accent": "#88c0d0",
+    "accent_text": "#e6e6f2",
+    "accent2": "#b48ead",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#a3be8c",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 8.93,
+  "origin": "event-horizon@0e596b0"
+}

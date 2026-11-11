@@ -28,7 +28,10 @@ Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
                      material (Material You, via matugen)
   palette=catppuccin-auto   catppuccin-auto|-latte|-frappe|-macchiato|-mocha,
                      gruvbox-auto|-dark|-light, rose-pine-auto, rose-pine,
-                     rose-pine-moon, rose-pine-dawn, nord, tokyo-night
+                     rose-pine-moon, rose-pine-dawn, nord, tokyo-night, or a
+                     palette file: Event Horizon's colour themes and your own
+                     (catppuccin/mocha-sky, google/tokyo-night, custom/NAME;
+                     see theme/README.md and --list-palettes)
   tint=on            Wallpaper tint: the palette's backgrounds, surfaces and
                      text take a dark shade of the wallpaper's main hue (its
                      lightness steps stay the palette's)
@@ -51,6 +54,7 @@ Usage:
   options: --style catppuccin|material  --flavor F  --accent wallpaper|flavor
            --scheme TYPE  --glass on|off  --force  --dry-run (print
            the chosen palette as JSON, write nothing)
+           --palette ID  --list-palettes [--all]
 """
 
 import argparse
@@ -231,6 +235,182 @@ PALETTE_CHOICES = ("catppuccin-auto", "catppuccin-latte", "catppuccin-frappe", "
                    "nord", "tokyo-night")
 
 
+# --- palette files: Event Horizon's colour themes and your own --------------
+# One JSON file per palette, id = its path below a palettes folder without
+# ".json" (catppuccin/mocha-sky, google/tokyo-night). Searched in this order,
+# so a file of yours with the same id wins:
+#   $XDG_DATA_HOME/perihelion/palettes   (~/.local/share/perihelion/palettes) yours
+#   $PERIHELION_THEME_SHARE/palettes     (/usr/share/perihelion/palettes) shipped
+#   theme/palettes next to this script   a git checkout
+# A file straight in your folder (no family subfolder) gets the id custom/<name>.
+# Format (theme/README.md): "name", optional "light", and "colors" with at least
+# background, foreground and accent; the other roles are derived when missing.
+# An optional "ansi" list of 16 colors is used for the terminal's colors.
+DATA = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
+PALETTE_ID = re.compile(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*")
+PALETTE_ROLES = ("background", "foreground", "surface", "surface_text", "hover", "hover_text",
+                 "outline", "shadow", "accent", "accent_text", "accent2", "accent2_text",
+                 "accent3", "accent3_text", "error", "error_text")
+HEX6 = re.compile(r"#?[0-9A-Fa-f]{6}")
+
+
+def palette_dirs():
+    """(folder, is_yours) in lookup order."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    return [(os.path.join(DATA, "perihelion", "palettes"), True),
+            (os.path.join(SHARE, "palettes"), False),
+            (os.path.join(here, "theme", "palettes"), False)]
+
+
+def palette_path(pid):
+    """The file behind a palette id, or None."""
+    if not PALETTE_ID.fullmatch(pid):
+        return None
+    family, name = pid.split("/", 1)
+    for d, yours in palette_dirs():
+        for p in ([os.path.join(d, family, name + ".json")]
+                  + ([os.path.join(d, name + ".json")] if yours and family == "custom" else [])):
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def _relative_luminance(h):
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = hex_rgb(h.lstrip("#"))
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def load_palette_file(path, pid):
+    """A palette file -> a PRESETS entry (the shape the writers use). Raises
+    ValueError for a file that isn't usable."""
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    if not isinstance(doc, dict) or not isinstance(doc.get("colors"), dict):
+        raise ValueError("no \"colors\" object")
+    given = {}
+    for k, v in doc["colors"].items():
+        if k in PALETTE_ROLES:
+            if not (isinstance(v, str) and HEX6.fullmatch(v)):
+                raise ValueError(f"colors.{k} isn't #RRGGBB")
+            given[k] = "#" + v.lstrip("#").lower()
+    for k in ("background", "foreground", "accent"):
+        if k not in given:
+            raise ValueError(f"colors.{k} is missing")
+    bg, fg = given["background"], given["foreground"]
+    c = dict(given)
+    # Roles a hand-written palette may leave out, from the ones it has.
+    c.setdefault("surface", mix(bg, fg, 0.06))
+    c.setdefault("hover", mix(bg, fg, 0.10))
+    c.setdefault("surface_text", mix(fg, bg, 0.30))
+    c.setdefault("outline", mix(bg, fg, 0.45))
+    c.setdefault("shadow", "#000000")
+    c.setdefault("accent2", c["accent"])
+    c.setdefault("accent3", c["accent2"])
+    c.setdefault("error", c["accent"])
+    light = doc.get("light")
+    if not isinstance(light, bool):
+        light = _relative_luminance(bg) > 0.18
+    # Event Horizon's 16 roles onto the 12 neutral steps the writers know
+    # (Catppuccin's names): the roles where they exist, steps between mixed.
+    neutrals = {
+        "crust": mix(bg, c["shadow"], 0.45), "mantle": mix(bg, c["shadow"], 0.25), "base": bg,
+        "surface0": c["surface"], "surface1": c["hover"], "surface2": mix(c["hover"], c["outline"], 0.5),
+        "overlay0": c["outline"], "overlay1": mix(c["outline"], c["surface_text"], 0.35),
+        "overlay2": mix(c["outline"], c["surface_text"], 0.7), "subtext0": c["surface_text"],
+        "subtext1": mix(c["surface_text"], fg, 0.5), "text": fg,
+    }
+    # The wallpaper picks among the three accents; error stays out (red
+    # borders on a blue wallpaper otherwise).
+    accents = {k: c[k] for k in ("accent", "accent2", "accent3")}
+    ansi = doc.get("ansi")
+    if isinstance(ansi, list) and len(ansi) == 16 and all(
+            isinstance(a, str) and HEX6.fullmatch(a) for a in ansi):
+        term = {n: "#" + ansi[i].lstrip("#").lower() for i, n in
+                enumerate(("black", "red", "green", "yellow", "blue", "magenta", "cyan"), 0)}
+    else:
+        # No terminal colors (Event Horizon's themes have none): Catppuccin's,
+        # as Material You does, so `ls` colors still read.
+        ref = PALETTES["latte" if light else "mocha"]
+        term = {"red": "#" + ref["red"], "green": "#" + ref["green"], "yellow": "#" + ref["yellow"],
+                "blue": "#" + ref["blue"], "magenta": "#" + ref["pink"], "cyan": "#" + ref["teal"]}
+    strip = lambda d: {k: v.lstrip("#") for k, v in d.items()}  # noqa: E731
+    return {
+        "name": str(doc.get("name") or pid), "light": light, "file": path,
+        "neutrals": strip(neutrals), "accents": strip(accents),
+        "ansi_colors": strip(term), "ansi": ("red", "green", "yellow", "blue", "magenta", "cyan"),
+        "default": ("accent", "accent2", "accent3"),
+    }
+
+
+def ensure_palette(pid):
+    """Load a palette file into PRESETS; True when pid is usable."""
+    if pid in PRESETS:
+        return True
+    path = palette_path(pid)
+    if not path:
+        return False
+    try:
+        PRESETS[pid] = load_palette_file(path, pid)
+    except (OSError, ValueError) as e:
+        print(f"perihelion-theme: palette {pid} ({path}): {e}", file=sys.stderr)
+        return False
+    return True
+
+
+def list_palettes(include_flagged=False):
+    """Every palette file as (id, label, light, yours), yours and then the
+    shipped ones, each sorted by family and name. Palettes Event Horizon ships
+    with unreadable text (low_contrast) are left out unless asked for."""
+    seen, out = set(), []
+    for d, yours in palette_dirs():
+        if not os.path.isdir(d):
+            continue
+        rows = []
+        for root, _dirs, files in os.walk(d):
+            for fn in files:
+                if not fn.endswith(".json") or fn == "SOURCE.json":
+                    continue
+                rel = os.path.relpath(os.path.join(root, fn), d)[:-len(".json")]
+                pid = rel.replace(os.sep, "/") if os.sep in rel else "custom/" + rel
+                if pid in seen or not PALETTE_ID.fullmatch(pid):
+                    continue
+                try:
+                    with open(os.path.join(root, fn), encoding="utf-8") as f:
+                        doc = json.load(f)
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(doc, dict) or (doc.get("low_contrast") and not include_flagged):
+                    continue
+                try:  # only palettes that would actually load
+                    load_palette_file(os.path.join(root, fn), pid)
+                except (OSError, ValueError):
+                    continue
+                seen.add(pid)
+                family = doc.get("family_name") or ("Custom" if yours and pid.startswith("custom/")
+                                                     else pid.split("/")[0].replace("-", " ").title())
+                name = str(doc.get("name") or pid.split("/")[1])
+                light = doc.get("light") is True
+                label = name if name.lower().startswith(family.lower()) else f"{family} · {name}"
+                if light and "light" not in name.lower():
+                    label += " (light)"
+                if yours:
+                    label += " (yours)"
+                rows.append((pid, label, light, yours))
+        out += sorted(rows, key=lambda r: (r[0].split("/")[0] != "catppuccin", r[0].split("/")[0],
+                                           r[2], r[1].lower()))
+    return out
+
+
+def palette_arg(v):
+    v = v.strip().lower()
+    if v in PALETTE_CHOICES or ensure_palette(v):
+        return v
+    raise argparse.ArgumentTypeError(f"no palette {v!r} (see --list-palettes)")
+
+
 # --- color math (OKLab: perceptual, so "closest" means what eyes see) --------
 def hex_rgb(h):
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
@@ -322,7 +502,7 @@ def mean_lightness(pixels):
 
 def resolve_palette(choice, pixels):
     """A PALETTE_CHOICES value → a PRESETS id ("-auto" goes by lightness)."""
-    if choice in PRESETS:
+    if choice in PRESETS or ensure_palette(choice):
         return choice
     L = mean_lightness(pixels)
     if choice == "gruvbox-auto":
@@ -421,7 +601,8 @@ def build_theme(preset_id, accents, tint=None):
     a1, a2, a3 = accents
     colors = {k: "#" + v for k, v in pre["neutrals"].items()}
     colors.update({k: "#" + v for k, v in acc.items()})
-    red, green, yellow, blue, magenta, cyan = (acc[n] for n in pre["ansi"])
+    term = pre.get("ansi_colors") or acc  # palette files keep the terminal's apart
+    red, green, yellow, blue, magenta, cyan = (term[n] for n in pre["ansi"])
     colors.update({"red": "#" + red, "ansi_green": "#" + green, "ansi_yellow": "#" + yellow,
                    "ansi_blue": "#" + blue, "ansi_magenta": "#" + magenta, "ansi_cyan": "#" + cyan})
     if tint:
@@ -1231,7 +1412,9 @@ def read_settings():
             continue
         if k == "flavor" and v in ("auto",) + FLAVORS and "palette_set" not in s:
             s["palette"] = "catppuccin-" + v  # older theme files
-        elif k == "palette" and v in PALETTE_CHOICES:
+        elif k == "palette" and (v in PALETTE_CHOICES or PALETTE_ID.fullmatch(v)):
+            # A palette file id is checked when it's used: a missing or broken
+            # file falls back to Catppuccin (resolve_palette).
             s["palette"], s["palette_set"] = v, True
         elif k == "tint" and v in ("on", "off"):
             s["tint"] = v == "on"
@@ -1282,7 +1465,11 @@ def main(argv=None):
     ap.add_argument("image", nargs="?")
     ap.add_argument("--color")
     ap.add_argument("--flavor", choices=("auto",) + FLAVORS)
-    ap.add_argument("--palette", choices=PALETTE_CHOICES)
+    ap.add_argument("--palette", type=palette_arg,
+                    help="a built-in choice or a palette file id (catppuccin/mocha-sky)")
+    ap.add_argument("--list-palettes", action="store_true",
+                    help="print the palette files: id, label, light (0/1), yours (0/1)")
+    ap.add_argument("--all", action="store_true", help="with --list-palettes: low-contrast ones too")
     ap.add_argument("--tint", choices=("on", "off"))
     ap.add_argument("--mode", choices=("dark", "light", "auto"))
     ap.add_argument("--accent", choices=("wallpaper", "flavor"))
@@ -1292,6 +1479,11 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.list_palettes:
+        for pid, label, light, yours in list_palettes(args.all):
+            print(f"{pid}\t{label}\t{int(light)}\t{int(yours)}")
+        return 0
 
     settings = read_settings()
     glass_on = settings["glass"] if args.glass is None else args.glass == "on"
@@ -1327,6 +1519,12 @@ def main(argv=None):
     if kind == "image":
         try:
             stamp_src += f"|{os.path.getmtime(value)}"
+        except OSError:
+            pass
+    pal_file = palette_path(palette_setting) if style != "material" else None
+    if pal_file:  # an edited palette file recolors at the next run
+        try:
+            stamp_src += f"|{pal_file}|{os.path.getmtime(pal_file)}"
         except OSError:
             pass
     stamp = hashlib.sha1(stamp_src.encode()).hexdigest()

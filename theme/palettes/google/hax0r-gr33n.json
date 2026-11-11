@@ -1,0 +1,28 @@
+{
+  "id": "google/hax0r-gr33n",
+  "name": "HaX0R_GR33N",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#121212",
+    "foreground": "#d9d9e6",
+    "surface": "#161616",
+    "surface_text": "#9999a6",
+    "hover": "#181818",
+    "hover_text": "#d9d9e6",
+    "outline": "#525252",
+    "shadow": "#000000",
+    "accent": "#0085bf",
+    "accent_text": "#e6e6f2",
+    "accent2": "#850085",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#008585",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.4,
+  "origin": "event-horizon@0e596b0"
+}

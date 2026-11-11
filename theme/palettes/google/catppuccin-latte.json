@@ -1,0 +1,28 @@
+{
+  "id": "google/catppuccin-latte",
+  "name": "Catppuccin Latte",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f1ede3",
+    "foreground": "#26262b",
+    "surface": "#d9d5cc",
+    "surface_text": "#737380",
+    "hover": "#c1beb6",
+    "hover_text": "#26262b",
+    "outline": "#9394ab",
+    "shadow": "#000000",
+    "accent": "#63b1f1",
+    "accent_text": "#ffffff",
+    "accent2": "#bd9eb2",
+    "accent2_text": "#ffffff",
+    "accent3": "#e0c0e6",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 12.88,
+  "origin": "event-horizon@0e596b0"
+}

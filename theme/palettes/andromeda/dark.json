@@ -1,0 +1,28 @@
+{
+  "id": "andromeda/dark",
+  "name": "Andromeda",
+  "family": "andromeda",
+  "family_name": "Andromeda",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#202126",
+    "foreground": "#d9d9e6",
+    "surface": "#26272e",
+    "surface_text": "#9999a6",
+    "hover": "#2b2c33",
+    "hover_text": "#d9d9e6",
+    "outline": "#626269",
+    "shadow": "#000000",
+    "accent": "#ed91a1",
+    "accent_text": "#e6e6f2",
+    "accent2": "#a8b6ff",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#69c9aa",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 11.49,
+  "origin": "event-horizon@0e596b0"
+}

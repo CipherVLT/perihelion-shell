@@ -1,0 +1,143 @@
+{
+  "event_horizon": "https://github.com/Event-Horizon-desktop-environment/Event-Horizon",
+  "commit": "0e596b02167e1f112884e3b9e9dff796c955b0d4",
+  "file": "src/ux/settings2/theme_presets.zig",
+  "license": "GPL-3.0 (Event Horizon)",
+  "generated_by": "theme/import-eh-palettes.py",
+  "count": 268,
+  "families": {
+    "catppuccin": {
+      "dark": 9,
+      "light": 1
+    },
+    "google": {
+      "dark": 193,
+      "light": 44
+    },
+    "gruvbox": {
+      "dark": 2,
+      "light": 1
+    },
+    "rose-pine": {
+      "dark": 2,
+      "light": 1
+    },
+    "dracula": {
+      "dark": 1,
+      "light": 1
+    },
+    "nord": {
+      "dark": 1,
+      "light": 1
+    },
+    "tokyo-night": {
+      "dark": 2,
+      "light": 0
+    },
+    "monokai": {
+      "dark": 1,
+      "light": 0
+    },
+    "solarized": {
+      "dark": 1,
+      "light": 0
+    },
+    "everforest": {
+      "dark": 1,
+      "light": 0
+    },
+    "kanagawa": {
+      "dark": 1,
+      "light": 0
+    },
+    "ayu": {
+      "dark": 1,
+      "light": 0
+    },
+    "atom": {
+      "dark": 1,
+      "light": 0
+    },
+    "night-owl": {
+      "dark": 1,
+      "light": 0
+    },
+    "sonokai": {
+      "dark": 1,
+      "light": 0
+    },
+    "andromeda": {
+      "dark": 1,
+      "light": 0
+    }
+  },
+  "low_contrast": [
+    {
+      "id": "google/fruit-soda-light",
+      "contrast": 1.11
+    },
+    {
+      "id": "google/hax0r-r3d-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/monokai-pro-light",
+      "contrast": 1.12
+    },
+    {
+      "id": "google/monokai-remastered-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/one-half-black-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/one-half-dark-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/rapture-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/raycast-dark-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/solar-darcula-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/spacegray-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/terminal-basic-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/the-hulk-light",
+      "contrast": 1.24
+    },
+    {
+      "id": "google/tokyo-night-storm-light",
+      "contrast": 1.09
+    }
+  ],
+  "light_mismatch": [
+    "google/fruit-soda-light",
+    "google/hax0r-r3d-light",
+    "google/monokai-pro-light",
+    "google/monokai-remastered-light",
+    "google/one-half-black-light",
+    "google/one-half-dark-light",
+    "google/rapture-light",
+    "google/raycast-dark-light",
+    "google/solar-darcula-light",
+    "google/spacegray-light",
+    "google/terminal-basic-light",
+    "google/the-hulk-light",
+    "google/tokyo-night-storm-light"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "id": "google/seti",
+  "name": "Seti",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#0f1012",
+    "foreground": "#d9d9e6",
+    "surface": "#121316",
+    "surface_text": "#9999a6",
+    "hover": "#141618",
+    "hover_text": "#d9d9e6",
+    "outline": "#5c5c5c",
+    "shadow": "#000000",
+    "accent": "#0085bf",
+    "accent_text": "#e6e6f2",
+    "accent2": "#850085",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#008585",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.61,
+  "origin": "event-horizon@0e596b0"
+}

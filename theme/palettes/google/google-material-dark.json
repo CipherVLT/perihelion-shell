@@ -1,0 +1,28 @@
+{
+  "id": "google/google-material-dark",
+  "name": "Google Material Dark",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#1c1b1f",
+    "foreground": "#ede9f3",
+    "surface": "#49464e",
+    "surface_text": "#c7c1cd",
+    "hover": "#2f2d33",
+    "hover_text": "#ede9f3",
+    "outline": "#7e7985",
+    "shadow": "#000000",
+    "accent": "#ac85ff",
+    "accent_text": "#1f0044",
+    "accent2": "#c2b7cf",
+    "accent2_text": "#1d1b20",
+    "accent3": "#8581e3",
+    "accent3_text": "#1d1b20",
+    "error": "#ff7171",
+    "error_text": "#1d1b20"
+  },
+  "contrast": 14.32,
+  "origin": "event-horizon@0e596b0"
+}
