@@ -793,9 +793,14 @@ fn drawDockMedia(pixels: [*]u32, buf_width: u32, buf_height: u32, font: *font_mo
     };
     const has_player = mpris_text.len > 0;
     for (controls, 0..) |c, k| {
-        drawPill(pixels, buf_width, buf_height, x, x + bw, click_regions.nextHover());
+        // No pill: the glyph rests a touch dimmer and lights up when hovered,
+        // like the dock's icons.
+        const lit = click_regions.nextHover();
         const adv: i64 = if (font.glyph(c.cp)) |g| g.advance_x else |_| 0;
-        const col = if (has_player) ap.text_color else ap.workspace_inactive_color;
+        const col = if (has_player)
+            litColor(lerpColor(ap.text_color, ap.workspace_inactive_color, 0.25 * (1.0 - lit)), lit)
+        else
+            ap.workspace_inactive_color;
         _ = drawGlyphAt(pixels, buf_width, buf_height, font, x + @divTrunc(bw - adv, 2), y0, c.cp, col, 0, buf_width);
         click_regions.add(@intCast(x), @intCast(x + bw), .{ .mpris_control = c.ctl });
         x += bw;
@@ -8921,8 +8926,8 @@ fn drawCenterGroup(
             const region_start = x0;
             const hover_start = region_start - @divTrunc(launcher_gap, 2);
             const hover_end = region_start + seg.icon_w + @divTrunc(launcher_gap, 2);
-            drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
-            if (dock_drawer_icon.has_icon) drawLauncherIcon(pixels, buf_width, buf_height, x0, &dock_drawer_icon);
+            const lit = hoverOrLit(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            if (dock_drawer_icon.has_icon) drawLauncherIconLit(pixels, buf_width, buf_height, x0, &dock_drawer_icon, lit);
             x0 += seg.icon_w;
             click_regions.add(@intCast(hover_start), @intCast(hover_end), .{ .spawn = "appdrawer" });
         } else if (seg.dock_media) {
@@ -8931,8 +8936,8 @@ fn drawCenterGroup(
             const region_start = x0;
             const hover_start = region_start - @divTrunc(launcher_gap, 2);
             const hover_end = region_start + seg.icon_w + @divTrunc(launcher_gap, 2);
-            drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
-            if (trash_icon.has_icon) drawLauncherIcon(pixels, buf_width, buf_height, x0, &trash_icon);
+            const lit = hoverOrLit(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            if (trash_icon.has_icon) drawLauncherIconLit(pixels, buf_width, buf_height, x0, &trash_icon, lit);
             x0 += seg.icon_w;
             // Click opens the trash; right-click empties it (asks first).
             click_regions.addWithRight(@intCast(hover_start), @intCast(hover_end), .{ .spawn = "perihelion-trash" }, .{ .spawn = "perihelion-trash --empty" });
@@ -8941,7 +8946,8 @@ fn drawCenterGroup(
             const label_w = seg.icon_w + textPixelWidth(font, seg.label);
             const hover_start = region_start - @divTrunc(launcher_gap, 2);
             const hover_end = region_start + label_w + @divTrunc(launcher_gap, 2);
-            drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            const lit = hoverOrLit(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            const txt = litColor(current_config.appearance.text_color, lit);
             if (seg.icon_w > 0 and seg.launcher_idx < launcher_icons.len) {
                 const distro = launcher_icons[seg.launcher_idx].distro_glyph;
                 if (distro != 0) {
@@ -8951,17 +8957,17 @@ fn drawCenterGroup(
                     const dg_str = encodeBmpCodepoint(distro, &dg_buf);
                     var gi: usize = 0;
                     while (nextUtf8Codepoint(dg_str, &gi)) |cp| {
-                        x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, current_config.appearance.text_color, 0, buf_width);
+                        x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, txt, 0, buf_width);
                     }
                     x0 += seg.icon_w - textPixelWidth(font, dg_str);
                 } else {
-                    drawLauncherIcon(pixels, buf_width, buf_height, x0, &launcher_icons[seg.launcher_idx]);
+                    drawLauncherIconLit(pixels, buf_width, buf_height, x0, &launcher_icons[seg.launcher_idx], lit);
                     x0 += seg.icon_w;
                 }
             }
             var i: usize = 0;
             while (nextUtf8Codepoint(seg.label, &i)) |cp| {
-                x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, current_config.appearance.text_color, 0, buf_width);
+                x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, txt, 0, buf_width);
             }
             // Pinned icon doubles as its running app (same launcherLive
             // source as the left group); guard the index for a config that
@@ -8984,18 +8990,18 @@ fn drawCenterGroup(
             const label_w = seg.icon_w + textPixelWidth(font, seg.label);
             const hover_start = region_start - @divTrunc(launcher_gap, 2);
             const hover_end = region_start + label_w + @divTrunc(launcher_gap, 2);
-            drawPill(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
+            const lit = hoverOrLit(pixels, buf_width, buf_height, hover_start, hover_end, click_regions.nextHover());
             if (seg.icon_w > 0) {
                 if (fci < running_state.len) {
                     if (tailIconPixels(running_state.apps[fci].appid())) |px| {
-                        blitIcon16(pixels, buf_width, buf_height, x0, px);
+                        blitIcon16Lit(pixels, buf_width, buf_height, x0, px, lit);
                     }
                 }
                 x0 += seg.icon_w;
             } else {
                 var i: usize = 0;
                 while (nextUtf8Codepoint(seg.label, &i)) |cp| {
-                    x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, current_config.appearance.text_color, 0, buf_width);
+                    x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, litColor(current_config.appearance.text_color, lit), 0, buf_width);
                 }
             }
             drawRunningDot(pixels, buf_width, buf_height, region_start + @divTrunc(label_w, 2), seg.task_focused);
@@ -9043,7 +9049,74 @@ fn drawCenterGroup(
 /// so coverage-weighted RGB is exact). Shared by launcher pins and the
 /// taskbar tail — both caches hold the same 16px format.
 fn blitIcon16(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, icon: []const u32) void {
+    blitIcon16Lit(pixels, buf_width, buf_height, x0, icon, 0.0);
+}
+
+/// How far a hovered dock icon lights up (Event Horizon style: the icon
+/// itself brightens, no shape behind it). Gain keeps the icon's hues (a
+/// plain fade to white would wash them out); the small white lift makes
+/// dark icons visibly respond too.
+const DOCK_LIT_GAIN: f32 = 0.30;
+const DOCK_LIT_LIFT: f32 = 0.12;
+
+/// `c` (0xAARRGGBB, straight color) brightened by hover level `lit` 0..1;
+/// alpha untouched, so only the icon's own pixels change.
+fn litColor(c: u32, lit: f32) u32 {
+    if (lit <= 0.0) return c;
+    const k = std.math.clamp(lit, 0.0, 1.0);
+    const gain = 1.0 + DOCK_LIT_GAIN * k;
+    const lift = DOCK_LIT_LIFT * k;
+    var out: u32 = c & 0xFF000000;
+    var sh: u5 = 0;
+    while (sh < 24) : (sh += 8) {
+        const v: f32 = @floatFromInt((c >> sh) & 0xFF);
+        const b = @min(255.0, v * gain);
+        const l = b + (255.0 - b) * lift;
+        out |= @as(u32, @intFromFloat(@min(255.0, l) + 0.5)) << sh;
+    }
+    return out;
+}
+
+/// Peak opacity (of 255) of the soft wash behind a fully hovered dock icon.
+const DOCK_GLOW_ALPHA: f32 = 46.0;
+
+/// Event Horizon's hover tile: a faint, light rounded square behind the
+/// icon, tinted with the icon's own colour (grey behind a monochrome icon,
+/// warm behind a red one). Composited over the glass, so it can only lift
+/// it, never darken it: no dark pill.
+fn drawDockGlow(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i64, icon: []const u32, lit: f32) void {
+    const size: i64 = launcher_icon_size;
+    // Alpha-weighted average colour of the icon.
+    var r: u64 = 0;
+    var g: u64 = 0;
+    var b: u64 = 0;
+    var wsum: u64 = 0;
+    for (icon[0 .. launcher_icon_size * launcher_icon_size]) |px| {
+        const a: u64 = (px >> 24) & 0xFF;
+        if (a == 0) continue;
+        r += a * ((px >> 16) & 0xFF);
+        g += a * ((px >> 8) & 0xFF);
+        b += a * (px & 0xFF);
+        wsum += a;
+    }
+    const tint: u32 = if (wsum == 0) 0xFFFFFFFF else 0xFF000000 |
+        (@as(u32, @intCast(r / wsum)) << 16) | (@as(u32, @intCast(g / wsum)) << 8) | @as(u32, @intCast(b / wsum));
+    // Mostly white with a hint of the icon: reads as light catching glass.
+    const wash = lerpColor(tint, 0xFFFFFFFF, 0.6);
+    // As much breathing room as the dock has (Shrink the dash leaves little).
+    const room = @divTrunc(@as(i64, @intCast(buf_height)) - size, 2) - 1;
+    const pad = std.math.clamp(@divTrunc(size, 6), 0, @max(room, 0));
+    const radius: i32 = @intCast(@divTrunc(size + 2 * pad, 3));
+    const alpha: u8 = @intFromFloat(std.math.clamp(lit, 0.0, 1.0) * DOCK_GLOW_ALPHA);
+    if (alpha == 0) return;
+    fillRoundedRectOver(pixels, buf_width, buf_height, x0 - pad, y0 - pad, x0 + size + pad, y0 + size + pad, radius, wash, alpha);
+}
+
+/// blitIcon16 with the dock's hover light-up: the soft tinted tile behind,
+/// then the icon itself brightened.
+fn blitIcon16Lit(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, icon: []const u32, lit: f32) void {
     const y0 = @divTrunc(@as(i64, @intCast(buf_height)) - launcher_icon_size, 2);
+    if (lit > 0.0) drawDockGlow(pixels, buf_width, buf_height, x0, y0, icon, lit);
     for (0..launcher_icon_size) |iy| {
         for (0..launcher_icon_size) |ix| {
             const src = icon[iy * launcher_icon_size + ix];
@@ -9056,7 +9129,7 @@ fn blitIcon16(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, icon: []
             const pyu: usize = @intCast(py);
             if (pxu >= buf_width or pyu >= buf_height) continue;
             const idx = pyu * buf_width + pxu;
-            pixels[idx] = blendPixel(pixels[idx], src, coverage);
+            pixels[idx] = blendPixel(pixels[idx], litColor(src, lit), coverage);
         }
     }
 }
@@ -9065,6 +9138,20 @@ fn blitIcon16(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, icon: []
 /// existing call sites read unchanged).
 fn drawLauncherIcon(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, cache: *const LauncherIconCache) void {
     blitIcon16(pixels, buf_width, buf_height, x0, &cache.pixels);
+}
+
+/// A dock icon, lit by its hover level (no pill behind it).
+fn drawLauncherIconLit(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, cache: *const LauncherIconCache, lit: f32) void {
+    blitIcon16Lit(pixels, buf_width, buf_height, x0, &cache.pixels, lit);
+}
+
+/// The hover treatment for one bar/dock button: the bar keeps its pill; the
+/// dock draws nothing behind the icon and returns the level the icon lights
+/// up by instead.
+fn hoverOrLit(pixels: [*]u32, buf_width: u32, buf_height: u32, x_start: i64, x_end: i64, level: f32) f32 {
+    if (dock_mode) return level;
+    drawPill(pixels, buf_width, buf_height, x_start, x_end, level);
+    return 0.0;
 }
 
 /// Draws `label` ending at `x_end` (its right edge), returns the x
