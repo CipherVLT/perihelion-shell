@@ -10,7 +10,9 @@
 //!   * decoded at a quarter of the screen's long side (about 480x270 for
 //!     1080p, ~0.5 MB) — the blur removes the detail anyway, and bilinear
 //!     sampling upscales it smoothly;
-//!   * three box-blur passes (a near-Gaussian), done once;
+//!   * three box-blur passes (a near-Gaussian), done once, then graded like
+//!     Mango's blur (cfg/appearance.conf: brightness 0.88, contrast 1.15,
+//!     saturation 1.25), so cards match the compositor's glass;
 //!   * mapped exactly like swaybg's fill mode (scale to cover, centered), so
 //!     what shows through a card lines up with the wallpaper around it.
 //!
@@ -73,7 +75,11 @@ pub const Backdrop = struct {
                 px[y * w + x] = 0xFF000000 | (@as(u32, p[0]) << 16) | (@as(u32, p[1]) << 8) | p[2];
             }
         }
-        boxBlur(gpa, px, w, h, @max(2, w / 80)) catch {};
+        // About as strong as Mango's frost (dual Kawase, radius 4 x 4 passes),
+        // then graded the same way, so a widget card and the bar, dock or
+        // drawer next to it look like one sheet of glass.
+        boxBlur(gpa, px, w, h, @max(2, w / 64)) catch {};
+        for (px) |*p| p.* = grade(p.*);
 
         if (self.pixels.len > 0) gpa.free(self.pixels);
         self.pixels = px;
@@ -152,6 +158,45 @@ fn blurLine(src: []const u32, dst: []u32, w: u32, h: u32, r: u32, horizontal: bo
             sb = sb + (pi & 0xFF) - (po & 0xFF);
         }
     }
+}
+
+// Mango's blur_params (Perihelion's cfg/appearance.conf), applied the way
+// its shader does: saturation, then contrast around mid grey, then brightness.
+const GRADE_BRIGHTNESS: f32 = 0.88;
+const GRADE_CONTRAST: f32 = 1.15;
+const GRADE_SATURATION: f32 = 1.25;
+
+fn grade(p: u32) u32 {
+    var c = [3]f32{
+        @as(f32, @floatFromInt((p >> 16) & 0xFF)) / 255.0,
+        @as(f32, @floatFromInt((p >> 8) & 0xFF)) / 255.0,
+        @as(f32, @floatFromInt(p & 0xFF)) / 255.0,
+    };
+    const luma = 0.2125 * c[0] + 0.7154 * c[1] + 0.0721 * c[2];
+    var out: u32 = 0xFF000000;
+    for (&c, 0..) |*v, i| {
+        v.* = luma + (v.* - luma) * GRADE_SATURATION;
+        v.* = (v.* - 0.5) * GRADE_CONTRAST + 0.5;
+        v.* *= GRADE_BRIGHTNESS;
+        const b: u32 = @intFromFloat(std.math.clamp(v.*, 0.0, 1.0) * 255.0 + 0.5);
+        out |= b << @intCast(16 - 8 * i);
+    }
+    return out;
+}
+
+/// +-1 step of ordered noise: breaks up the banding a smooth, upscaled blur
+/// shows in skies and gradients (Mango's blur_params_noise does the same).
+fn dither(p: u32, x: usize, y: usize) u32 {
+    const hsh = (@as(u32, @truncate(x)) *% 0x27d4eb2d) ^ (@as(u32, @truncate(y)) *% 0x165667b1);
+    const n: i32 = @as(i32, @intCast((hsh >> 13) % 3)) - 1;
+    if (n == 0) return p;
+    var out: u32 = p & 0xFF000000;
+    var i: u5 = 0;
+    while (i < 24) : (i += 8) {
+        const v: i32 = @intCast((p >> i) & 0xFF);
+        out |= @as(u32, @intCast(std.math.clamp(v + n, 0, 255))) << i;
+    }
+    return out;
 }
 
 fn lerpRgb(a: u32, b: u32, t: f32) u32 {
@@ -233,7 +278,7 @@ pub fn paintCard(tile: []u32, tw: u32, th: u32, origin_x: i32, origin_y: i32, sc
             var op: f32 = flat_op;
             if (glass) {
                 const base = bd.sample(@as(f32, @floatFromInt(origin_x)) + fx, @as(f32, @floatFromInt(origin_y)) + fy, sw, sh);
-                col = lerpRgb(lerpRgb(base, tint, t), lift, 0.05);
+                col = dither(lerpRgb(lerpRgb(base, tint, t), lift, 0.04), xx + @as(usize, @intCast(@max(origin_x, 0))), yy + @as(usize, @intCast(@max(origin_y, 0))));
                 op = 1.0;
             }
             // Hairline border inside the edge (about 1 px), lighter at the top.

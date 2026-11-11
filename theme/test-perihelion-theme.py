@@ -316,6 +316,40 @@ try:
         r = run(home, img("green-purple.png"), "--style", "material", "--force")
         check(r.returncode == 0 and "Catppuccin" in r.stdout and "instead" in r.stderr,
               "material without matugen: falls back to Catppuccin")
+
+    # 8. Window glass (Mango): frosted GTK CSS, our gtk.css stub only, off/on.
+    gh = os.path.join(tmp, "glasshome")
+    os.makedirs(os.path.join(gh, ".config", "mango"))
+    os.environ["PERIHELION_GLASS_FORCE"] = "1"
+    r = run(gh, img("dark-red.png"), "--force")
+    g4 = os.path.join(gh, ".config", "gtk-4.0")
+    css4 = open(os.path.join(g4, "perihelion-glass.css")).read() if os.path.isfile(os.path.join(g4, "perihelion-glass.css")) else ""
+    check(r.returncode == 0 and "--window-bg-color: rgba(" in css4, "glass: GTK 4 window frost written")
+    a = float(re.search(r"--window-bg-color: rgba\([^)]*, ([0-9.]+)\)", css4).group(1)) if css4 else 0
+    p = float(re.search(r"--popover-bg-color: rgba\([^)]*, ([0-9.]+)\)", css4).group(1)) if css4 else 0
+    check(0.7 <= a <= 0.9 and p >= 0.95, f"glass: see-through windows ({a}), nearly solid popovers ({p})")
+    check("border-radius: 12px" in css4, "glass: corners match Mango's border_radius")
+    check(pt.GLASS_IMPORT in open(os.path.join(g4, "gtk.css")).read(), "glass: gtk.css imports it")
+    css3 = open(os.path.join(gh, ".config", "gtk-3.0", "perihelion-glass.css")).read()
+    check("window.background" in css3 and "menu" in css3, "glass: GTK 3 rules written")
+    own = os.path.join(gh, ".config", "gtk-3.0", "gtk.css")
+    with open(own, "w") as f:
+        f.write("/* mine */\n")
+    run(gh, img("light.png"), "--force")
+    check(open(own).read() == "/* mine */\n", "glass: a gtk.css of your own is left alone")
+    r = run(gh, img("light.png"), "--force", "--glass", "off")
+    check("--window-bg-color" not in open(os.path.join(g4, "perihelion-glass.css")).read(), "glass: off empties it")
+    with open(os.path.join(gh, ".config", "simpbar", "config.json"), "w") as f:
+        json.dump({"appearance": {"auto_theme": "manual"}}, f)
+    run(gh, "--glass", "on")
+    check("--window-bg-color" in open(os.path.join(g4, "perihelion-glass.css")).read(),
+          "glass: back on without a recolor (Match the wallpaper off)")
+    del os.environ["PERIHELION_GLASS_FORCE"]
+    nm = os.path.join(tmp, "nomango")
+    os.makedirs(nm)
+    run(nm, img("dark-red.png"), "--force")
+    check(not os.path.exists(os.path.join(nm, ".config", "gtk-4.0", "perihelion-glass.css")),
+          "glass: not written without Mango (Niri, Event Horizon)")
 finally:
     shutil.rmtree(tmp)
 

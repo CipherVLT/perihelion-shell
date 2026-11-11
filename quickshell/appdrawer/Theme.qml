@@ -62,6 +62,9 @@ Singleton {
     function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
     // Over Mango's frosted wallpaper (Perihelion blurs the drawer's layer), so
     // it can be more see-through without busy content showing through.
+    // 0.76 and the 0.07 top highlight are the shell's one glass: the same
+    // frost perihelion-theme gives GTK windows (perihelion-glass.css), so the
+    // drawer, app windows and desktop widgets read as one material.
     readonly property color glass: alpha(bg, 0.76)
     readonly property color glassEdge: alpha(accent, 0.22)
     readonly property color glassHighlight: Qt.rgba(1, 1, 1, 0.07)
