@@ -301,6 +301,9 @@ const JsonAppearance = struct {
     // Resting module pills on/off. Matches main.zig's
     // JsonAppearance.module_pills exactly.
     module_pills: bool = true,
+    // Colored glass for the bar and dock (off = clear, untinted glass).
+    // Matches main.zig's JsonAppearance.colored_glass exactly.
+    colored_glass: bool = true,
     // Bezel rings on/off wherever they appear. Matches main.zig's
     // JsonAppearance.pill_borders exactly.
     pill_borders: bool = true,
@@ -671,6 +674,10 @@ var live_module_pill_opacity: u8 = 100;
 var live_module_border_width: u32 = 1;
 // Resting module pills on/off.
 var live_module_pills: bool = true;
+/// Bar and dock glass tint (appearance.colored_glass). Shown twice (the
+/// bar's Glass group and the Dock group); both switches stay in step.
+var live_colored_glass: bool = true;
+var g_colored_glass_switches: [2]?*gtk.GtkSwitch = .{ null, null };
 // Bezel rings on/off wherever they appear.
 var live_pill_borders: bool = true;
 // Arena-backed from config.json and stable for this GUI's process lifetime,
@@ -1063,6 +1070,7 @@ fn loadConfigFromDisk() void {
     live_module_pill_opacity = @min(j.module_pill_opacity, 100);
     live_module_border_width = @min(j.module_border_width, 8);
     live_module_pills = j.module_pills;
+    live_colored_glass = j.colored_glass;
     live_pill_borders = j.pill_borders;
     // Theme settings live in their own small file (see theme_path), shared
     // with perihelion-theme. Unknown values are ignored, keeping the defaults.
@@ -1363,6 +1371,8 @@ fn buildConfigJson() ![]u8 {
     try appendJsonInt(&list, u32, live_module_border_width);
     try list.appendSlice(gpa, ",\"module_pills\":");
     try list.appendSlice(gpa, if (live_module_pills) "true" else "false");
+    try list.appendSlice(gpa, ",\"colored_glass\":");
+    try list.appendSlice(gpa, if (live_colored_glass) "true" else "false");
     try list.appendSlice(gpa, ",\"pill_borders\":");
     try list.appendSlice(gpa, if (live_pill_borders) "true" else "false");
 
@@ -1398,7 +1408,9 @@ fn buildConfigJson() ![]u8 {
     try list.appendSlice(gpa, ",\"media\":");
     try list.appendSlice(gpa, if (live_dock_media) "true" else "false");
     try list.appendSlice(gpa, ",\"colored_glass\":");
-    try list.appendSlice(gpa, if (live_dock_colored_glass) "true" else "false");
+    // One "Colored glass" setting now drives both (appearance.colored_glass);
+    // the dock's own key follows it so the two never disagree.
+    try list.appendSlice(gpa, if (live_colored_glass) "true" else "false");
     try list.append(gpa, '}');
     try list.append(gpa, '}');
 
@@ -2316,6 +2328,27 @@ fn onModulePillsChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) 
     saveAndSignal();
 }
 
+/// Colored glass on/off for both the bar and the dock. Off = clear glass:
+/// the same blur and transparency, with no wallpaper or Matugen tint.
+fn onColoredGlassChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    if (on == live_colored_glass) return; // the twin switch echoing back
+    live_colored_glass = on;
+    for (g_colored_glass_switches) |other| {
+        if (other) |o| {
+            if (o != sw) gtk.gtk_switch_set_active(o, if (on) 1 else 0);
+        }
+    }
+    saveAndSignal();
+}
+
+const COLORED_GLASS_SUBTITLE = "Tint the bar and dock glass with the wallpaper or Matugen colors. Off: clear frosted glass, same blur and see-through, no color.";
+
+fn buildColoredGlassRow(group: *gtk.AdwPreferencesGroup, slot: usize) void {
+    const r = addDockSwitchRowRef(group, "Colored glass", COLORED_GLASS_SUBTITLE, "weather-clear-night-symbolic", live_colored_glass, @ptrCast(&onColoredGlassChanged));
+    g_colored_glass_switches[slot] = r.sw;
+}
+
 fn buildModulePillsRow(group: *gtk.AdwPreferencesGroup) void {
     const row = gtk.adw_action_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), "Module pills");
@@ -3115,8 +3148,9 @@ fn buildAppearancePage() *gtk.GtkBox {
     gtk.gtk_box_append(outer, @ptrCast(border_group));
 
     const transparency_group = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(transparency_group, "Transparency");
-    gtk.adw_preferences_group_set_description(transparency_group, "Lowering this fades the bar's background and borders through to what's behind it, down to invisible at 0 — modules, pills and text stay fully visible, floating over the wallpaper. For an actual blur (not just a plain see-through cutout), turn on Bar Blur in your compositor's settings page.");
+    gtk.adw_preferences_group_set_title(transparency_group, "Glass");
+    gtk.adw_preferences_group_set_description(transparency_group, "Colored glass tints the bar and dock with your wallpaper or Matugen colors; turn it off for clear frosted glass. Lowering the opacity fades the bar's background and borders through to what's behind it, down to invisible at 0 — modules, pills and text stay fully visible. For an actual blur (not just a plain see-through cutout), turn on Bar Blur in your compositor's settings page.");
+    buildColoredGlassRow(transparency_group, 0);
     addSpinRow(transparency_group, "Background Opacity (%)", 0, 100, @floatFromInt(live_bg_opacity_percent), @ptrCast(&onBgOpacityChanged));
     gtk.gtk_box_append(outer, @ptrCast(transparency_group));
 
@@ -4167,11 +4201,6 @@ fn onDockBorderChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) c
     saveAndSignal();
 }
 
-fn onDockGlassChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    live_dock_colored_glass = gtk.gtk_switch_get_active(sw) != 0;
-    saveAndSignal();
-}
-
 fn onDockAppDrawerChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     live_dock_app_drawer = gtk.gtk_switch_get_active(sw) != 0;
     saveAndSignal();
@@ -4232,7 +4261,8 @@ fn buildDockGroup(outer: *gtk.GtkBox) void {
     addSpinRow(group, "Corner radius (px)", 0, 40, @floatFromInt(live_dock_corner_radius), @ptrCast(&onDockCornerRadiusChanged));
     addDockSwitchRow(group, "Dock border", "A ring in the wallpaper's color around the dock.", "object-select-symbolic", live_dock_border, @ptrCast(&onDockBorderChanged));
     addSpinRow(group, "Border size (px)", 1, 4, @floatFromInt(live_dock_border_size), @ptrCast(&onDockBorderSizeChanged));
-    addDockSwitchRow(group, "Colored glass", "A faint tint of the wallpaper's color in a slightly see-through dock.", "weather-clear-night-symbolic", live_dock_colored_glass, @ptrCast(&onDockGlassChanged));
+    // Same setting as the bar's Glass group (one tint for both).
+    buildColoredGlassRow(group, 1);
     addDockSwitchRow(group, "App launcher", "Your distro's logo at the far left; opens the app drawer.", "view-grid-symbolic", live_dock_app_drawer, @ptrCast(&onDockAppDrawerChanged));
     addDockSwitchRow(group, "Media controls", "Previous, play/pause, next and the track, beside the launcher.", "media-playback-start-symbolic", live_dock_media, @ptrCast(&onDockMediaChanged));
     addDockSwitchRow(group, "Trash", "", "user-trash-symbolic", live_dock_trash, @ptrCast(&onDockTrashChanged));
