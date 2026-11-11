@@ -1,0 +1,28 @@
+{
+  "id": "google/fairyfloss-light",
+  "name": "Fairyfloss",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "light",
+  "light": true,
+  "colors": {
+    "background": "#f6f6f5",
+    "foreground": "#26262b",
+    "surface": "#dddddd",
+    "surface_text": "#737380",
+    "hover": "#c5c5c4",
+    "hover_text": "#26262b",
+    "outline": "#8b8495",
+    "shadow": "#000000",
+    "accent": "#678ede",
+    "accent_text": "#ffffff",
+    "accent2": "#de678e",
+    "accent2_text": "#ffffff",
+    "accent3": "#d9a6dd",
+    "accent3_text": "#ffffff",
+    "error": "#cc2e2e",
+    "error_text": "#ffffff"
+  },
+  "contrast": 13.93,
+  "origin": "event-horizon@0e596b0"
+}

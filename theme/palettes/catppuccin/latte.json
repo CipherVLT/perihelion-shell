@@ -1,0 +1,28 @@
+{
+  "id": "catppuccin/latte",
+  "name": "Catppuccin Latte",
+  "family": "catppuccin",
+  "family_name": "Catppuccin",
+  "variant": "latte",
+  "light": true,
+  "colors": {
+    "background": "#eff1f5",
+    "foreground": "#4c4f69",
+    "surface": "#e1e3eb",
+    "surface_text": "#63677d",
+    "hover": "#d1d6df",
+    "hover_text": "#4c4f69",
+    "outline": "#959595",
+    "shadow": "#000000",
+    "accent": "#4c4f69",
+    "accent_text": "#ffffff",
+    "accent2": "#956b8a",
+    "accent2_text": "#ffffff",
+    "accent3": "#6c8575",
+    "accent3_text": "#ffffff",
+    "error": "#d14041",
+    "error_text": "#ffffff"
+  },
+  "contrast": 7.06,
+  "origin": "event-horizon@0e596b0"
+}

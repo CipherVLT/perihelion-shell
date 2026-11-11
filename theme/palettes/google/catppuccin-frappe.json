@@ -1,0 +1,28 @@
+{
+  "id": "google/catppuccin-frappe",
+  "name": "Catppuccin Frappé",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#2a2a37",
+    "foreground": "#d9d9e6",
+    "surface": "#323242",
+    "surface_text": "#9999a6",
+    "hover": "#39394a",
+    "hover_text": "#d9d9e6",
+    "outline": "#7f8095",
+    "shadow": "#000000",
+    "accent": "#63b1f1",
+    "accent_text": "#e6e6f2",
+    "accent2": "#bd9eb2",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#e0c0e6",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 10.11,
+  "origin": "event-horizon@0e596b0"
+}

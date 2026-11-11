@@ -1,0 +1,28 @@
+{
+  "id": "catppuccin/frappe",
+  "name": "Catppuccin Frappé",
+  "family": "catppuccin",
+  "family_name": "Catppuccin",
+  "variant": "frappe",
+  "light": false,
+  "colors": {
+    "background": "#303446",
+    "foreground": "#c6d0f5",
+    "surface": "#363b4e",
+    "surface_text": "#a3a6b8",
+    "hover": "#3d4357",
+    "hover_text": "#c6d0f5",
+    "outline": "#808395",
+    "shadow": "#000000",
+    "accent": "#c6d0f5",
+    "accent_text": "#2b2e3f",
+    "accent2": "#bc9db1",
+    "accent2_text": "#2b2e3f",
+    "accent3": "#9fbea7",
+    "accent3_text": "#2b2e3f",
+    "error": "#e95d67",
+    "error_text": "#2b2e3f"
+  },
+  "contrast": 8.06,
+  "origin": "event-horizon@0e596b0"
+}

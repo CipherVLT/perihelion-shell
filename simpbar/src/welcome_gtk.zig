@@ -195,6 +195,13 @@ pub extern "c" fn adw_style_manager_set_color_scheme(self: *AdwStyleManager, col
 pub extern "c" fn adw_combo_row_set_model(self: *AdwComboRow, model: ?*anyopaque) void;
 pub extern "c" fn adw_combo_row_get_selected(self: *AdwComboRow) c_uint;
 pub extern "c" fn adw_combo_row_set_selected(self: *AdwComboRow, position: c_uint) void;
+// Type-to-search in a combo row (libadwaita 1.4+): the row needs an
+// expression that turns each GtkStringObject into its string.
+pub const GtkExpression = opaque {};
+pub extern "c" fn adw_combo_row_set_enable_search(self: *AdwComboRow, enable_search: c_int) void;
+pub extern "c" fn adw_combo_row_set_expression(self: *AdwComboRow, expression: ?*GtkExpression) void;
+pub extern "c" fn gtk_property_expression_new(this_type: usize, expression: ?*GtkExpression, property_name: [*:0]const u8) *GtkExpression;
+pub extern "c" fn gtk_string_object_get_type() usize;
 
 // AdwToolbarView / AdwHeaderBar
 pub extern "c" fn adw_toolbar_view_new() *AdwToolbarView;

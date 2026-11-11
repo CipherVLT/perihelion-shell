@@ -1,0 +1,28 @@
+{
+  "id": "google/nova",
+  "name": "Nova",
+  "family": "google",
+  "family_name": "Google",
+  "variant": "dark",
+  "light": false,
+  "colors": {
+    "background": "#31302b",
+    "foreground": "#d9d9e6",
+    "surface": "#3b3a34",
+    "surface_text": "#9999a6",
+    "hover": "#42413a",
+    "hover_text": "#d9d9e6",
+    "outline": "#5e5857",
+    "shadow": "#000000",
+    "accent": "#64a0ef",
+    "accent_text": "#e6e6f2",
+    "accent2": "#de678e",
+    "accent2_text": "#e6e6f2",
+    "accent3": "#678ede",
+    "accent3_text": "#e6e6f2",
+    "error": "#eb4545",
+    "error_text": "#ffffff"
+  },
+  "contrast": 9.46,
+  "origin": "event-horizon@0e596b0"
+}
