@@ -4,15 +4,15 @@
   "file": "src/ux/settings2/theme_presets.zig",
   "license": "GPL-3.0 (Event Horizon)",
   "generated_by": "theme/import-eh-palettes.py",
-  "count": 268,
+  "count": 258,
   "families": {
     "catppuccin": {
       "dark": 9,
       "light": 1
     },
     "google": {
-      "dark": 193,
-      "light": 44
+      "dark": 186,
+      "light": 42
     },
     "gruvbox": {
       "dark": 2,
@@ -32,10 +32,6 @@
     },
     "tokyo-night": {
       "dark": 2,
-      "light": 0
-    },
-    "monokai": {
-      "dark": 1,
       "light": 0
     },
     "solarized": {
@@ -81,14 +77,6 @@
       "contrast": 1.24
     },
     {
-      "id": "google/monokai-pro-light",
-      "contrast": 1.12
-    },
-    {
-      "id": "google/monokai-remastered-light",
-      "contrast": 1.24
-    },
-    {
       "id": "google/one-half-black-light",
       "contrast": 1.24
     },
@@ -128,8 +116,6 @@
   "light_mismatch": [
     "google/fruit-soda-light",
     "google/hax0r-r3d-light",
-    "google/monokai-pro-light",
-    "google/monokai-remastered-light",
     "google/one-half-black-light",
     "google/one-half-dark-light",
     "google/rapture-light",
@@ -139,5 +125,20 @@
     "google/terminal-basic-light",
     "google/the-hulk-light",
     "google/tokyo-night-storm-light"
-  ]
+  ],
+  "excluded": {
+    "reason": "Monokai publishes no open licence",
+    "ids": [
+      "google/dimmed-monokai",
+      "google/monokai",
+      "google/monokai-night",
+      "google/monokai-pro",
+      "google/monokai-pro-light",
+      "google/monokai-remastered",
+      "google/monokai-remastered-light",
+      "google/monokai-soda",
+      "google/monokai-vivid",
+      "monokai/dark"
+    ]
+  }
 }

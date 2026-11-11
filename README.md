@@ -69,3 +69,9 @@ Hyprland set (MangoWM in `~/.config/mango/cfg/keybinds.conf`, same spirit):
 - Install script start: **Ryzendew**.
 - `xero/xero-install.sh`: **XeroLinux Team** (Xero Arch Installer, GPL-3.0) — base-system installer this fork builds on.
 - Hyprland-settings UX inspired by **HyprMod** by **BlueManCZ**.
+- Palettes in `theme/palettes/`: **Event Horizon**'s colour themes (GPL-3.0), each crediting the scheme it is named after in `theme/palettes/NOTICE.md`. Monokai's are left out (no open licence).
+
+## License
+
+Perihelion Shell is free software under the [GNU General Public License v3.0](LICENSE):
+you may redistribute and modify it under the terms of the GPL, version 3.

@@ -360,7 +360,10 @@ with open(os.path.join(PAL, "SOURCE.json")) as f:
 files = []
 for root_dir, _d, names in os.walk(PAL):
     files += [os.path.join(root_dir, n) for n in names if n.endswith(".json") and n != "SOURCE.json"]
-check(len(files) == source["count"] == 268, f"palettes: {len(files)} files, SOURCE.json says {source['count']}")
+# 268 in Event Horizon, minus the 10 Monokai ones (no open licence).
+check(len(files) == source["count"] == 258, f"palettes: {len(files)} files, SOURCE.json says {source['count']}")
+check(not any("monokai" in os.path.basename(p) or "/monokai/" in p for p in files)
+      and len(source.get("excluded", {}).get("ids", [])) == 10, "palettes: Monokai left out")
 bad, flagged = [], set()
 for p in files:
     with open(p) as f:
@@ -384,7 +387,7 @@ tmp = tempfile.mkdtemp()
 try:
     listed = run(tmp, "--list-palettes").stdout.splitlines()
     every = run(tmp, "--list-palettes", "--all").stdout.splitlines()
-    check(len(listed) == 268 - len(flagged) and len(every) == 268,
+    check(len(listed) == 258 - len(flagged) and len(every) == 258,
           f"--list-palettes: {len(listed)} (low contrast left out), --all: {len(every)}")
     check(all(len(line.split("\t")) == 4 for line in every), "--list-palettes: id, label, light, yours")
     check(any(line.startswith("google/tokyo-night\t") for line in listed)

@@ -50,7 +50,7 @@ Palette: https://catppuccin.com/palette (MIT).
 ## Event Horizon's colour themes, and your own palettes
 
 `palettes/` holds Event Horizon's built-in colour themes (its "Custom Theme"
-catalog: Catppuccin, Gruvbox, Rosé Pine, Dracula, Nord, Tokyo Night, Monokai,
+catalog: Catppuccin, Gruvbox, Rosé Pine, Dracula, Nord, Tokyo Night,
 Solarized, Everforest, Kanagawa, Ayu, Atom, Night Owl, Sonokai, Andromeda
 and the big Google set), one JSON file each, with stable ids from the path:
 `catppuccin/mocha-sky`, `google/tokyo-night`, `google/tokyo-night-light`.
