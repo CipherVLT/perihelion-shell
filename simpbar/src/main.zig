@@ -2604,6 +2604,11 @@ const Appearance = struct {
     /// background (pre-pill look); hover/active treatments still draw their
     /// own pill when lit, so nothing interactive goes blind.
     module_pills: bool,
+    /// Colored glass on/off for the bar and the dock (Perihelion Settings).
+    /// Off = clear glass: the glass colors keep their lightness but lose
+    /// the wallpaper / Matugen hue (see clearGlass); blur and transparency
+    /// are untouched.
+    colored_glass: bool,
     /// Bezel rings on/off wherever they appear (resting pills, hover, active
     /// workspace, popup rows). Off = flat fills + dash only, no rings.
     pill_borders: bool,
@@ -2845,6 +2850,7 @@ fn defaultConfig() Config {
             .module_pill_opacity = 100,
             .module_border_width = 1,
             .module_pills = true,
+            .colored_glass = true,
             .pill_borders = true,
             .bar_height = 28,
             .border_top_px = 2, // window#waybar border-width: 2px 0px 0px 0px
@@ -3012,6 +3018,7 @@ const JsonAppearance = struct {
     module_pill_opacity: u8 = 100,
     module_border_width: u32 = 1,
     module_pills: bool = true,
+    colored_glass: bool = true,
     pill_borders: bool = true,
     animations_enabled: bool = true,
     bezel_style: []const u8 = "matugen",
@@ -3199,11 +3206,27 @@ fn fontPathZ(path: []const u8, buf: []u8) ?[:0]const u8 {
     return buf[0..path.len :0];
 }
 
+/// Clear liquid glass: `c` (0xAARRGGBB) as a neutral grey of the same
+/// perceived lightness (Rec. 709 luma), so a dark theme stays dark glass
+/// and a light one light, text keeps its contrast, and no wallpaper or
+/// Matugen hue tints it. `colored` true returns `c` unchanged.
+fn clearGlass(c: u32, colored: bool) u32 {
+    if (colored) return c;
+    const r: f32 = @floatFromInt((c >> 16) & 0xFF);
+    const g: f32 = @floatFromInt((c >> 8) & 0xFF);
+    const b: f32 = @floatFromInt(c & 0xFF);
+    const y: u32 = @intFromFloat(@min(255.0, 0.2126 * r + 0.7152 * g + 0.0722 * b + 0.5));
+    return (c & 0xFF000000) | (y << 16) | (y << 8) | y;
+}
+
 fn parseAppearance(j: JsonAppearance) ?Appearance {
     return Appearance{
-        .bg_color = parseHexColor(j.bg_color) catch return null,
+        // The glass: bar/dock body, edges and resting pills. Clear glass
+        // (colored_glass off) strips their tint here, once, so every paint
+        // path (bar, dock, morph, auto-hide strip) follows without checks.
+        .bg_color = clearGlass(parseHexColor(j.bg_color) catch return null, j.colored_glass),
         .text_color = parseHexColor(j.text_color) catch return null,
-        .border_color = parseHexColor(j.border_color) catch return null,
+        .border_color = clearGlass(parseHexColor(j.border_color) catch return null, j.colored_glass),
         .hover_color = parseHexColor(j.hover_color) catch return null,
         .workspace_active_color = parseHexColor(j.workspace_active_color) catch return null,
         .workspace_inactive_color = parseHexColor(j.workspace_inactive_color) catch return null,
@@ -3212,7 +3235,7 @@ fn parseAppearance(j: JsonAppearance) ?Appearance {
         .popup_separator_color = parseHexColor(j.popup_separator_color) catch return null,
         .popup_disabled_color = parseHexColor(j.popup_disabled_color) catch return null,
         .cava_color = parseHexColor(j.cava_color) catch return null,
-        .module_bg_color = parseHexColor(j.module_bg_color) catch return null,
+        .module_bg_color = clearGlass(parseHexColor(j.module_bg_color) catch return null, j.colored_glass),
         .bezel_color = parseHexColor(j.bezel_color) catch return null,
         .bg_mode = if (std.mem.eql(u8, j.bg_mode, BG_MODE_CAVA)) BG_MODE_CAVA else if (std.mem.eql(u8, j.bg_mode, BG_MODE_MATRIX)) BG_MODE_MATRIX else if (std.mem.eql(u8, j.bg_mode, BG_MODE_LAVA)) BG_MODE_LAVA else BG_MODE_NONE,
         .cava_bg_strength = @min(j.cava_bg_strength, 100),
@@ -3229,6 +3252,7 @@ fn parseAppearance(j: JsonAppearance) ?Appearance {
         .module_pill_opacity = @min(j.module_pill_opacity, 100),
         .module_border_width = @min(j.module_border_width, 8),
         .module_pills = j.module_pills,
+        .colored_glass = j.colored_glass,
         .pill_borders = j.pill_borders,
         .bar_height = j.bar_height,
         .border_top_px = j.border_top_px,
@@ -11476,7 +11500,8 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
     const ds = &current_config.dock;
     // Perihelion's dock (SIMPBAR_DOCK=1): colored glass is the bar color
     // with an accent wash, a little more see-through.
-    const glass = dock_mode and ds.colored_glass;
+    // Clear glass (Colored glass off in Settings) drops the wash too.
+    const glass = dock_mode and ds.colored_glass and ap.colored_glass;
     const opacity: u32 = if (glass) @min(@as(u32, ap.bg_opacity_percent), 72) else ap.bg_opacity_percent;
     const bg_rgb: u32 = if (glass) blendPixel(ap.bg_color | 0xFF000000, ap.workspace_active_color, 40) else ap.bg_color;
     const bg_fill: u32 = premulPct(bg_rgb, opacity);
@@ -11498,7 +11523,8 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
         if (ring > 0) {
             // The ring, then the body inset by its width (fills overwrite,
             // so the see-through body never shows the ring through it).
-            fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), ap.workspace_active_color | 0xFF000000);
+            // Clear glass: a neutral ring of the accent's lightness.
+            fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), clearGlass(ap.workspace_active_color, ap.colored_glass) | 0xFF000000);
             fillRoundedRectAA(pixels, bar.width, bar.height, px0 + ring, ring, px1 - ring, buf_h - ring, @intCast(@max(0, pill_r - ring)), bg_fill);
         } else {
             fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), bg_fill);
@@ -11906,6 +11932,15 @@ fn drawAndCommit(bar: *Bar) !void {
 // Tests — bezel breathing math (pure, no display).
 // Run: zig test src/main.zig -lc -fllvm -flld <bar link flags below>
 // ---------------------------------------------------------------------
+
+test "clearGlass keeps lightness, drops hue" {
+    try std.testing.expectEqual(@as(u32, 0xFF1E1E2E), clearGlass(0xFF1E1E2E, true));
+    const g = clearGlass(0xCC1E1E2E, false);
+    try std.testing.expectEqual(@as(u32, 0xCC000000), g & 0xFF000000);
+    try std.testing.expectEqual((g >> 16) & 0xFF, (g >> 8) & 0xFF);
+    try std.testing.expectEqual((g >> 8) & 0xFF, g & 0xFF);
+    try std.testing.expectEqual(@as(u32, 0xFF7F7F7F), clearGlass(0xFF7F7F7F, false));
+}
 
 test "bezel breath phases" {
     const t = std.testing;
