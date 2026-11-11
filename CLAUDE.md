@@ -171,3 +171,19 @@ Left-side order:
 - Glass and blur effects must be clean and high-quality.
 - Avoid heavy distortion, warping, or dirty-looking blur.
 - Target a soft, elegant frosted glass appearance.
+
+## Weather Widgets
+
+- Rebuild both the small top-bar weather indicator and the larger weather widget.
+- Target a clean modern design with large temperature, condition text, and optional hourly strip.
+- Use a high-quality glass / frosted see-through style.
+- When Matugen is active, switch to a frosted black / dark glass appearance.
+- Prefer lightweight data sources (Open-Meteo or wttr.in).
+- Keep rendering efficient and free of GPU jank.
+
+## Dock Hover Style
+
+- Do **not** use a black pill or dark rounded background on hover for dock icons.
+- On hover, the icon itself should light up / brighten.
+- Keep the hover effect clean, subtle, and modern (similar to Event Horizon dock style).
+- Avoid heavy or dirty-looking hover backgrounds.
