@@ -28,6 +28,7 @@ const hypr_pages = @import("hypr_pages.zig");
 const mango_pages = @import("mango_pages.zig");
 const desk = @import("desk_theme.zig");
 const logging = @import("logging.zig");
+const singleton = @import("singleton.zig");
 const desktop_entries = @import("desktop_entries.zig");
 
 pub const panic = std.debug.FullPanic(logging.panicHandler);
@@ -1499,9 +1500,10 @@ fn readPidfilePid() ?c_int {
 /// tradeoff for an inherently non-instant "restart" action.
 fn restartBar() void {
     const old_pid = readPidfilePid();
-    if (old_pid) |pid| _ = std.c.kill(pid, .TERM);
-
-    launchDetached(&.{ "-u", "SIMPBAR_DOCK", "perihelion-bar" }); // always the bar, never a dock
+    // Every copy of the bar, not just the pidfile's, and only once they are
+    // all gone does the new one start: never two bars, even for a moment.
+    singleton.stopAll(.bar);
+    launchRole(.bar);
 
     var waited_ms: u32 = 0;
     var dummy: [1]PollFd = undefined;
@@ -1629,6 +1631,7 @@ fn onPositionChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) 
     if (std.mem.eql(u8, live_position, "bottom")) live_dock_enabled = false;
     syncBottomRule();
     saveAndSignal();
+    if (!dockWanted()) ensureRole(.dock, false); // every copy, not just the pidfile's
 }
 
 // ---------------------------------------------------------------------
@@ -4121,22 +4124,101 @@ const libc_kill = struct {
     extern "c" fn kill(pid: c_int, sig: c_int) c_int;
 };
 
-fn pidfileAlive(name: []const u8) bool {
-    const dir = std.fs.path.dirname(pidfile_path) orelse return false;
-    var buf: [600]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ dir, name }) catch return false;
-    const text = readFileAll(path) orelse return false;
-    defer gpa.free(text);
-    const pid = std.fmt.parseInt(c_int, std.mem.trim(u8, text, " \t\r\n"), 10) catch return false;
-    return pid > 0 and libc_kill.kill(pid, 0) == 0;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+/// Starts one bar or one dock, each explicitly: the dock with its flag,
+/// the bar with the flag removed, so neither depends on the environment
+/// Perihelion Settings happened to be started from.
+fn launchRole(role: singleton.Role) void {
+    if (role == .dock) {
+        launchDetached(&.{ "SIMPBAR_DOCK=1", "perihelion-bar" });
+    } else {
+        launchDetached(&.{ "-u", "SIMPBAR_DOCK", "perihelion-bar" });
+    }
+}
+
+fn dockWanted() bool {
+    return live_dock_enabled and !std.mem.eql(u8, live_position, "bottom");
+}
+
+/// Brings `role` to exactly one running copy (want) or none (!want), from
+/// whatever is running now, by looking at the processes themselves rather
+/// than trusting a pidfile:
+///   on,  one copy running    -> nothing to start (it has reloaded already)
+///   on,  none                -> start one
+///   on,  several (duplicates)-> stop them all, then start one
+///   off                      -> stop every copy, return when none is left
+/// The bar's own lock still refuses a second copy if two starts ever race.
+fn ensureRole(role: singleton.Role, want: bool) void {
+    const running = singleton.count(role);
+    if (want and running == 1) return;
+    if (running > 0) singleton.stopAll(role);
+    if (want) {
+        launchRole(role);
+        return;
+    }
+    // Stopped from outside, so it had no chance to remove its pidfile.
+    if (role == .bar) {
+        _ = std.c.unlink(pidfile_path.ptr);
+    } else if (std.fs.path.dirname(pidfile_path)) |dir| {
+        var buf: [600]u8 = undefined;
+        if (std.fmt.bufPrintZ(&buf, "{s}/dock.pid", .{dir})) |path| {
+            _ = std.c.unlink(path.ptr);
+        } else |_| {}
+    }
+}
+
+/// Clears duplicates left by anything (older builds started extra docks):
+/// run whenever Perihelion Settings opens. Only acts on a role that has
+/// more than one copy; a role with one or none is left as it is.
+fn healDuplicates() void {
+    if (singleton.count(.bar) > 1) ensureRole(.bar, live_bar_enabled);
+    if (singleton.count(.dock) > 1) ensureRole(.dock, dockWanted());
+}
+
+fn setBarEnabled(on: bool) void {
+    live_bar_enabled = on;
+    saveAndSignal();
+    ensureRole(.bar, on);
+}
+
+fn setDockEnabled(on: bool) void {
+    live_dock_enabled = on;
+    saveAndSignal();
+    ensureRole(.dock, dockWanted());
+}
+
+/// Headless `--bar on|off|restart` and `--dock on|off`: the same code the
+/// switches and the Restart button run, for keybinds and for the live test
+/// that flips them in a loop (tests/singleton-live.sh).
+fn roleCli(what: []const u8, action: []const u8) u8 {
+    loadConfigFromDisk();
+    healDuplicates();
+    const on = std.mem.eql(u8, action, "on");
+    if (!on and !std.mem.eql(u8, action, "off")) {
+        if (std.mem.eql(u8, what, "--bar") and std.mem.eql(u8, action, "restart")) {
+            restartBar();
+            return 0;
+        }
+        logging.err("config: {s}: expected on or off, got {s}", .{ what, action });
+        return 1;
+    }
+    if (std.mem.eql(u8, what, "--bar")) {
+        setBarEnabled(on);
+    } else {
+        if (on and std.mem.eql(u8, live_position, "bottom")) {
+            logging.err("config: --dock on: the bar is at the bottom; move it to the top first", .{});
+            return 1;
+        }
+        setDockEnabled(on);
+    }
+    return 0;
 }
 
 fn onBarEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     const on = gtk.gtk_switch_get_active(sw) != 0;
     if (on == live_bar_enabled) return;
-    live_bar_enabled = on;
-    saveAndSignal(); // a running bar reads it and leaves when switched off
-    if (on and !pidfileAlive(std.fs.path.basename(pidfile_path))) launchDetached(&.{ "-u", "SIMPBAR_DOCK", "perihelion-bar" }); // always the bar, never a dock
+    setBarEnabled(on);
 }
 
 fn buildBarEnabledRow(group: *gtk.AdwPreferencesGroup) void {
@@ -4152,16 +4234,6 @@ fn buildBarEnabledRow(group: *gtk.AdwPreferencesGroup) void {
     gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
-fn dockRunning() bool {
-    const dir = std.fs.path.dirname(pidfile_path) orelse return false;
-    var buf: [600]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&buf, "{s}/dock.pid", .{dir}) catch return false;
-    const text = readFileAll(path) orelse return false;
-    defer gpa.free(text);
-    const pid = std.fmt.parseInt(c_int, std.mem.trim(u8, text, " \t\r\n"), 10) catch return false;
-    return pid > 0 and libc_kill.kill(pid, 0) == 0;
-}
-
 fn onDockEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     const on = gtk.gtk_switch_get_active(sw) != 0;
     if (on == live_dock_enabled) return; // set by syncBottomRule
@@ -4173,8 +4245,7 @@ fn onDockEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) 
     }
     live_dock_enabled = on;
     syncBottomRule();
-    saveAndSignal(); // a running dock reads it and leaves when switched off
-    if (live_dock_enabled and !dockRunning()) launchDetached(&.{ "SIMPBAR_DOCK=1", "perihelion-bar" });
+    setDockEnabled(on);
 }
 
 fn onDockIconSizeChanged(button: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
@@ -6507,6 +6578,9 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
     applySettingsStyle();
     applyPerihelionStyle();
     if (g_window == null) {
+        // Opening Settings clears any duplicate bars or docks on its own.
+        loadConfigFromDisk();
+        healDuplicates();
         g_window = buildWindow(@ptrCast(app));
     }
     gtk.gtk_window_present(@ptrCast(g_window.?));
@@ -6541,8 +6615,14 @@ fn realMain() !void {
         parts[nparts] = p;
         nparts += 1;
     }
+    // Started from the dock by an older build, Settings inherited the dock's
+    // SIMPBAR_DOCK=1; drop it so nothing started from here carries it on.
+    _ = unsetenv("SIMPBAR_DOCK");
     if (nparts == 4 and std.mem.eql(u8, parts[1], "--move-launcher")) {
         std.process.exit(moveLauncherCli(parts[2], parts[3]));
+    }
+    if (nparts == 3 and (std.mem.eql(u8, parts[1], "--bar") or std.mem.eql(u8, parts[1], "--dock"))) {
+        std.process.exit(roleCli(parts[1], parts[2]));
     }
     const app = gtk.adw_application_new(APP_ID, 0);
     _ = gtk.g_signal_connect_data(@ptrCast(app), "activate", @ptrCast(&onAppActivate), null, null, 0);

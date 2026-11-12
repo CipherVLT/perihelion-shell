@@ -14,6 +14,7 @@ const font_mod = @import("font.zig");
 const icontheme = @import("icontheme.zig");
 const dbusmenu = @import("dbusmenu.zig");
 const logging = @import("logging.zig");
+const singleton = @import("singleton.zig");
 const desktop_entries = @import("desktop_entries.zig");
 
 pub const panic = std.debug.FullPanic(logging.panicHandler);
@@ -896,8 +897,6 @@ fn renderDistroTile(font: *font_mod.Font, codepoint: u32, dst: []u32) bool {
 // getenv is enough here; no need for std.process's env-map machinery.
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
-extern "c" fn flock(fd: c_int, operation: c_int) c_int;
-extern "c" fn usleep(usec: c_uint) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
@@ -2936,28 +2935,18 @@ fn resolveConfigPaths() void {
     matugen_json_path = std.fmt.bufPrintZ(&matugen_path_buf, "{s}/matugen.json", .{dir}) catch "";
 }
 
-/// One bar and one dock, ever. Each role holds an exclusive flock on its own
-/// lock file (bar.lock / dock.lock) for its whole life; the kernel drops it
-/// when the process ends, crash included, so it can't go stale the way a
-/// pidfile does. A second copy of the same role waits up to ~2 s (a restart
-/// whose old copy is still on its way out), then leaves quietly. The fd is
-/// deliberately never closed.
-const SINGLETON_WAIT_TRIES: u32 = 40; // x 50 ms
-fn acquireSingleton() bool {
-    const home = std.mem.span(getenv("HOME") orelse "/root");
-    var buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&buf, "{s}/.config/simpbar/{s}", .{ home, if (dock_mode) "dock.lock" else "bar.lock" }) catch return true;
-    const raw_fd = posix.system.open(path.ptr, .{ .ACCMODE = .RDWR, .CREAT = true, .CLOEXEC = true }, @as(posix.mode_t, 0o644));
-    if (raw_fd < 0) return true; // can't lock: don't refuse to run over it
-    const fd: c_int = @intCast(raw_fd);
-    const LOCK_EX = 2;
-    const LOCK_NB = 4;
-    var tries: u32 = 0;
-    while (tries < SINGLETON_WAIT_TRIES) : (tries += 1) {
-        if (flock(fd, LOCK_EX | LOCK_NB) == 0) return true;
-        _ = usleep(50_000);
-    }
-    return false;
+/// True once this process holds its role's lock (singleton.zig): it is
+/// then THE bar or THE dock, and any other copy of its role is a duplicate.
+var singleton_held: bool = false;
+
+/// Ends every other copy of this role (duplicates from builds that had no
+/// lock, or anything else that slipped in). Only the lock holder may: run
+/// once the bar is on screen and again at each config reload, so stray
+/// copies are cleared without anyone restarting anything.
+fn sweepDuplicates() void {
+    if (!singleton_held) return;
+    const n = singleton.sweep(if (dock_mode) .dock else .bar);
+    if (n > 0) logging.warn("{s}: stopped {d} duplicate cop{s}", .{ if (dock_mode) "dock" else "bar", n, if (n == 1) "y" else "ies" });
 }
 
 /// Writes this process's PID to ~/.config/simpbar/simpbar.pid so the (future)
@@ -5612,10 +5601,14 @@ fn realMain() !void {
     _ = unsetenv("SIMPBAR_DOCK");
     if (dock_mode) logging.step("dock mode: launchers only, bottom center", .{});
     resolveConfigPaths();
-    if (!acquireSingleton()) {
-        // Not ours to touch the pidfile: it belongs to the copy that runs.
-        logging.step("{s}: already running, exiting", .{if (dock_mode) "dock" else "bar"});
-        std.process.exit(0);
+    switch (singleton.acquire(if (dock_mode) .dock else .bar)) {
+        .held => singleton_held = true,
+        .busy => {
+            // Not ours to touch the pidfile: it belongs to the copy that runs.
+            logging.step("{s}: already running, exiting", .{if (dock_mode) "dock" else "bar"});
+            std.process.exit(0);
+        },
+        .unavailable => logging.warn("no lock file could be opened: running without the single-copy lock", .{}),
     }
     // The on/off and bottom-edge checks read the file as written: loadConfig
     // runs dockConfig, which sets the dock's own position to "bottom", and
@@ -5660,6 +5653,10 @@ fn realMain() !void {
     const display = try wl.Display.connect(null);
     defer display.disconnect();
     setCloexec(display.getFd());
+    // We hold the lock and have a compositor: anything else of this role
+    // is a leftover duplicate (older builds had no lock). Only now, so a
+    // copy that could not have come up never takes a working one down.
+    sweepDuplicates();
 
     const registry = try display.getRegistry();
 
@@ -6428,6 +6425,7 @@ fn realMain() !void {
             if (loadConfigFromFile()) |file_cfg| {
                 dockExitIfDisabled(file_cfg);
                 barExitIfDisabled(file_cfg);
+                sweepDuplicates();
                 const cfg = dockConfig(file_cfg);
                 const old_font_path = current_config.appearance.font_path;
                 const font_changed = !std.mem.eql(u8, old_font_path, cfg.appearance.font_path);
