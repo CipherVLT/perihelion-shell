@@ -48,6 +48,19 @@ jobs:
       - name: Build the bar and Simpbar Config
         working-directory: simpbar
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
+      - name: Unit-test the single-copy module
+        working-directory: simpbar
+        run: /opt/zig/zig test src/singleton.zig -lc
+      - name: "Live test: one bar and one dock under every toggle"
+        run: |
+          # The real bar and Settings against a headless compositor, flipping
+          # the Bar and Dock switches in a loop (tests/singleton-live.sh).
+          dnf5 install -y --setopt=install_weak_deps=False \
+            sway procps-ng fontconfig dejavu-sans-mono-fonts util-linux gawk findutils
+          useradd -m tester
+          cp -r simpbar/zig-out/bin /tmp/perihelion-bin && chmod -R a+rX /tmp/perihelion-bin
+          cp tests/singleton-live.sh /tmp/ && chmod a+rx /tmp/singleton-live.sh
+          runuser -u tester -- bash /tmp/singleton-live.sh /tmp/perihelion-bin
       - name: Build simpbar-shell
         working-directory: simpbar-shell
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
