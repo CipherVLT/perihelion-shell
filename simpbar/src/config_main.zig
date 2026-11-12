@@ -1501,7 +1501,7 @@ fn restartBar() void {
     const old_pid = readPidfilePid();
     if (old_pid) |pid| _ = std.c.kill(pid, .TERM);
 
-    launchDetached(&.{"perihelion-bar"});
+    launchDetached(&.{ "-u", "SIMPBAR_DOCK", "perihelion-bar" }); // always the bar, never a dock
 
     var waited_ms: u32 = 0;
     var dummy: [1]PollFd = undefined;
@@ -4136,7 +4136,7 @@ fn onBarEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) c
     if (on == live_bar_enabled) return;
     live_bar_enabled = on;
     saveAndSignal(); // a running bar reads it and leaves when switched off
-    if (on and !pidfileAlive(std.fs.path.basename(pidfile_path))) launchDetached(&.{"perihelion-bar"});
+    if (on and !pidfileAlive(std.fs.path.basename(pidfile_path))) launchDetached(&.{ "-u", "SIMPBAR_DOCK", "perihelion-bar" }); // always the bar, never a dock
 }
 
 fn buildBarEnabledRow(group: *gtk.AdwPreferencesGroup) void {
