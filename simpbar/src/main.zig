@@ -895,6 +895,9 @@ fn renderDistroTile(font: *font_mod.Font, codepoint: u32, dst: []u32) bool {
 
 // getenv is enough here; no need for std.process's env-map machinery.
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+extern "c" fn flock(fd: c_int, operation: c_int) c_int;
+extern "c" fn usleep(usec: c_uint) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
@@ -2931,6 +2934,30 @@ fn resolveConfigPaths() void {
     // post-hook in the shipped matugen template writes it here; simpbar
     // only ever reads it, matugen only ever writes it.
     matugen_json_path = std.fmt.bufPrintZ(&matugen_path_buf, "{s}/matugen.json", .{dir}) catch "";
+}
+
+/// One bar and one dock, ever. Each role holds an exclusive flock on its own
+/// lock file (bar.lock / dock.lock) for its whole life; the kernel drops it
+/// when the process ends, crash included, so it can't go stale the way a
+/// pidfile does. A second copy of the same role waits up to ~2 s (a restart
+/// whose old copy is still on its way out), then leaves quietly. The fd is
+/// deliberately never closed.
+const SINGLETON_WAIT_TRIES: u32 = 40; // x 50 ms
+fn acquireSingleton() bool {
+    const home = std.mem.span(getenv("HOME") orelse "/root");
+    var buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&buf, "{s}/.config/simpbar/{s}", .{ home, if (dock_mode) "dock.lock" else "bar.lock" }) catch return true;
+    const raw_fd = posix.system.open(path.ptr, .{ .ACCMODE = .RDWR, .CREAT = true, .CLOEXEC = true }, @as(posix.mode_t, 0o644));
+    if (raw_fd < 0) return true; // can't lock: don't refuse to run over it
+    const fd: c_int = @intCast(raw_fd);
+    const LOCK_EX = 2;
+    const LOCK_NB = 4;
+    var tries: u32 = 0;
+    while (tries < SINGLETON_WAIT_TRIES) : (tries += 1) {
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0) return true;
+        _ = usleep(50_000);
+    }
+    return false;
 }
 
 /// Writes this process's PID to ~/.config/simpbar/simpbar.pid so the (future)
@@ -5578,8 +5605,18 @@ pub fn main() void {
 fn realMain() !void {
     logging.step("starting up", .{});
     if (getenv("SIMPBAR_DOCK")) |v| dock_mode = v[0] == '1';
+    // Read once, then gone: everything the dock launches (apps, the app
+    // drawer, Perihelion Settings) used to inherit SIMPBAR_DOCK=1, so a bar
+    // started from there (Settings' "Show the Perihelion Bar") came up as
+    // another dock instead.
+    _ = unsetenv("SIMPBAR_DOCK");
     if (dock_mode) logging.step("dock mode: launchers only, bottom center", .{});
     resolveConfigPaths();
+    if (!acquireSingleton()) {
+        // Not ours to touch the pidfile: it belongs to the copy that runs.
+        logging.step("{s}: already running, exiting", .{if (dock_mode) "dock" else "bar"});
+        std.process.exit(0);
+    }
     // The on/off and bottom-edge checks read the file as written: loadConfig
     // runs dockConfig, which sets the dock's own position to "bottom", and
     // checking that made the dock think the bar was at the bottom and quit
