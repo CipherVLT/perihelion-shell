@@ -187,3 +187,10 @@ Left-side order:
 - On hover, the icon itself should light up / brighten.
 - Keep the hover effect clean, subtle, and modern (similar to Event Horizon dock style).
 - Avoid heavy or dirty-looking hover backgrounds.
+
+  ## Bar & Dock Instance Rules (Critical)
+
+- There must only ever be **one** Perihelion Bar and **one** Dock at a time.
+- Turning the Perihelion Bar off must only hide/disable the Bar. It must never create or spawn a Dock.
+- Turning the Dock off and on must only show/hide the existing Dock. It must never create additional Dock instances.
+- Both the Bar and Dock must be treated as singletons. Prevent any code path that can spawn duplicates.
