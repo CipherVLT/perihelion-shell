@@ -70,7 +70,7 @@ printf '{"appearance":{"font_path":"%s","position":"top"}}\n' "${font}" > "${HOM
 
 echo "Starting a headless compositor"
 WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
-    sway -c /dev/null >"${work}/sway.log" 2>&1 &
+    "${SWAY:-sway}" -c /dev/null >"${work}/sway.log" 2>&1 &
 sway_pid=$!
 for _ in $(seq 1 100); do
     sock=$(find "${XDG_RUNTIME_DIR}" -maxdepth 1 -name 'wayland-*' ! -name '*.lock' 2>/dev/null | head -n 1)

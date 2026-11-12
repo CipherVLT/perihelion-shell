@@ -60,7 +60,10 @@ jobs:
           useradd -m tester
           cp -r simpbar/zig-out/bin /tmp/perihelion-bin && chmod -R a+rX /tmp/perihelion-bin
           cp tests/singleton-live.sh /tmp/ && chmod a+rx /tmp/singleton-live.sh
-          runuser -u tester -- bash /tmp/singleton-live.sh /tmp/perihelion-bin
+          # Fedora's sway carries a file capability the container can't
+          # grant (exec fails); a plain copy has none.
+          cp /usr/bin/sway /tmp/sway && chmod a+rx /tmp/sway
+          runuser -u tester -- env SWAY=/tmp/sway bash /tmp/singleton-live.sh /tmp/perihelion-bin
       - name: Build simpbar-shell
         working-directory: simpbar-shell
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
