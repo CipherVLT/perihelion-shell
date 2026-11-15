@@ -411,8 +411,51 @@ fn loadSettingsStyle() void {
 }
 
 fn applySettingsStyle() void {
-    const scheme: c_int = if (std.mem.eql(u8, live_settings_style, "light")) 1 else if (std.mem.eql(u8, live_settings_style, "dark")) 4 else 0;
+    // "Follow the system" follows Perihelion's Theme mode first: Dark forces
+    // this window dark and Light forces it light, whatever the wallpaper or
+    // palette. Auto leaves it to the desktop (perihelion-theme sets
+    // color-scheme from how light the theme came out).
+    const style = if (std.mem.eql(u8, live_settings_style, "system") and !std.mem.eql(u8, live_theme_mode, "auto"))
+        live_theme_mode
+    else
+        live_settings_style;
+    const scheme: c_int = if (std.mem.eql(u8, style, "light")) 1 else if (std.mem.eql(u8, style, "dark")) 4 else 0;
     gtk.adw_style_manager_set_color_scheme(gtk.adw_style_manager_get_default(), scheme);
+    applyDarkGlassGuard(scheme == 4);
+}
+
+/// Perihelion's GTK window glass (~/.config/gtk-4.0/perihelion-glass.css,
+/// loaded at user priority) sets the window colors outright, so a light one
+/// would keep this window light even with dark forced above. When this
+/// window must be dark and that file is light, a provider above user
+/// priority puts libadwaita's dark colors back (still a little see-through
+/// over Mango's blur). A dark glass file (the usual case) is left alone.
+var g_dark_guard: ?*anyopaque = null;
+fn applyDarkGlassGuard(dark: bool) void {
+    const display = pstyle.gdk_display_get_default() orelse return;
+    if (g_dark_guard) |p| {
+        pstyle.gtk_style_context_remove_provider_for_display(display, p);
+        g_dark_guard = null;
+    }
+    if (!dark) return;
+    const home = std.mem.span(getenv("HOME") orelse "/root");
+    var pbuf: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/gtk-4.0/perihelion-glass.css", .{home}) catch return;
+    const text = readFileAll(path) orelse return;
+    defer gpa.free(text);
+    if (std.mem.indexOf(u8, text, "scheme=light") == null) return;
+    const provider = pstyle.gtk_css_provider_new();
+    pstyle.gtk_css_provider_load_from_string(provider,
+        \:root { --window-bg-color: rgba(34, 34, 38, 0.92); --window-fg-color: #ffffff;
+        \  --view-bg-color: rgba(30, 30, 34, 0.40); --view-fg-color: #ffffff;
+        \  --headerbar-bg-color: rgba(40, 40, 44, 0.30); --headerbar-backdrop-color: rgba(40, 40, 44, 0.30); --headerbar-fg-color: #ffffff;
+        \  --sidebar-bg-color: rgba(28, 28, 32, 0.50); --sidebar-backdrop-color: rgba(28, 28, 32, 0.50); --sidebar-fg-color: #ffffff;
+        \  --card-bg-color: rgba(255, 255, 255, 0.08); --card-fg-color: #ffffff;
+        \  --dialog-bg-color: #36363a; --dialog-fg-color: #ffffff;
+        \  --popover-bg-color: #36363a; --popover-fg-color: #ffffff; }
+    );
+    pstyle.gtk_style_context_add_provider_for_display(display, provider, 900); // above USER (800)
+    g_dark_guard = provider;
 }
 
 fn onSettingsStyleChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
@@ -1941,6 +1984,7 @@ fn onThemeModeChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque)
     if (idx >= THEME_MODE_CHOICES.len) return;
     live_theme_mode = THEME_MODE_CHOICES[idx];
     saveThemeSettings();
+    applySettingsStyle(); // this window follows at once
 }
 
 fn onThemeTintChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
@@ -2023,7 +2067,7 @@ fn buildThemeRows(group: *gtk.AdwPreferencesGroup) void {
     buildThemeGlassRow(group);
     buildThemeComboRow(group, "Accent colors", "Palette only: the three accents for highlights and the visualizer wave, the ones closest to the wallpaper's colors, or the palette's own.", &THEME_ACCENT_LABELS, &THEME_ACCENT_CHOICES, live_theme_accent, &onThemeAccentChanged);
     buildThemeComboRow(group, "Matugen color scheme", "The palette matugen derives from the wallpaper: Material You's colors, and in both styles the terminal's (fastfetch sections). Fruit salad gives a red OS section.", &MATUGEN_TYPE_LABELS, &MATUGEN_TYPE_CHOICES, live_theme_scheme, &onMatugenTypeChanged);
-    buildThemeComboRow(group, "Theme mode", "Material You only: dark, light, or picked from how light the wallpaper is.", &THEME_MODE_LABELS, &THEME_MODE_CHOICES, live_theme_mode, &onThemeModeChanged);
+    buildThemeComboRow(group, "Theme mode", "Dark or Light for app windows and Perihelion Settings, whatever the wallpaper or palette (Material You: its scheme too). Auto picks from how light the wallpaper is.", &THEME_MODE_LABELS, &THEME_MODE_CHOICES, live_theme_mode, &onThemeModeChanged);
 }
 
 /// Flips the hover/active-pill animation master switch
@@ -6403,6 +6447,7 @@ const pstyle = struct {
     extern "c" fn gtk_css_provider_load_from_string(self: *anyopaque, css: [*:0]const u8) void;
     extern "c" fn gdk_display_get_default() ?*anyopaque;
     extern "c" fn gtk_style_context_add_provider_for_display(display: *anyopaque, provider: *anyopaque, priority: c_uint) void;
+    extern "c" fn gtk_style_context_remove_provider_for_display(display: *anyopaque, provider: *anyopaque) void;
 };
 
 /// "#rrggbb" for a matugen.json key, or null.
@@ -6575,11 +6620,11 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
     }
 
     loadSettingsStyle();
+    if (g_window == null) loadConfigFromDisk(); // Theme mode, for the style below
     applySettingsStyle();
     applyPerihelionStyle();
     if (g_window == null) {
         // Opening Settings clears any duplicate bars or docks on its own.
-        loadConfigFromDisk();
         healDuplicates();
         g_window = buildWindow(@ptrCast(app));
     }

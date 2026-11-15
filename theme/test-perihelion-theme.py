@@ -350,6 +350,22 @@ try:
     run(nm, img("dark-red.png"), "--force")
     check(not os.path.exists(os.path.join(nm, ".config", "gtk-4.0", "perihelion-glass.css")),
           "glass: not written without Mango (Niri, Event Horizon)")
+
+    # 9. Theme mode Dark: the GTK glass (Perihelion Settings) stays dark even
+    #    when the palette is light (Auto on a light wallpaper, or picked).
+    dh = os.path.join(tmp, "darkhome")
+    os.makedirs(os.path.join(dh, ".config", "mango"))
+    os.environ["PERIHELION_GLASS_FORCE"] = "1"
+    run(dh, img("light.png"), "--force", "--mode", "dark")
+    css = open(os.path.join(dh, ".config", "gtk-4.0", "perihelion-glass.css")).read()
+    check("scheme=dark" in css, "dark mode: Auto palette (Latte on a light wallpaper) gives dark glass")
+    run(dh, img("light.png"), "--force", "--mode", "dark", "--palette", "catppuccin-latte")
+    css = open(os.path.join(dh, ".config", "gtk-4.0", "perihelion-glass.css")).read()
+    check("scheme=dark" in css, "dark mode: a light palette still gives dark GTK glass")
+    run(dh, img("light.png"), "--force", "--mode", "auto", "--palette", "catppuccin-latte")
+    css = open(os.path.join(dh, ".config", "gtk-4.0", "perihelion-glass.css")).read()
+    check("scheme=light" in css, "auto mode: a light palette keeps light glass")
+    del os.environ["PERIHELION_GLASS_FORCE"]
 finally:
     shutil.rmtree(tmp)
 

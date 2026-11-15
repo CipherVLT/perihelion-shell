@@ -38,7 +38,9 @@ Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
   accent=wallpaper   wallpaper (the palette's accents nearest the image's
                      colors) or flavor (the palette's own defaults)
   scheme=scheme-content   Material You: matugen's --type (Event Horizon's default)
-  mode=dark          Material You: dark, light or auto
+  mode=dark          dark, light or auto. Material You: its scheme. With any
+                     palette, Dark keeps GTK windows (Perihelion Settings
+                     too) dark, Light keeps them light
   glass=on           Window glass (Mango): frosted GTK windows, tinted with
                      the theme; menus and popovers stay nearly solid
 
@@ -775,10 +777,11 @@ def _glass_values(t):
         "accent": t["accent"], "accent_fg": "#ffffff" if t.get("light") else c["crust"],
         "edge": hl,
         "name": t["name"],
+        "scheme": "light" if t.get("light") else "dark",
     }
 
 
-GTK4_GLASS = string.Template("""$mark 4 ($name). */
+GTK4_GLASS = string.Template("""$mark 4 ($name). scheme=$scheme */
 /* Turn it off: Window glass in Perihelion Settings, or Super+G. */
 
 :root {
@@ -873,6 +876,45 @@ def gtk_glass_css(t, version):
 
 
 GLASS_IMPORT = '@import url("perihelion-glass.css");'
+
+
+def dark_counterpart(t):
+    """A dark theme with the same accent, for GTK when Theme mode is Dark but
+    the palette is light: the wallpaper's own dark Material scheme when
+    matugen made one, else Catppuccin Mocha."""
+    dark = None
+    if t.get("md_term"):
+        try:
+            dark = build_material(t["md_term"], light=False)
+        except (KeyError, ValueError, TypeError):
+            dark = None
+    if dark is None:
+        pre = PRESETS["catppuccin-mocha"]
+        dark = build_theme("catppuccin-mocha", [a for a in pre["default"] if a in pre["accents"]][:3])
+    dark = dict(dark)
+    dark["accent"] = t["accent"]
+    dark["light"] = False
+    dark["wall_L"] = 0
+    dark["name"] = f"{t['name']}, dark"
+    return dark
+
+
+def set_color_scheme(mode, t):
+    """org.gnome.desktop.interface color-scheme follows Theme mode, so GTK and
+    libadwaita apps (Perihelion Settings among them) draw dark widgets in
+    Dark mode; Auto follows how light the theme came out."""
+    if not shutil.which("gsettings"):
+        return
+    want = {"dark": "prefer-dark", "light": "prefer-light"}.get(
+        mode, "prefer-light" if t.get("light") else "prefer-dark")
+    try:
+        cur = subprocess.run(["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                             capture_output=True, text=True, timeout=5, check=False).stdout.strip().strip("'")
+        if cur != want:
+            subprocess.run(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", want],
+                           capture_output=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def gtk_css_ours(path):
@@ -1620,8 +1662,12 @@ def main(argv=None):
                     pass
 
     # GTK windows, file manager panels and dialogs: frosted glass on Mango.
+    # Theme mode Dark is a promise for every window, Perihelion Settings
+    # included: a light palette picked by hand still gets dark GTK glass.
+    gtk_theme = dark_counterpart(theme) if mode_setting == "dark" and theme.get("light") else theme
+    set_color_scheme(mode_setting, gtk_theme)
     if glass_wanted():
-        if apply_gtk_glass(theme, glass_on):
+        if apply_gtk_glass(gtk_theme, glass_on):
             changed.append("window glass" if glass_on else "window glass off")
             refresh_gtk()
 
