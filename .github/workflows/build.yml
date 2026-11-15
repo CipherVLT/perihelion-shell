@@ -75,6 +75,20 @@ jobs:
           mkdir -p /tmp/shots && chown tester /tmp/shots
           runuser -u tester -- env SWAY=/tmp/sway dbus-run-session -- \
             bash /tmp/shots-repo/tests/screenshots.sh /tmp/perihelion-bin /tmp/shots
+      - name: Print the pictures into the log (commit message has [pictures])
+        # For reviewing them where the artifact can't be downloaded: small
+        # JPEGs as base64, each line "@@IMG <file> <data>".
+        if: contains(github.event.head_commit.message, '[pictures]')
+        run: |
+          cd /tmp/shots
+          for f in *.png; do
+            case "$f" in
+              dock-*-3x.png) magick "$f" "/tmp/${f%.png}.jpg" ;;
+              dock-*) continue ;;
+              *) magick "$f" -resize 1100x -quality 55 "/tmp/${f%.png}.jpg" ;;
+            esac
+            base64 -w 3000 "/tmp/${f%.png}.jpg" | sed "s|^|@@IMG ${f%.png}.jpg |"
+          done
       - name: Upload the pictures
         if: always()
         uses: actions/upload-artifact@v4
