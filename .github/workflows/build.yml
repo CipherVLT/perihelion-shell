@@ -51,6 +51,9 @@ jobs:
       - name: Unit-test the single-copy module
         working-directory: simpbar
         run: /opt/zig/zig test src/singleton.zig -lc
+      - name: Unit-test the Network page's nmcli parser
+        working-directory: simpbar
+        run: /opt/zig/zig test src/network.zig -lc
       - name: "Live test: one bar and one dock under every toggle"
         run: |
           # The real bar and Settings against a headless compositor, flipping
@@ -64,6 +67,21 @@ jobs:
           # grant (exec fails); a plain copy has none.
           cp /usr/bin/sway /tmp/sway && chmod a+rx /tmp/sway
           runuser -u tester -- env SWAY=/tmp/sway bash /tmp/singleton-live.sh /tmp/perihelion-bin
+      - name: "Pictures: every Settings page and the dock, on a headless compositor"
+        run: |
+          dnf5 install -y --setopt=install_weak_deps=False \
+            grim swaybg dbus-daemon ImageMagick adwaita-icon-theme adwaita-sans-fonts
+          mkdir -p /tmp/shots-repo && cp -r tests perihelion-theme theme /tmp/shots-repo/ && chmod -R a+rX /tmp/shots-repo
+          mkdir -p /tmp/shots && chown tester /tmp/shots
+          runuser -u tester -- env SWAY=/tmp/sway dbus-run-session -- \
+            bash /tmp/shots-repo/tests/screenshots.sh /tmp/perihelion-bin /tmp/shots
+      - name: Upload the pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: /tmp/shots
+          if-no-files-found: warn
       - name: Build simpbar-shell
         working-directory: simpbar-shell
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2

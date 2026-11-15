@@ -9,8 +9,8 @@
 // the file back atomically), and call `mmsg dispatch reload_config` to apply.
 //
 // Layout mirrors hypr_pages.zig deliberately:
-//   - 9 pages, same order/count as the Hyprland section, so the sidebar is a
-//     fixed size and only the names/icons/section header change at runtime.
+//   - Its own page list (Event Horizon's settings order); config_main sizes
+//     the sidebar from `pages.names` at runtime.
 //   - "boxed-list" GtkListBox for the multi-value rule/bind/autostart/env
 //     lists, AdwPreferencesGroup form rows for the scalar settings.
 //   - Rows are backed by stable addresses (a fixed global Field/ctx pool, or
@@ -1719,77 +1719,737 @@ fn buildMangoGtkThemeGroup(outer: *gtk.GtkBox) void {
 }
 
 // ---------------------------------------------------------------------
-// General page (appearance.conf visuals + input.conf)
+// Option tables. Every scalar Mango setting the pages offer is one Opt:
+// which cfg file it lives in, its key, and Mango's own default (what the
+// row shows while the key is absent). The pages below are built from
+// these tables, and `dumpDefaults` prints them back as a config so the
+// install rehearsal can check every key against the Mango that ships
+// (`mango -p`): no row here can write a key Mango doesn't know.
+// Titles and subtitles are Pango markup: no ampersands or angle brackets.
+// ---------------------------------------------------------------------
+
+const DocId = enum { appearance, input, layout, misc };
+
+fn docOf(id: DocId) *mango.Doc {
+    return switch (id) {
+        .appearance => &doc_appearance,
+        .input => &doc_input,
+        .layout => &doc_layout,
+        .misc => &doc_misc,
+    };
+}
+
+const Kind = enum { toggle, int, float, text, combo, color };
+
+const Opt = struct {
+    kind: Kind,
+    doc: DocId,
+    key: []const u8,
+    title: [:0]const u8,
+    sub: [:0]const u8 = "",
+    on: bool = false,
+    num: f64 = 0,
+    min: f64 = 0,
+    max: f64 = 1,
+    step: f64 = 1,
+    text: []const u8 = "",
+    labels: []const [*:0]const u8 = &.{},
+    values: []const []const u8 = &.{},
+    width: c_int = 180,
+};
+
+fn oTg(doc: DocId, key: []const u8, on: bool, title: [:0]const u8, sub: [:0]const u8) Opt {
+    return .{ .kind = .toggle, .doc = doc, .key = key, .title = title, .sub = sub, .on = on };
+}
+fn oNum(doc: DocId, key: []const u8, def: f64, min: f64, max: f64, step: f64, title: [:0]const u8, sub: [:0]const u8) Opt {
+    return .{ .kind = .int, .doc = doc, .key = key, .title = title, .sub = sub, .num = def, .min = min, .max = max, .step = step };
+}
+fn oFlt(doc: DocId, key: []const u8, def: f64, min: f64, max: f64, step: f64, title: [:0]const u8, sub: [:0]const u8) Opt {
+    return .{ .kind = .float, .doc = doc, .key = key, .title = title, .sub = sub, .num = def, .min = min, .max = max, .step = step };
+}
+fn oTxt(doc: DocId, key: []const u8, def: []const u8, width: c_int, title: [:0]const u8, sub: [:0]const u8) Opt {
+    return .{ .kind = .text, .doc = doc, .key = key, .title = title, .sub = sub, .text = def, .width = width };
+}
+fn oCmb(doc: DocId, key: []const u8, def: []const u8, labels: []const [*:0]const u8, values: []const []const u8, title: [:0]const u8, sub: [:0]const u8) Opt {
+    return .{ .kind = .combo, .doc = doc, .key = key, .title = title, .sub = sub, .text = def, .labels = labels, .values = values };
+}
+fn oCol(doc: DocId, key: []const u8, def: []const u8, title: [:0]const u8) Opt {
+    return .{ .kind = .color, .doc = doc, .key = key, .title = title, .text = def };
+}
+
+const Group = struct { title: [:0]const u8, desc: [:0]const u8 = "", opts: []const Opt };
+
+const RELOGIN = " Applies the next time you log in.";
+
+const ACCEL_LABELS = [_][*:0]const u8{ "None", "Flat", "Adaptive" };
+const ACCEL_VALUES = [_][]const u8{ "0", "1", "2" };
+const SCROLL_LABELS = [_][*:0]const u8{ "Two fingers", "Edge", "Button held" };
+const SCROLL_VALUES = [_][]const u8{ "1", "2", "4" };
+const CLICK_LABELS = [_][*:0]const u8{ "Button areas", "Clickfinger" };
+const CLICK_VALUES = [_][]const u8{ "1", "2" };
+const HSPLIT_LABELS = [_][*:0]const u8{ "Follow the cursor", "Right", "Left" };
+const VSPLIT_LABELS = [_][*:0]const u8{ "Follow the cursor", "Below", "Above" };
+const SPLIT_VALUES = [_][]const u8{ "0", "1", "2" };
+const CORNER_LABELS = [_][*:0]const u8{ "Top left", "Top right", "Bottom left", "Bottom right" };
+const CORNER_VALUES = [_][]const u8{ "0", "1", "2", "3" };
+const TEAR_LABELS = [_][*:0]const u8{ "Off", "On", "Fullscreen windows only" };
+const TEAR_VALUES = [_][]const u8{ "0", "1", "2" };
+
+// -- General ----------------------------------------------------------
+
+const G_GENERAL = [_]Group{
+    .{ .title = "Window gaps", .desc = "Inner spacing is between tiles; outer is the screen edge.", .opts = &.{
+        oNum(.appearance, "gap_inner_horizontal", 5, 0, 128, 1, "Inner gap, side to side (px)", ""),
+        oNum(.appearance, "gap_inner_vertical", 5, 0, 128, 1, "Inner gap, top to bottom (px)", ""),
+        oNum(.appearance, "gap_outer_horizontal", 10, 0, 128, 1, "Outer gap, left and right (px)", ""),
+        oNum(.appearance, "gap_outer_vertical", 10, 0, 128, 1, "Outer gap, top and bottom (px)", ""),
+        oTg(.layout, "smart_gaps", false, "No gaps for a single window", "A window alone on its workspace fills the whole area."),
+    } },
+    .{ .title = "Workspaces", .opts = &.{
+        oNum(.misc, "tag_num", 9, 1, 31, 1, "Number of workspaces", "Windows on workspaces past this number move to the last one."),
+        oTg(.misc, "tag_carousel", false, "Wrap around", "Going past the last workspace comes back to the first."),
+        oTg(.misc, "tag_gather", false, "Keep workspaces consecutive", "Used workspaces close up so there are no empty ones between them."),
+        oTg(.misc, "view_current_to_back", false, "Press again to go back", "Choosing the workspace you are on returns to the previous one."),
+    } },
+    .{ .title = "Focus", .opts = &.{
+        oTg(.misc, "sloppy_focus", true, "Focus follows the pointer", "The window under the pointer gets keyboard focus without a click."),
+        oTg(.misc, "focus_on_activate", true, "Let apps ask for focus", "A window that requests attention, such as a link opening in your browser, is focused."),
+        oTg(.misc, "focus_cross_monitor", false, "Directional focus crosses monitors", ""),
+        oTg(.misc, "focus_cross_tag", false, "Directional focus crosses workspaces", ""),
+    } },
+};
+
+// -- Decoration -------------------------------------------------------
+
+const G_DECOR_TOP = [_]Group{
+    .{ .title = "Borders and corners", .opts = &.{
+        oNum(.appearance, "border_px", 4, 0, 32, 1, "Border width (px)", ""),
+        oNum(.appearance, "border_radius", 12, 0, 64, 1, "Corner radius (px)", "12 matches Perihelion's frosted app windows."),
+        oTg(.misc, "no_border_when_single", false, "No border for a single window", ""),
+        oTg(.appearance, "no_radius_when_single", false, "Square corners for a single window", ""),
+    } },
+    .{ .title = "Opacity", .desc = "Whole-window opacity, text included. For frosted windows with sharp text use Window glass on the Appearance page instead.", .opts = &.{
+        oFlt(.appearance, "focused_opacity", 1.0, 0.1, 1.0, 0.05, "Focused window", ""),
+        oFlt(.appearance, "unfocused_opacity", 1.0, 0.1, 1.0, 0.05, "Other windows", ""),
+    } },
+};
+
+const BLUR_HEAD = [_]Opt{
+    oTg(.appearance, "blur", false, "Blur behind windows", ""),
+    oTg(.appearance, "blur_layer", false, "Blur behind panels", "The bar, dock, app drawer and widgets."),
+};
+const BLUR_TAIL = [_]Opt{
+    oNum(.appearance, "blur_params_radius", 5, 1, 32, 1, "Radius", "How far each pass samples. Small values over several passes stay clean."),
+    oNum(.appearance, "blur_params_num_passes", 1, 1, 8, 1, "Passes", "More passes are smoother."),
+    oFlt(.appearance, "blur_params_noise", 0.02, 0.0, 1.0, 0.01, "Noise", "A trace hides banding in smooth gradients; more looks grainy."),
+    oFlt(.appearance, "blur_params_brightness", 0.9, 0.0, 2.0, 0.01, "Brightness", ""),
+    oFlt(.appearance, "blur_params_contrast", 0.9, 0.0, 2.0, 0.01, "Contrast", ""),
+    oFlt(.appearance, "blur_params_saturation", 1.2, 0.0, 2.0, 0.01, "Saturation", ""),
+};
+
+const G_DECOR_BOTTOM = [_]Group{
+    .{ .title = "Shadows", .opts = &.{
+        oTg(.appearance, "shadows", false, "Window shadows", ""),
+        oTg(.appearance, "shadow_only_floating", true, "Only under floating windows", "Tiled windows sit edge to edge, where a shadow only costs performance."),
+        oTg(.appearance, "layer_shadows", false, "Shadows under panels", "Perihelion's glass bar and dock look cleanest without."),
+        oNum(.appearance, "shadows_size", 10, 0, 100, 1, "Size (px)", ""),
+        oNum(.appearance, "shadows_blur", 15, 0, 100, 1, "Softness (px)", ""),
+        oNum(.appearance, "shadows_position_x", 0, -100, 100, 1, "Offset, sideways (px)", ""),
+        oNum(.appearance, "shadows_position_y", 0, -100, 100, 1, "Offset, downwards (px)", ""),
+        oCol(.appearance, "shadows_color", "0x000000ff", "Color"),
+    } },
+    .{ .title = "Dimming", .opts = &.{
+        oTg(.appearance, "dim_enable", false, "Dim windows", "Lays a tint over windows; by default only the unfocused ones."),
+        oCol(.appearance, "dim_focused_color", "0x00000000", "Focused window"),
+        oCol(.appearance, "dim_unfocused_color", "0x00000055", "Other windows"),
+    } },
+    .{ .title = "Colors", .desc = "Base colours in appearance.conf. The border colours follow the wallpaper: perihelion-theme writes ~/.config/mango/colors.conf, which config.conf reads last, so those win over the values here.", .opts = &.{
+        oCol(.appearance, "root_color", "0x201b14ff", "Root background"),
+        oCol(.appearance, "border_color", "0x444444ff", "Border"),
+        oCol(.appearance, "focus_color", "0x47add6ff", "Focused border"),
+        oCol(.appearance, "maximized_screen_color", "0x47add6ff", "Maximized"),
+        oCol(.appearance, "urgent_color", "0xad401fff", "Urgent"),
+        oCol(.appearance, "scratchpad_color", "0x516c93ff", "Scratchpad"),
+        oCol(.appearance, "global_color", "0xb153a7ff", "Global"),
+        oCol(.appearance, "overlay_color", "0x14a57cff", "Overlay"),
+    } },
+};
+
+// -- Keyboards --------------------------------------------------------
+
+const G_KEYBOARD = [_]Group{
+    .{ .title = "Layout", .desc = "XKB names, as in /usr/share/X11/xkb/rules/base.lst. Leave a field empty for the default.", .opts = &.{
+        oTxt(.input, "xkb_rules_layout", "us", 180, "Layouts", "One code, or several separated by commas: us,de"),
+        oTxt(.input, "xkb_rules_variant", "", 180, "Variant", "For example dvorak, colemak or intl."),
+        oTxt(.input, "xkb_rules_options", "", 240, "Options", "For example caps:escape, or grp:alt_shift_toggle to switch layouts."),
+        oTxt(.input, "xkb_rules_model", "", 180, "Model", "For example pc104. Usually left empty."),
+    } },
+    .{ .title = "Typing", .opts = &.{
+        oNum(.input, "repeat_rate", 25, 1, 100, 1, "Repeat rate (per second)", ""),
+        oNum(.input, "repeat_delay", 600, 100, 2000, 10, "Delay before repeating (ms)", ""),
+        oTg(.input, "numlock_on", false, "Num Lock on at login", ""),
+    } },
+};
+
+// -- Mouse and touchpad -----------------------------------------------
+
+const G_POINTER = [_]Group{
+    .{ .title = "Mouse", .opts = &.{
+        oCmb(.input, "mouse_accel_profile", "2", &ACCEL_LABELS, &ACCEL_VALUES, "Acceleration", "Flat moves the pointer exactly as far as the mouse; Adaptive speeds up with fast movements."),
+        oFlt(.input, "mouse_accel_speed", 0.0, -1.0, 1.0, 0.05, "Pointer speed", "From -1 (slowest) to 1 (fastest)."),
+        oTg(.input, "mouse_natural_scrolling", false, "Natural scrolling", "The page follows the wheel, as on a phone."),
+        oFlt(.input, "axis_scroll_factor", 1.0, 0.1, 10.0, 0.1, "Scroll speed", ""),
+        oTg(.input, "mouse_left_handed", false, "Left-handed", "Swaps the left and right buttons."),
+        oTg(.input, "mouse_middle_button_emulation", false, "Middle click by pressing both buttons", ""),
+    } },
+    .{ .title = "Touchpad", .opts = &.{
+        oTg(.input, "disable_trackpad", false, "Turn the touchpad off", ""),
+        oTg(.input, "tap_to_click", true, "Tap to click", ""),
+        oTg(.input, "tap_and_drag", true, "Tap and drag", "Tap, then touch again and move to drag."),
+        oTg(.input, "drag_lock", true, "Drag lock", "A drag carries on when you lift your finger briefly."),
+        oTg(.input, "trackpad_natural_scrolling", false, "Natural scrolling", ""),
+        oTg(.input, "trackpad_disable_while_typing", true, "Ignore the touchpad while typing", ""),
+        oCmb(.input, "trackpad_accel_profile", "2", &ACCEL_LABELS, &ACCEL_VALUES, "Acceleration", ""),
+        oFlt(.input, "trackpad_accel_speed", 0.0, -1.0, 1.0, 0.05, "Pointer speed", "From -1 (slowest) to 1 (fastest)."),
+        oCmb(.input, "trackpad_scroll_method", "1", &SCROLL_LABELS, &SCROLL_VALUES, "Scroll with", ""),
+        oFlt(.input, "trackpad_scroll_factor", 1.0, 0.1, 10.0, 0.1, "Scroll speed", ""),
+        oCmb(.input, "trackpad_click_method", "1", &CLICK_LABELS, &CLICK_VALUES, "Right and middle click", "Button areas: where on the pad you press. Clickfinger: two fingers for right, three for middle."),
+        oTg(.input, "trackpad_left_handed", false, "Left-handed", ""),
+        oTg(.input, "trackpad_middle_button_emulation", false, "Middle click by pressing both buttons", ""),
+    } },
+    .{ .title = "Gestures", .opts = &.{
+        oNum(.input, "swipe_min_threshold", 1, 0, 64, 1, "Swipe threshold", "How far fingers must move before a swipe counts."),
+        oTg(.input, "gesture_live", true, "Follow the fingers", "Workspace and overview transitions move with your fingers instead of starting when you let go."),
+        oNum(.input, "gesture_swipe_distance", 300, 50, 2000, 10, "Swipe distance for one workspace (px)", ""),
+    } },
+    .{ .title = "Touchscreen", .opts = &.{
+        oTg(.input, "touch_enable", true, "Touchscreen", ""),
+        oTg(.input, "touch_enable_mouse_emulation", false, "Touch acts as a click in apps without touch support", ""),
+    } },
+};
+
+// -- Layouts ----------------------------------------------------------
+
+const G_LAYOUT = [_]Group{
+    .{ .title = "Dwindle", .desc = "Perihelion's default: each new window splits the focused one.", .opts = &.{
+        oFlt(.layout, "dwindle_split_ratio", 0.5, 0.05, 0.95, 0.05, "Split ratio", "The share of the space the existing window keeps."),
+        oCmb(.layout, "dwindle_horizontal_split", "1", &HSPLIT_LABELS, &SPLIT_VALUES, "Side-by-side splits open", ""),
+        oCmb(.layout, "dwindle_vertical_split", "1", &VSPLIT_LABELS, &SPLIT_VALUES, "Stacked splits open", ""),
+        oTg(.layout, "dwindle_smart_split", false, "Split towards the pointer", "The pointer's position in the focused window picks the side."),
+        oTg(.layout, "dwindle_preserve_split", false, "Keep split directions", "Closing a window doesn't reshuffle the others."),
+        oTg(.layout, "dwindle_smart_resize", false, "Resize towards the pointer", ""),
+        oTg(.layout, "dwindle_manual_split", false, "Manual splits", ""),
+    } },
+    .{ .title = "Scroller", .opts = &.{
+        oNum(.layout, "scroller_structs", 20, 0, 512, 1, "Side margin (px)", "Space kept free beside a full-width window."),
+        oFlt(.layout, "scroller_default_proportion", 0.9, 0.1, 1.0, 0.05, "New window width", "As a share of the screen."),
+        oTg(.layout, "scroller_ignore_proportion_single", true, "A single window ignores widths", ""),
+        oFlt(.layout, "scroller_default_proportion_single", 1.0, 0.1, 1.0, 0.05, "Single window width", "Used when the row above is off."),
+        oTg(.layout, "scroller_focus_center", false, "Always centre the focused window", ""),
+        oTg(.layout, "scroller_prefer_center", false, "Centre a window that was off screen", ""),
+        oTg(.layout, "scroller_prefer_overspread", true, "Spread windows into spare room", ""),
+        oTg(.layout, "edge_scroller_pointer_focus", true, "Pointer can focus half-hidden windows", ""),
+        oTxt(.layout, "scroller_proportion_preset", "0.5,0.8,1.0", 200, "Width presets", "The widths cycled through, separated by commas."),
+    } },
+    .{ .title = "Master and stack", .opts = &.{
+        oTg(.layout, "new_is_master", true, "New windows become the master", ""),
+        oFlt(.layout, "default_master_factor", 0.55, 0.05, 0.95, 0.05, "Master share of the screen", ""),
+        oNum(.layout, "default_master_count", 1, 1, 16, 1, "Windows in the master area", ""),
+        oTg(.layout, "center_master_overspread", false, "Centre layout: master fills an empty stack side", ""),
+        oTg(.layout, "center_when_single_stack", true, "Centre layout: centre the master with one stack window", ""),
+    } },
+    .{ .title = "Monocle and deck", .opts = &.{
+        oTg(.layout, "monocle_tab_mode", true, "Monocle: show windows as tabs", ""),
+        oTg(.layout, "monocle_no_border", false, "Monocle: no borders", ""),
+        oTg(.layout, "monocle_no_gap", false, "Monocle: no gaps", ""),
+        oTg(.layout, "monocle_no_radius", false, "Monocle: square corners", ""),
+        oTg(.layout, "deck_tab_mode", true, "Deck: show the stack as tabs", ""),
+    } },
+    .{ .title = "Switching layouts", .opts = &.{
+        oTxt(.layout, "circle_layout", "", 240, "Layouts to cycle through", "For the switch_layout action, for example tile,scroller,dwindle. Empty cycles through all of them."),
+    } },
+};
+
+// -- Misc -------------------------------------------------------------
+
+const G_MISC = [_]Group{
+    .{ .title = "Floating windows", .opts = &.{
+        oTg(.misc, "enable_floating_snap", false, "Snap to edges and other windows", ""),
+        oNum(.misc, "snap_distance", 30, 0, 200, 1, "Snap distance (px)", ""),
+    } },
+    .{ .title = "Dragging and resizing", .opts = &.{
+        oTg(.misc, "drag_tile_to_tile", false, "Drag a tile onto another to swap them", ""),
+        oTg(.misc, "drag_tile_small", true, "Shrink a tile while it is dragged", ""),
+        oTg(.misc, "enable_border_resize", true, "Resize by dragging a window border", ""),
+        oNum(.misc, "border_resize_size", 10, 0, 64, 1, "Border grab width (px)", "0 uses the border's own width."),
+    } },
+    .{ .title = "Scratchpad", .opts = &.{
+        oTg(.misc, "single_scratchpad", true, "Show one scratchpad at a time", ""),
+        oTg(.misc, "scratchpad_cross_monitor", false, "Share scratchpads between monitors", ""),
+        oFlt(.misc, "scratchpad_width_ratio", 0.8, 0.1, 1.0, 0.05, "Width", "As a share of the screen."),
+        oFlt(.misc, "scratchpad_height_ratio", 0.9, 0.1, 1.0, 0.05, "Height", ""),
+    } },
+    .{ .title = "Overview", .opts = &.{
+        oNum(.misc, "overview_gap_inner", 5, 0, 1000, 1, "Gap between windows (px)", ""),
+        oNum(.misc, "overview_gap_outer", 30, 0, 1000, 1, "Gap to the screen edge (px)", ""),
+        oTg(.misc, "enable_hotarea", false, "Hot corner", "Moving the pointer into a screen corner opens the overview."),
+        oCmb(.misc, "hotarea_corner", "2", &CORNER_LABELS, &CORNER_VALUES, "Corner", ""),
+        oNum(.misc, "hotarea_size", 10, 1, 1000, 1, "Corner size (px)", ""),
+        oTg(.misc, "hotarea_disable_on_fullscreen", true, "Not while a window is fullscreen", ""),
+    } },
+    .{ .title = "Configuration", .opts = &.{
+        oTg(.misc, "auto_reload_config", true, "Apply config files as soon as they are saved", "Perihelion Settings relies on this for most rows; leave it on."),
+    } },
+};
+
+// -- Render -----------------------------------------------------------
+
+const G_RENDER = [_]Group{
+    .{ .title = "Frames", .desc = "Variable refresh rate (VRR) and HDR are set per monitor, on the Monitors page.", .opts = &.{
+        oCmb(.misc, "allow_tearing", "0", &TEAR_LABELS, &TEAR_VALUES, "Tearing", "Lets games show a frame the moment it is ready: lower input lag, at the cost of visible tear lines. Add a force_tearing window rule for the game as well."),
+    } },
+    .{ .title = "Effects", .opts = &.{
+        oTg(.appearance, "blur_optimized", true, "Cache the blurred wallpaper", "The frost behind glass is made once per wallpaper instead of every frame. Turning this off blurs live windows too, at a real GPU cost."),
+    } },
+};
+
+// -- Cursor -----------------------------------------------------------
+
+const G_CURSOR = [_]Group{
+    .{ .title = "Behaviour", .opts = &.{
+        oNum(.misc, "cursor_hide_timeout", 0, 0, 3600, 1, "Hide when idle (seconds)", "0 never hides it."),
+        oTg(.misc, "cursor_hide_on_keypress", false, "Hide while typing", ""),
+        oTg(.misc, "warp_cursor", true, "Jump to the focused window", "Changing focus with the keyboard moves the pointer to that window."),
+        oTg(.misc, "drag_warp_cursor", true, "Follow a window dragged into a tile", ""),
+    } },
+};
+
+// -- Group ------------------------------------------------------------
+
+const G_GROUP = [_]Group{
+    .{ .title = "Group bar", .desc = "The title strip of windows grouped into one frame.", .opts = &.{
+        oTg(.appearance, "always_show_group_bar", false, "Show on every window", "Also on windows that are not in a group."),
+        oNum(.appearance, "group_bar_height", 33, 0, 200, 1, "Height (px)", ""),
+        oTg(.appearance, "group_bar_close_button_enable", false, "Close button", ""),
+        oNum(.appearance, "group_bar_button_size", 16, 4, 64, 1, "Close button size (px)", ""),
+        oNum(.appearance, "group_bar_button_margin", 4, 0, 64, 1, "Close button inset (px)", ""),
+        oCol(.appearance, "group_bar_button_color", "0xad401fff", "Close button"),
+    } },
+    .{ .title = "Group bar style", .opts = &.{
+        oTxt(.appearance, "group_bar_decorate_font_desc", "monospace Bold 13", 220, "Font", "Family, style and size."),
+        oCol(.appearance, "group_bar_decorate_fg_color", "0xc0caf5ff", "Text"),
+        oCol(.appearance, "group_bar_decorate_bg_color", "0x1d2021ff", "Background"),
+        oCol(.appearance, "group_bar_decorate_focus_fg_color", "0x9ece6aff", "Focused text"),
+        oCol(.appearance, "group_bar_decorate_focus_bg_color", "0x3c3836ff", "Focused background"),
+        oCol(.appearance, "group_bar_decorate_border_color", "0x3b4261ff", "Border"),
+        oNum(.appearance, "group_bar_decorate_border_width", 4, 0, 100, 1, "Border width (px)", ""),
+        oNum(.appearance, "group_bar_decorate_corner_radius", 5, 0, 100, 1, "Corner radius (px)", ""),
+        oNum(.appearance, "group_bar_decorate_padding_x", 0, 0, 100, 1, "Padding, sideways (px)", ""),
+        oNum(.appearance, "group_bar_decorate_padding_y", 0, 0, 100, 1, "Padding, up and down (px)", ""),
+    } },
+    .{ .title = "Tab bar", .desc = "The tabs the monocle and deck layouts show (Layouts page).", .opts = &.{
+        oNum(.appearance, "tab_bar_height", 33, 0, 200, 1, "Height (px)", ""),
+        oTxt(.appearance, "tab_bar_decorate_font_desc", "monospace Bold 13", 220, "Font", ""),
+        oCol(.appearance, "tab_bar_decorate_fg_color", "0xc0caf5ff", "Text"),
+        oCol(.appearance, "tab_bar_decorate_bg_color", "0x1d2021ff", "Background"),
+        oCol(.appearance, "tab_bar_decorate_focus_fg_color", "0x7aa2f7ff", "Focused text"),
+        oCol(.appearance, "tab_bar_decorate_focus_bg_color", "0x3c3836ff", "Focused background"),
+        oCol(.appearance, "tab_bar_decorate_border_color", "0x3b4261ff", "Border"),
+        oNum(.appearance, "tab_bar_decorate_border_width", 4, 0, 100, 1, "Border width (px)", ""),
+        oNum(.appearance, "tab_bar_decorate_corner_radius", 5, 0, 100, 1, "Corner radius (px)", ""),
+    } },
+};
+
+// -- XWayland / OpenGL / Quirks ---------------------------------------
+
+const G_XWAYLAND = [_]Group{
+    .{ .title = "X11 server", .opts = &.{
+        oTg(.misc, "xwayland_persistence", true, "Keep XWayland running", "Starts the X11 server at login and keeps it, so X11 apps open without a delay. Off starts it with the first X11 app instead." ++ RELOGIN),
+        oTg(.misc, "xwayland_ignore_scale", false, "Ignore the display scale for X11 apps", "On a scaled monitor X11 apps are stretched and look soft. On draws them at native size: sharp, but small unless the app scales itself."),
+    } },
+};
+
+const G_OPENGL = [_]Group{
+    .{ .title = "NVIDIA", .opts = &.{
+        oTg(.misc, "sync_obj_enable", true, "Nvidia anti-flicker", "Explicit sync: every frame reaches the screen in the order it was drawn. Without it NVIDIA drivers can flicker or flash old frames, most of all in X11 apps and games. Harmless on other GPUs." ++ RELOGIN),
+    } },
+};
+
+const G_QUIRKS = [_]Group{
+    .{ .title = "Apps and shortcuts", .opts = &.{
+        oTg(.misc, "allow_shortcuts_inhibit", true, "Let apps capture shortcuts", "Games, remote desktops and virtual machines may take the whole keyboard, Super shortcuts included."),
+        oTg(.misc, "disable_middle_paste", false, "No middle-click paste", "Turns the primary selection off for Wayland apps. X11 apps keep it."),
+        oNum(.misc, "axis_bind_apply_timeout", 100, 0, 2000, 10, "Scroll-bind pause (ms)", "How long scroll steps count as one gesture for scroll-wheel shortcuts."),
+    } },
+    .{ .title = "Staying awake", .opts = &.{
+        oTg(.misc, "idle_inhibit_ignore_visible", false, "Hidden windows may keep the screen on", "For example a music player on another workspace."),
+        oTg(.misc, "idle_inhibit_when_fullscreen", false, "Stay awake while a fullscreen window is focused", ""),
+    } },
+    .{ .title = "Stacking and moving", .opts = &.{
+        oTg(.misc, "float_full_to_top", false, "Fullscreen, floating and top panels share one layer", "They can then cover each other; whichever was raised last is on top."),
+        oTg(.misc, "allow_lock_transparent", false, "Allow a see-through lock screen", ""),
+        oTg(.misc, "focus_direction_only_zone_overlap", true, "Directional focus needs overlap", "Focus only moves to a window that lines up with the current one."),
+        oTg(.misc, "exchange_cross_monitor", false, "Swapping and moving windows crosses monitors", ""),
+    } },
+};
+
+const ALL_TABLES = [_][]const Group{ &G_GENERAL, &G_DECOR_TOP, &G_DECOR_BOTTOM, &G_KEYBOARD, &G_POINTER, &G_LAYOUT, &G_MISC, &G_RENDER, &G_CURSOR, &G_GROUP, &G_XWAYLAND, &G_OPENGL, &G_QUIRKS };
+const LOOSE_OPTS = [_][]const Opt{ &BLUR_HEAD, &BLUR_TAIL };
+
+fn optDefault(o: *const Opt, buf: []u8) []const u8 {
+    return switch (o.kind) {
+        .toggle => if (o.on) "1" else "0",
+        .int => std.fmt.bufPrint(buf, "{d}", .{@as(i64, @intFromFloat(o.num))}) catch "0",
+        .float => std.fmt.bufPrint(buf, "{d:.2}", .{o.num}) catch "0",
+        .text, .combo, .color => o.text,
+    };
+}
+
+extern "c" fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
+
+fn dumpOpt(o: *const Opt) void {
+    var nb: [32]u8 = undefined;
+    const v = optDefault(o, &nb);
+    if (v.len == 0) return; // an empty text field writes no line
+    var lb: [256]u8 = undefined;
+    const line = std.fmt.bufPrint(&lb, "{s}={s}\n", .{ o.key, v }) catch return;
+    _ = write(1, line.ptr, line.len);
+}
+
+/// `perihelion-settings --mango-keys`: every key these pages can write,
+/// with its default, as a Mango config on stdout (see the header above).
+pub fn dumpDefaults() void {
+    for (ALL_TABLES) |groups| {
+        for (groups) |*g| {
+            for (g.opts) |*o| dumpOpt(o);
+        }
+    }
+    for (LOOSE_OPTS) |opts| {
+        for (opts) |*o| dumpOpt(o);
+    }
+}
+
+// ---------------------------------------------------------------------
+// Rows from the tables
+// ---------------------------------------------------------------------
+
+/// Float rows write two decimals (0.15, not 0.15000000000000002).
+fn onOptFloat(spin: *gtk.GtkSpinButton, user_data: ?*anyopaque) callconv(.c) void {
+    const f: *Field = @ptrCast(@alignCast(user_data.?));
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d:.2}", .{hg.gtk_spin_button_get_value(spin)}) catch return;
+    f.doc.setValue(f.key, s);
+    _ = f.doc.save();
+}
+
+/// Text rows: an emptied field removes the key (Mango's default) rather
+/// than writing `key=`.
+fn onOptEntry(buffer: *gtk.GtkEntryBuffer, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
+    const f: *Field = @ptrCast(@alignCast(user_data.?));
+    const text = std.mem.trim(u8, std.mem.span(gtk.gtk_entry_buffer_get_text(buffer)), " \t");
+    if (text.len == 0) {
+        if (f.doc.lineIndexOf(f.key)) |i| f.doc.removeLine(i);
+    } else {
+        f.doc.setValue(f.key, text);
+    }
+    _ = f.doc.save();
+}
+
+fn optRow(o: *const Opt) *gtk.AdwActionRow {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), o.title);
+    if (o.sub.len > 0) gtk.adw_action_row_set_subtitle(row, o.sub);
+    return row;
+}
+
+fn addOpt(group: *gtk.AdwPreferencesGroup, o: *const Opt) void {
+    const doc = docOf(o.doc);
+    switch (o.kind) {
+        .toggle => {
+            const row = optRow(o);
+            const sw = gtk.gtk_switch_new();
+            gtk.gtk_switch_set_active(sw, if (doc.getBool(o.key, o.on)) 1 else 0);
+            gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+            _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onFieldSwitch), @ptrCast(fieldFor(doc, o.key, false, null)), null, 0);
+            gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+            gtk.adw_action_row_set_activatable_widget(row, @ptrCast(sw));
+            gtk.adw_preferences_group_add(group, @ptrCast(row));
+        },
+        .int, .float => {
+            const is_float = o.kind == .float;
+            const initial = if (is_float) doc.getFloat(o.key, o.num) else @as(f64, @floatFromInt(doc.getInt(o.key, @intFromFloat(o.num))));
+            const row = optRow(o);
+            const spin = gtk.gtk_spin_button_new_with_range(o.min, o.max, o.step);
+            gtk.gtk_spin_button_set_value(spin, initial);
+            gtk.gtk_widget_set_valign(@ptrCast(spin), gtk.ALIGN_CENTER);
+            const handler: gtk.GCallback = if (is_float) @ptrCast(&onOptFloat) else @ptrCast(&onFieldSpin);
+            _ = gtk.g_signal_connect_data(@ptrCast(spin), "value-changed", handler, @ptrCast(fieldFor(doc, o.key, is_float, null)), null, 0);
+            gtk.adw_action_row_add_suffix(row, @ptrCast(spin));
+            gtk.adw_preferences_group_add(group, @ptrCast(row));
+        },
+        .text => {
+            const row = optRow(o);
+            const entry = gtk.gtk_entry_new();
+            gtk.gtk_widget_set_size_request(@ptrCast(entry), o.width, -1);
+            gtk.gtk_widget_set_valign(@ptrCast(entry), gtk.ALIGN_CENTER);
+            const buffer = gtk.gtk_entry_get_buffer(entry);
+            hp.setEntryZ(buffer, doc.value(o.key) orelse o.text);
+            _ = gtk.g_signal_connect_data(@ptrCast(buffer), "notify::text", @ptrCast(&onOptEntry), @ptrCast(fieldFor(doc, o.key, false, null)), null, 0);
+            gtk.adw_action_row_add_suffix(row, @ptrCast(entry));
+            gtk.adw_preferences_group_add(group, @ptrCast(row));
+        },
+        .combo => {
+            const cur = doc.value(o.key) orelse o.text;
+            var sel: c_uint = 0;
+            for (o.values, 0..) |v, i| {
+                if (std.mem.eql(u8, cur, v)) {
+                    sel = @intCast(i);
+                    break;
+                }
+            }
+            var arr: [16]?[*:0]const u8 = undefined;
+            const n = @min(o.labels.len, arr.len - 1);
+            for (o.labels[0..n], 0..) |l, i| arr[i] = l;
+            arr[n] = null;
+            const row = gtk.adw_combo_row_new();
+            gtk.adw_preferences_row_set_title(@ptrCast(row), o.title);
+            if (o.sub.len > 0) gtk.adw_action_row_set_subtitle(@ptrCast(row), o.sub);
+            gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&arr))));
+            gtk.adw_combo_row_set_selected(row, sel);
+            _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onFieldCombo), @ptrCast(fieldFor(doc, o.key, false, o.values)), null, 0);
+            gtk.adw_preferences_group_add(group, @ptrCast(row));
+        },
+        .color => addColorField(group, o.title, doc, o.key, o.text),
+    }
+}
+
+fn newGroup(title: [:0]const u8, desc: [:0]const u8) *gtk.AdwPreferencesGroup {
+    const grp = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(grp, title);
+    if (desc.len > 0) gtk.adw_preferences_group_set_description(grp, desc);
+    return grp;
+}
+
+fn addGroups(outer: *gtk.GtkBox, groups: []const Group) void {
+    for (groups) |*g| {
+        const grp = newGroup(g.title, g.desc);
+        for (g.opts) |*o| addOpt(grp, o);
+        gtk.gtk_box_append(outer, @ptrCast(grp));
+    }
+}
+
+/// A row that only shows something (status, hardware): title, text, icon.
+fn addInfoRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, text: []const u8, icon: [:0]const u8) void {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), title);
+    var esc: [512]u8 = undefined;
+    gtk.adw_action_row_set_subtitle(row, escapeZ(text, &esc));
+    gtk.adw_action_row_add_prefix(row, @ptrCast(gtk.gtk_image_new_from_icon_name(icon)));
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+}
+
+// ---------------------------------------------------------------------
+// env.conf switches: a setting that is an environment variable for the
+// compositor (read when Mango starts, before it opens the GPU).
+// ---------------------------------------------------------------------
+
+const EnvToggle = struct { name: []const u8, value: []const u8 };
+
+fn envLineIndex(name: []const u8) ?usize {
+    for (doc_env.lines.items, 0..) |l, i| {
+        const kv = mango.parseKV(l) orelse continue;
+        if (!std.mem.eql(u8, kv.key, "env")) continue;
+        const comma = std.mem.indexOfScalar(u8, kv.value, ',') orelse continue;
+        if (std.mem.eql(u8, std.mem.trim(u8, kv.value[0..comma], " \t"), name)) return i;
+    }
+    return null;
+}
+
+fn envIs(t: *const EnvToggle) bool {
+    const i = envLineIndex(t.name) orelse return false;
+    const kv = mango.parseKV(doc_env.line(i)) orelse return false;
+    const comma = std.mem.indexOfScalar(u8, kv.value, ',') orelse return false;
+    return std.mem.eql(u8, std.mem.trim(u8, kv.value[comma + 1 ..], " \t"), t.value);
+}
+
+fn setEnvToggle(t: *const EnvToggle, on: bool) void {
+    const idx = envLineIndex(t.name);
+    if (on) {
+        var buf: [256]u8 = undefined;
+        const text = std.fmt.bufPrint(&buf, "env={s},{s}", .{ t.name, t.value }) catch return;
+        if (idx) |i| doc_env.setLine(i, text) else doc_env.appendLine(text);
+    } else if (idx) |i| {
+        doc_env.removeLine(i);
+    }
+    _ = doc_env.save();
+    rebuildEnvList();
+}
+
+fn onEnvToggle(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
+    const t: *const EnvToggle = @ptrCast(@alignCast(user_data.?));
+    setEnvToggle(t, gtk.gtk_switch_get_active(sw) != 0);
+}
+
+fn addEnvToggle(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, sub: [:0]const u8, t: *const EnvToggle) void {
+    hp.addSwitchRow(group, title, sub, envIs(t), @ptrCast(&onEnvToggle), @ptrCast(@constCast(t)));
+}
+
+const ENV_SOFT_CURSOR = EnvToggle{ .name = "WLR_NO_HARDWARE_CURSORS", .value = "1" };
+
+// ---------------------------------------------------------------------
+// Pages
 // ---------------------------------------------------------------------
 
 fn buildGeneralPage() *gtk.GtkBox {
     const outer = hp.pageBox();
+    addGroups(outer, &G_GENERAL);
+    buildMangoGtkThemeGroup(outer);
+    return outer;
+}
 
-    const gaps = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(gaps, "Window Gaps");
-    gtk.adw_preferences_group_set_description(gaps, "Inner spacing is between tiles; outer is the screen edge.");
-    addSpinField(gaps, "Inner Gap (px)", 0, 128, 1, &doc_appearance, "gap_inner_horizontal", 5, false);
-    addSpinField(gaps, "Inner Gap Vertical (px)", 0, 128, 1, &doc_appearance, "gap_inner_vertical", 5, false);
-    addSpinField(gaps, "Outer Gap (px)", 0, 128, 1, &doc_appearance, "gap_outer_horizontal", 10, false);
-    addSpinField(gaps, "Outer Gap Vertical (px)", 0, 128, 1, &doc_appearance, "gap_outer_vertical", 10, false);
-    gtk.gtk_box_append(outer, @ptrCast(gaps));
+fn buildDecorationPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_DECOR_TOP);
 
-    const decor = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(decor, "Borders and Opacity");
-    addSpinField(decor, "Border Size (px)", 0, 32, 1, &doc_appearance, "border_px", 4, false);
-    addSpinField(decor, "Corner Radius (px)", 0, 64, 1, &doc_appearance, "border_radius", 12, false);
-    addSwitchField(decor, "No Radius When Single", &doc_appearance, "no_radius_when_single", false);
-    addSpinField(decor, "Focused Opacity", 0.1, 1.0, 0.05, &doc_appearance, "focused_opacity", 1.0, true);
-    addSpinField(decor, "Unfocused Opacity", 0.1, 1.0, 0.05, &doc_appearance, "unfocused_opacity", 1.0, true);
-    gtk.gtk_box_append(outer, @ptrCast(decor));
-
-    const blur = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(blur, "Blur");
-    gtk.adw_preferences_group_set_description(blur, "Blur needs something translucent to show through: for the bar use Background Opacity under the Appearance tab, for the dock Colored glass (Modules > Dock). Turning a surface on also enables Blur on Layer Surfaces, which it needs.");
-    addSwitchField(blur, "Enable Blur", &doc_appearance, "blur", true);
-    addSwitchField(blur, "Blur on Layer Surfaces", &doc_appearance, "blur_layer", true);
-    addSurfaceBlurSwitch(blur, "Bar Blur", "perihelion-bar");
-    addSurfaceBlurSwitch(blur, "Dock Blur", "perihelion-dock");
-    addSurfaceBlurSwitch(blur, "Desktop Widgets Blur", "perihelion-shell");
-    addSpinField(blur, "Blur Radius", 1, 32, 1, &doc_appearance, "blur_params_radius", 4, false);
-    addSpinField(blur, "Blur Passes", 1, 8, 1, &doc_appearance, "blur_params_num_passes", 4, false);
+    const blur = newGroup("Blur", "The frost behind glass. Blur needs something see-through over it: Background Opacity for the bar, Colored glass for the dock, Window glass for app windows. Turning a surface on also turns on blur behind panels, which it needs.");
+    for (&BLUR_HEAD) |*o| addOpt(blur, o);
+    addSurfaceBlurSwitch(blur, "Bar", "perihelion-bar");
+    addSurfaceBlurSwitch(blur, "Dock", "perihelion-dock");
+    addSurfaceBlurSwitch(blur, "Desktop widgets", "perihelion-shell");
+    for (&BLUR_TAIL) |*o| addOpt(blur, o);
     gtk.gtk_box_append(outer, @ptrCast(blur));
 
-    const colors = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(colors, "Colors");
-    gtk.adw_preferences_group_set_description(colors, "Base colours in appearance.conf. The border colours follow the wallpaper: perihelion-theme writes ~/.config/mango/colors.conf, which config.conf reads last, so those win over the values here.");
-    addColorField(colors, "Root Background", &doc_appearance, "root_color", "0x201b14ff");
-    addColorField(colors, "Border", &doc_appearance, "border_color", "0x444444ff");
-    addColorField(colors, "Focused Border", &doc_appearance, "focus_color", "0x47add6ff");
-    addColorField(colors, "Maximized Screen", &doc_appearance, "maximized_screen_color", "0x47add6ff");
-    addColorField(colors, "Urgent", &doc_appearance, "urgent_color", "0xad401fff");
-    addColorField(colors, "Scratchpad", &doc_appearance, "scratchpad_color", "0x516c93ff");
-    addColorField(colors, "Global", &doc_appearance, "global_color", "0xb153a7ff");
-    addColorField(colors, "Overlay", &doc_appearance, "overlay_color", "0x14a57cff");
-    gtk.gtk_box_append(outer, @ptrCast(colors));
+    addGroups(outer, &G_DECOR_BOTTOM);
+    return outer;
+}
 
+fn buildKeyboardsPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_KEYBOARD);
+    return outer;
+}
+
+fn buildPointerPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_POINTER);
+    return outer;
+}
+
+fn buildMiscPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_MISC);
+    return outer;
+}
+
+fn buildRenderPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_RENDER);
+    return outer;
+}
+
+fn buildCursorPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
     buildCursorGroup(outer);
-    buildMangoGtkThemeGroup(outer);
+    addGroups(outer, &G_CURSOR);
+    return outer;
+}
 
-    const input = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(input, "Input (input.conf)");
-    gtk.adw_preferences_group_set_description(input, "Some device options only apply after re-login.");
-    addEntryField(input, "Keyboard Layout", &doc_input, "xkb_rules_layout", "us", 120);
-    addSpinField(input, "Repeat Rate (/s)", 1, 100, 1, &doc_input, "repeat_rate", 25, false);
-    addSpinField(input, "Repeat Delay (ms)", 100, 2000, 10, &doc_input, "repeat_delay", 600, false);
-    addSwitchField(input, "Numlock On", &doc_input, "numlock_on", false);
-    addSwitchField(input, "Disable Trackpad", &doc_input, "disable_trackpad", false);
-    addSwitchField(input, "Tap To Click", &doc_input, "tap_to_click", true);
-    addSwitchField(input, "Tap And Drag", &doc_input, "tap_and_drag", true);
-    addSwitchField(input, "Drag Lock", &doc_input, "drag_lock", true);
-    addSwitchField(input, "Trackpad Natural Scrolling", &doc_input, "trackpad_natural_scrolling", false);
-    addSwitchField(input, "Trackpad Disable While Typing", &doc_input, "trackpad_disable_while_typing", true);
-    addSwitchField(input, "Trackpad Left Handed", &doc_input, "trackpad_left_handed", false);
-    addSwitchField(input, "Trackpad Middle Button Emulation", &doc_input, "trackpad_middle_button_emulation", false);
-    addSpinField(input, "Swipe Min Threshold", 0, 64, 1, &doc_input, "swipe_min_threshold", 1, false);
-    addSwitchField(input, "Mouse Natural Scrolling", &doc_input, "mouse_natural_scrolling", false);
-    gtk.gtk_box_append(outer, @ptrCast(input));
+fn buildGroupPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_GROUP);
+    return outer;
+}
 
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+extern "c" fn open(path: [*:0]const u8, flags: c_int, ...) c_int;
+extern "c" fn read(fd: c_int, buf: [*]u8, count: usize) isize;
+extern "c" fn close(fd: c_int) c_int;
+
+fn fileExists(path: [*:0]const u8) bool {
+    return access(path, 0) == 0;
+}
+
+/// XWayland: Mango has no switch for the X11 layer itself (it is built in
+/// and always started), so the page shows its real state and offers the two
+/// settings Mango does have.
+fn buildXWaylandPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+
+    const installed = fileExists("/usr/bin/Xwayland");
+    const display: ?[]const u8 = if (getenv("DISPLAY")) |d| std.mem.span(d) else null;
+    const ready = installed and display != null and display.?.len > 0;
+
+    const status = newGroup("X11 compatibility layer", "X11-only apps (Vital and many other audio plug-ins, older games, some Wine and Java apps) run through XWayland. Wayland apps are not affected by anything here.");
+    {
+        const row = gtk.adw_action_row_new();
+        gtk.adw_preferences_row_set_title(@ptrCast(row), "Enable XWayland");
+        gtk.adw_action_row_set_subtitle(row, "Always on in Mango: the X11 layer is built in and has no off switch, so X11-only apps can always start.");
+        const sw = gtk.gtk_switch_new();
+        gtk.gtk_switch_set_active(sw, if (ready) 1 else 0);
+        gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+        gtk.gtk_widget_set_sensitive(@ptrCast(sw), 0);
+        gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+        gtk.adw_preferences_group_add(status, @ptrCast(row));
+    }
+    var buf: [200]u8 = undefined;
+    if (!installed) {
+        addInfoRow(status, "Status", "Not available: the Xwayland server is not installed. Install it with: sudo dnf install xorg-x11-server-Xwayland", "dialog-warning-symbolic");
+    } else if (ready) {
+        const text = std.fmt.bufPrint(&buf, "Ready. X11 apps connect to display {s}.", .{display.?}) catch "Ready.";
+        addInfoRow(status, "Status", text, "emblem-ok-symbolic");
+    } else {
+        addInfoRow(status, "Status", "Not running in this session. Log out and back in; if it stays off, this Mango build was made without X11 support.", "dialog-warning-symbolic");
+    }
+    gtk.gtk_box_append(outer, @ptrCast(status));
+
+    addGroups(outer, &G_XWAYLAND);
+    return outer;
+}
+
+/// "NVIDIA 570.86.16" from /proc/driver/nvidia/version, or null without
+/// the proprietary driver.
+fn nvidiaVersion(buf: []u8) ?[]const u8 {
+    const fd = open("/proc/driver/nvidia/version", 0);
+    if (fd < 0) return null;
+    defer _ = close(fd);
+    var raw: [512]u8 = undefined;
+    const n = read(fd, &raw, raw.len);
+    if (n <= 0) return null;
+    const text = raw[0..@intCast(n)];
+    const line = text[0 .. std.mem.indexOfScalar(u8, text, '\n') orelse text.len];
+    // "NVRM version: NVIDIA UNIX x86_64 Kernel Module  570.86.16  Fri ..."
+    var it = std.mem.tokenizeAny(u8, line, " \t");
+    while (it.next()) |tok| {
+        if (tok.len >= 3 and tok[0] >= '0' and tok[0] <= '9' and std.mem.indexOfScalar(u8, tok, '.') != null) {
+            return std.fmt.bufPrint(buf, "NVIDIA driver {s}", .{tok}) catch null;
+        }
+    }
+    return std.fmt.bufPrint(buf, "NVIDIA driver", .{}) catch null;
+}
+
+fn buildOpenGLPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+
+    const hw = newGroup("Graphics", "");
+    var vb: [64]u8 = undefined;
+    if (nvidiaVersion(&vb)) |v| {
+        addInfoRow(hw, "Driver", v, "emblem-ok-symbolic");
+    } else {
+        addInfoRow(hw, "Driver", "No NVIDIA driver is loaded (Intel, AMD or nouveau through Mesa). The NVIDIA settings below are safe to leave as they are.", "computer-symbolic");
+    }
+    gtk.gtk_box_append(outer, @ptrCast(hw));
+
+    const nv = newGroup("NVIDIA", "Mango draws with OpenGL ES. These are its switches for the flicker NVIDIA drivers are known for.");
+    for (G_OPENGL[0].opts) |*o| addOpt(nv, o);
+    addEnvToggle(nv, "Software cursor", "Draws the pointer as part of the picture instead of on the GPU's cursor plane. Fixes a flickering, lagging or invisible pointer." ++ RELOGIN, &ENV_SOFT_CURSOR);
+    gtk.gtk_box_append(outer, @ptrCast(nv));
+
+    return outer;
+}
+
+fn buildQuirksPage() *gtk.GtkBox {
+    const outer = hp.pageBox();
+    addGroups(outer, &G_QUIRKS);
     return outer;
 }
 
@@ -1849,34 +2509,13 @@ fn buildAnimationsPage() *gtk.GtkBox {
 }
 
 // ---------------------------------------------------------------------
-// Layout page (layout.conf: tag_rule list + scroller/master settings)
+// Layouts page (rules.conf tag rules + layout.conf)
 // ---------------------------------------------------------------------
 
 fn buildLayoutPage() *gtk.GtkBox {
     const outer = hp.pageBox();
-
     addRulePage(outer, &g_rp_tags);
-
-    const scroller = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(scroller, "Scroller Layout");
-    addSpinField(scroller, "Structs (px)", 0, 512, 1, &doc_layout, "scroller_structs", 40, false);
-    addSpinField(scroller, "Default Proportion", 0.0, 4.0, 0.05, &doc_layout, "scroller_default_proportion", 0.5, true);
-    addSpinField(scroller, "Single Proportion", 0.0, 8.0, 0.05, &doc_layout, "scroller_default_proportion_single", 2.0, true);
-    addSwitchField(scroller, "Focus Center", &doc_layout, "scroller_focus_center", false);
-    addSwitchField(scroller, "Prefer Center", &doc_layout, "scroller_prefer_center", false);
-    addSwitchField(scroller, "Prefer Overspread", &doc_layout, "scroller_prefer_overspread", true);
-    addSwitchField(scroller, "Edge Pointer Focus", &doc_layout, "edge_scroller_pointer_focus", true);
-    addEntryField(scroller, "Proportion Presets", &doc_layout, "scroller_proportion_preset", "0.5, 0.8, 1.0", 220);
-    gtk.gtk_box_append(outer, @ptrCast(scroller));
-
-    const master = gtk.adw_preferences_group_new();
-    gtk.adw_preferences_group_set_title(master, "Master-Stack Layout");
-    addSwitchField(master, "New Window Is Master", &doc_layout, "new_is_master", true);
-    addSpinField(master, "Master Factor", 0.05, 1.0, 0.05, &doc_layout, "default_master_factor", 0.55, true);
-    addSpinField(master, "Master Count", 1, 16, 1, &doc_layout, "default_master_count", 1, false);
-    addSwitchField(master, "Smart Gaps", &doc_layout, "smart_gaps", false);
-    gtk.gtk_box_append(outer, @ptrCast(master));
-
+    addGroups(outer, &G_LAYOUT);
     return outer;
 }
 
@@ -1960,23 +2599,77 @@ fn rebuildAll() void {
 }
 
 pub const pages = struct {
-    pub const names = [_][:0]const u8{ "General", "Monitors", "Animations", "Keybinds", "Window Rules", "Layout", "Layer Rules", "Autostart", "Environment" };
-    pub const icons = [_][:0]const u8{ "emblem-system-symbolic", "video-display-symbolic", "media-playlist-repeat-symbolic", "input-keyboard-symbolic", "preferences-system-windows-symbolic", "view-grid-symbolic", "layer-group-symbolic", "system-run-symbolic", "preferences-system-symbolic" };
+    // Event Horizon's settings order first, then the pages that edit lists.
+    pub const names = [_][:0]const u8{
+        "General",      "Decoration", "Keyboards",   "Mouse & Touchpad", "Binds",
+        "Layouts",      "Animations", "Misc",        "Render",             "Cursor",
+        "Group",        "XWayland",   "OpenGL",      "Quirks",             "Monitors",
+        "Window Rules", "Layer Rules", "Autostart",  "Environment",
+    };
+    pub const icons = [_][:0]const u8{
+        "emblem-system-symbolic",                    "preferences-desktop-appearance-symbolic", "input-keyboard-symbolic",
+        "input-mouse-symbolic",                      "preferences-desktop-keyboard-shortcuts-symbolic",
+        "view-grid-symbolic",                        "media-playlist-repeat-symbolic",          "preferences-other-symbolic",
+        "display-brightness-symbolic",               "input-touchpad-symbolic",                 "tab-new-symbolic",
+        "computer-symbolic",                         "applications-graphics-symbolic",          "dialog-warning-symbolic",
+        "video-display-symbolic",                    "preferences-system-windows-symbolic",     "layer-group-symbolic",
+        "system-run-symbolic",                       "preferences-system-symbolic",
+    };
 
-    pub fn widgets() [9]*gtk.GtkBox {
+    pub fn widgets() [names.len]*gtk.GtkBox {
         return .{
             buildGeneralPage(),
-            buildMonitorsPage(),
-            buildAnimationsPage(),
+            buildDecorationPage(),
+            buildKeyboardsPage(),
+            buildPointerPage(),
             buildKeybindsPage(),
-            buildWindowRulesPage(),
             buildLayoutPage(),
+            buildAnimationsPage(),
+            buildMiscPage(),
+            buildRenderPage(),
+            buildCursorPage(),
+            buildGroupPage(),
+            buildXWaylandPage(),
+            buildOpenGLPage(),
+            buildQuirksPage(),
+            buildMonitorsPage(),
+            buildWindowRulesPage(),
             buildLayerRulesPage(),
             buildAutostartPage(),
             buildEnvPage(),
         };
     }
 };
+
+test "option tables: unique keys, sane defaults" {
+    const t = std.testing;
+    var seen: [512][]const u8 = undefined;
+    var n: usize = 0;
+    for (ALL_TABLES) |groups| {
+        for (groups) |*g| {
+            for (g.opts) |*o| {
+                for (seen[0..n]) |k| try t.expect(!std.mem.eql(u8, k, o.key));
+                seen[n] = o.key;
+                n += 1;
+                switch (o.kind) {
+                    .int, .float => try t.expect(o.num >= o.min and o.num <= o.max and o.step > 0),
+                    .combo => {
+                        try t.expectEqual(o.labels.len, o.values.len);
+                        var found = false;
+                        for (o.values) |v| found = found or std.mem.eql(u8, v, o.text);
+                        try t.expect(found);
+                    },
+                    .color => try t.expect(mangoHexToRgba(o.text) != null),
+                    else => {},
+                }
+                // Pango markup: these would break the row's label.
+                try t.expect(std.mem.indexOfAny(u8, o.title, "&<>") == null);
+                try t.expect(std.mem.indexOfAny(u8, o.sub, "&<>") == null);
+            }
+        }
+    }
+    try t.expect(n > 120);
+}
 
 // ---------------------------------------------------------------------
 // Tests — layer-blur switch logic (pure Doc operations, no display).

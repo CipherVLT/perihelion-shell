@@ -26,6 +26,7 @@ const hg = @import("hypr_gtk.zig");
 const hypr = @import("hyprland.zig");
 const hypr_pages = @import("hypr_pages.zig");
 const mango_pages = @import("mango_pages.zig");
+const network_page = @import("network_page.zig");
 const desk = @import("desk_theme.zig");
 const logging = @import("logging.zig");
 const singleton = @import("singleton.zig");
@@ -5943,7 +5944,7 @@ fn onLimineWallSwitchChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopa
 
 fn onLimineFilePicked(src: ?*anyopaque, res: *gtk.GAsyncResult, _: ?*anyopaque) callconv(.c) void {
     const dlg = src orelse return;
-    const file = gtk.gtk_file_dialog_open_finish(@ptrCast(dlg), res) orelse return; // dismissed
+    const file = gtk.gtk_file_dialog_open_finish(@ptrCast(dlg), res, null) orelse return; // dismissed
     defer gtk.g_object_unref(@ptrCast(file));
     const path_c = gtk.g_file_get_path(file) orelse return;
     limine_wall_v.set(std.mem.sliceTo(path_c, 0));
@@ -6142,50 +6143,72 @@ const PAGE_NAMES = [_][:0]const u8{ "Appearance", "Modules", "Shortcuts" };
 const PAGE_ICONS = [_][:0]const u8{ "applications-graphics-symbolic", "view-list-symbolic", "user-bookmarks-symbolic" };
 const BAR_COUNT = PAGE_NAMES.len;
 
-// "Bar" pages + compositor pages + the System deck's Boot and Login pages,
+// "Bar" pages + compositor pages + the System deck (Network, Boot, Login),
 // in sidebar order. The compositor section is Hyprland on Hyprland and
-// Mango on MangoWM; both decks have the same number of pages (9), so only the
-// names/icons and the section header change at runtime. Section header
-// rows ("Bar" / "Hyprland"|"Mango" / "System") are inserted between the
-// groups at build time.
-const BOOT_PAGE_INDEX = BAR_COUNT + hypr_pages.pages.names.len; // first page of the System deck
-const LY_PAGE_INDEX = BOOT_PAGE_INDEX + 1; // second page of the System deck
-const SB_COUNT = LY_PAGE_INDEX + 1;
-var g_sb_names: [SB_COUNT][:0]const u8 = undefined;
-var g_sb_icons: [SB_COUNT][:0]const u8 = undefined;
+// Mango on MangoWM; the two have different page lists, so the sidebar is
+// sized at runtime from whichever applies. Section header rows ("Bar" /
+// "Hyprland"|"Mango" / "System") are inserted between the groups at build
+// time.
+const SEC_MAX = @max(hypr_pages.pages.names.len, mango_pages.pages.names.len);
+const SB_MAX = BAR_COUNT + SEC_MAX + 3;
+var g_sb_n: usize = 0; // rows in use
+var g_sec_n: usize = 0; // compositor pages
+var g_net_idx: usize = 0; // System deck: Network,
+var g_boot_idx: usize = 0; // Boot,
+var g_ly_idx: usize = 0; // Login
+var g_sb_names: [SB_MAX][:0]const u8 = undefined;
+var g_sb_icons: [SB_MAX][:0]const u8 = undefined;
 
-fn setupSidebarNames() void {
-    for (PAGE_NAMES, 0..) |n, i| {
-        g_sb_names[i] = n;
-        g_sb_icons[i] = PAGE_ICONS[i];
-    }
-    const names = if (hypr_pages.g_mango) &mango_pages.pages.names else &hypr_pages.pages.names;
-    const icons = if (hypr_pages.g_mango) &mango_pages.pages.icons else &hypr_pages.pages.icons;
-    for (names.*, 0..) |n, i| g_sb_names[BAR_COUNT + i] = n;
-    for (icons.*, 0..) |ic, i| g_sb_icons[BAR_COUNT + i] = ic;
-    g_sb_names[BOOT_PAGE_INDEX] = "Boot";
-    g_sb_icons[BOOT_PAGE_INDEX] = "system-reboot-symbolic";
-    g_sb_names[LY_PAGE_INDEX] = "Login";
-    g_sb_icons[LY_PAGE_INDEX] = "system-switch-user-symbolic";
+/// `--page NAME`: the page to open on (any sidebar name, case ignored).
+var g_start_page_buf: [48]u8 = undefined;
+var g_start_page: []const u8 = "";
+
+fn setSidebarEntry(at: usize, name: [:0]const u8, icon: [:0]const u8) void {
+    g_sb_names[at] = name;
+    g_sb_icons[at] = icon;
 }
 
-var g_sidebar_rows: [SB_COUNT]*gtk.GtkListBoxRow = undefined;
+fn setupSidebarNames() void {
+    for (PAGE_NAMES, 0..) |name, i| setSidebarEntry(i, name, PAGE_ICONS[i]);
+    var at: usize = BAR_COUNT;
+    if (hypr_pages.g_mango) {
+        for (mango_pages.pages.names, mango_pages.pages.icons) |name, icon| {
+            setSidebarEntry(at, name, icon);
+            at += 1;
+        }
+    } else {
+        for (hypr_pages.pages.names, hypr_pages.pages.icons) |name, icon| {
+            setSidebarEntry(at, name, icon);
+            at += 1;
+        }
+    }
+    g_sec_n = at - BAR_COUNT;
+    g_net_idx = at;
+    setSidebarEntry(at, "Network", "network-wireless-symbolic");
+    g_boot_idx = at + 1;
+    setSidebarEntry(at + 1, "Boot", "system-reboot-symbolic");
+    g_ly_idx = at + 2;
+    setSidebarEntry(at + 2, "Login", "system-switch-user-symbolic");
+    g_sb_n = at + 3;
+}
+
+var g_sidebar_rows: [SB_MAX]*gtk.GtkListBoxRow = undefined;
 var g_content_stack: ?*gtk.GtkStack = null;
 var g_window: ?*gtk.AdwApplicationWindow = null;
 
 fn onSidebarRowSelected(_: *gtk.GtkListBox, row: ?*gtk.GtkListBoxRow, _: ?*anyopaque) callconv(.c) void {
     const r = row orelse return;
-    for (g_sidebar_rows, 0..) |sr, i| {
+    for (g_sidebar_rows[0..g_sb_n], 0..) |sr, i| {
         if (sr == r) {
             // The system-deck tabs take their setup lazily, on the first
             // actual visit — never at application startup. The Boot tab's
             // polkit read is only permitted on this user action.
-            if (i == BOOT_PAGE_INDEX and !limine_inited) {
+            if (i == g_boot_idx and !limine_inited) {
                 limine_inited = true;
                 loadLimineState(true);
                 limineUpdateWidgets();
             }
-            if (i == LY_PAGE_INDEX and !ly_inited) {
+            if (i == g_ly_idx and !ly_inited) {
                 ly_inited = true;
                 loadLyState(true);
                 lyUpdateWidgets();
@@ -6529,42 +6552,44 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     gtk.gtk_widget_set_hexpand(@ptrCast(content_stack), 1);
     g_content_stack = content_stack;
 
-    addSidebarRow(sidebar_list, "Bar", "", false, SB_COUNT);
+    addSidebarRow(sidebar_list, "Bar", "", false, SB_MAX);
     for (0..BAR_COUNT) |i| {
         addSidebarRow(sidebar_list, PAGE_NAMES[i], PAGE_ICONS[i], true, i);
     }
-    // Perihelion: only the Bar pages. Its Mango config lives in
-    // ~/.config/mango/config.conf (not cfg/), it boots with GRUB and logs in
-    // with SDDM, so the Mango and System pages would edit files nothing reads.
-    // Perihelion: the Mango pages edit ~/.config/mango/cfg/*.conf, which
-    // Perihelion's config.conf sources (simpbar's layout); System is GRUB
-    // and SDDM.
-    {
-        addSidebarRow(sidebar_list, section_title, "", false, SB_COUNT);
-        for (BAR_COUNT..BOOT_PAGE_INDEX) |i| {
-            addSidebarRow(sidebar_list, g_sb_names[i], g_sb_icons[i], true, i);
-        }
-        addSidebarRow(sidebar_list, "System", "", false, SB_COUNT);
-        addSidebarRow(sidebar_list, g_sb_names[BOOT_PAGE_INDEX], g_sb_icons[BOOT_PAGE_INDEX], true, BOOT_PAGE_INDEX);
-        addSidebarRow(sidebar_list, g_sb_names[LY_PAGE_INDEX], g_sb_icons[LY_PAGE_INDEX], true, LY_PAGE_INDEX);
+    // The compositor pages edit ~/.config/mango/cfg/*.conf, which
+    // Perihelion's config.conf sources; System is the network, GRUB and SDDM.
+    addSidebarRow(sidebar_list, section_title, "", false, SB_MAX);
+    for (BAR_COUNT..BAR_COUNT + g_sec_n) |i| {
+        addSidebarRow(sidebar_list, g_sb_names[i], g_sb_icons[i], true, i);
+    }
+    addSidebarRow(sidebar_list, "System", "", false, SB_MAX);
+    for (g_net_idx..g_sb_n) |i| {
+        addSidebarRow(sidebar_list, g_sb_names[i], g_sb_icons[i], true, i);
     }
 
-    const sec_widgets = if (hypr_pages.g_mango) mango_pages.pages.widgets() else hypr_pages.pages.widgets();
-    var page_widgets: [SB_COUNT]*gtk.GtkBox = undefined;
+    var page_widgets: [SB_MAX]*gtk.GtkBox = undefined;
     for (bar_pages, 0..) |p, i| page_widgets[i] = p;
-    for (sec_widgets, 0..) |p, i| page_widgets[BAR_COUNT + i] = p;
+    if (hypr_pages.g_mango) {
+        const sec_widgets = mango_pages.pages.widgets();
+        for (sec_widgets, 0..) |p, i| page_widgets[BAR_COUNT + i] = p;
+    } else {
+        const sec_widgets = hypr_pages.pages.widgets();
+        for (sec_widgets, 0..) |p, i| page_widgets[BAR_COUNT + i] = p;
+    }
+    network_page.parent_window = @ptrCast(window);
+    page_widgets[g_net_idx] = network_page.build();
     if (perihelion_system_pages) {
         // The lazy Limine/Ly setup on first visit must not run.
         limine_inited = true;
         ly_inited = true;
-        page_widgets[BOOT_PAGE_INDEX] = buildGrubPage();
-        page_widgets[LY_PAGE_INDEX] = buildSddmPage();
+        page_widgets[g_boot_idx] = buildGrubPage();
+        page_widgets[g_ly_idx] = buildSddmPage();
     } else {
-        page_widgets[BOOT_PAGE_INDEX] = buildBootPage();
-        page_widgets[LY_PAGE_INDEX] = buildLoginPage();
+        page_widgets[g_boot_idx] = buildBootPage();
+        page_widgets[g_ly_idx] = buildLoginPage();
     }
 
-    for (g_sb_names, 0..) |name, i| {
+    for (g_sb_names[0..g_sb_n], 0..) |name, i| {
         const scrolled = gtk.gtk_scrolled_window_new();
         gtk.gtk_scrolled_window_set_policy(scrolled, gtk.POLICY_NEVER, gtk.POLICY_AUTOMATIC);
         gtk.gtk_widget_set_vexpand(@ptrCast(scrolled), 1);
@@ -6583,7 +6608,11 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
 
     const sidebar_toolbar = gtk.adw_toolbar_view_new();
     gtk.adw_toolbar_view_add_top_bar(sidebar_toolbar, @ptrCast(gtk.adw_header_bar_new()));
-    gtk.adw_toolbar_view_set_content(sidebar_toolbar, @ptrCast(sidebar_list));
+    // The sidebar scrolls: Mango alone has more pages than the window is tall.
+    const sidebar_scroll = gtk.gtk_scrolled_window_new();
+    gtk.gtk_scrolled_window_set_policy(sidebar_scroll, gtk.POLICY_NEVER, gtk.POLICY_AUTOMATIC);
+    gtk.gtk_scrolled_window_set_child(sidebar_scroll, @ptrCast(sidebar_list));
+    gtk.adw_toolbar_view_set_content(sidebar_toolbar, @ptrCast(sidebar_scroll));
     const sidebar_page = gtk.adw_navigation_page_new(@ptrCast(sidebar_toolbar), "Perihelion Settings");
     gtk.adw_navigation_split_view_set_sidebar(split_view, sidebar_page);
 
@@ -6606,7 +6635,11 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
 
     gtk.adw_application_window_set_content(window, @ptrCast(split_view));
 
-    gtk.gtk_list_box_select_row(sidebar_list, gtk.gtk_list_box_get_row_at_index(sidebar_list, 1));
+    var start_row: usize = 0;
+    for (g_sb_names[0..g_sb_n], 0..) |name, i| {
+        if (g_start_page.len > 0 and std.ascii.eqlIgnoreCase(name, g_start_page)) start_row = i;
+    }
+    gtk.gtk_list_box_select_row(sidebar_list, g_sidebar_rows[start_row]);
 
     return window;
 }
@@ -6665,6 +6698,17 @@ fn realMain() !void {
     _ = unsetenv("SIMPBAR_DOCK");
     if (nparts == 4 and std.mem.eql(u8, parts[1], "--move-launcher")) {
         std.process.exit(moveLauncherCli(parts[2], parts[3]));
+    }
+    // Every Mango key the settings pages can write, as a config (checked
+    // against the installed Mango at image build time).
+    if (nparts == 2 and std.mem.eql(u8, parts[1], "--mango-keys")) {
+        mango_pages.dumpDefaults();
+        std.process.exit(0);
+    }
+    if (nparts == 3 and std.mem.eql(u8, parts[1], "--page")) {
+        const len = @min(parts[2].len, g_start_page_buf.len);
+        @memcpy(g_start_page_buf[0..len], parts[2][0..len]);
+        g_start_page = g_start_page_buf[0..len];
     }
     if (nparts == 3 and (std.mem.eql(u8, parts[1], "--bar") or std.mem.eql(u8, parts[1], "--dock"))) {
         std.process.exit(roleCli(parts[1], parts[2]));
