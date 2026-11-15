@@ -446,13 +446,13 @@ fn applyDarkGlassGuard(dark: bool) void {
     if (std.mem.indexOf(u8, text, "scheme=light") == null) return;
     const provider = pstyle.gtk_css_provider_new();
     pstyle.gtk_css_provider_load_from_string(provider,
-        \:root { --window-bg-color: rgba(34, 34, 38, 0.92); --window-fg-color: #ffffff;
-        \  --view-bg-color: rgba(30, 30, 34, 0.40); --view-fg-color: #ffffff;
-        \  --headerbar-bg-color: rgba(40, 40, 44, 0.30); --headerbar-backdrop-color: rgba(40, 40, 44, 0.30); --headerbar-fg-color: #ffffff;
-        \  --sidebar-bg-color: rgba(28, 28, 32, 0.50); --sidebar-backdrop-color: rgba(28, 28, 32, 0.50); --sidebar-fg-color: #ffffff;
-        \  --card-bg-color: rgba(255, 255, 255, 0.08); --card-fg-color: #ffffff;
-        \  --dialog-bg-color: #36363a; --dialog-fg-color: #ffffff;
-        \  --popover-bg-color: #36363a; --popover-fg-color: #ffffff; }
+        \\:root { --window-bg-color: rgba(34, 34, 38, 0.92); --window-fg-color: #ffffff;
+        \\  --view-bg-color: rgba(30, 30, 34, 0.40); --view-fg-color: #ffffff;
+        \\  --headerbar-bg-color: rgba(40, 40, 44, 0.30); --headerbar-backdrop-color: rgba(40, 40, 44, 0.30); --headerbar-fg-color: #ffffff;
+        \\  --sidebar-bg-color: rgba(28, 28, 32, 0.50); --sidebar-backdrop-color: rgba(28, 28, 32, 0.50); --sidebar-fg-color: #ffffff;
+        \\  --card-bg-color: rgba(255, 255, 255, 0.08); --card-fg-color: #ffffff;
+        \\  --dialog-bg-color: #36363a; --dialog-fg-color: #ffffff;
+        \\  --popover-bg-color: #36363a; --popover-fg-color: #ffffff; }
     );
     pstyle.gtk_style_context_add_provider_for_display(display, provider, 900); // above USER (800)
     g_dark_guard = provider;
