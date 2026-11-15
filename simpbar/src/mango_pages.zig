@@ -2313,9 +2313,9 @@ fn buildDecorationPage() *gtk.GtkBox {
 
     const blur = newGroup("Blur", "The frost behind glass. Blur needs something see-through over it: Background Opacity for the bar, Colored glass for the dock, Window glass for app windows. Turning a surface on also turns on blur behind panels, which it needs.");
     for (&BLUR_HEAD) |*o| addOpt(blur, o);
-    addSurfaceBlurSwitch(blur, "Bar", "perihelion-bar");
-    addSurfaceBlurSwitch(blur, "Dock", "perihelion-dock");
-    addSurfaceBlurSwitch(blur, "Desktop widgets", "perihelion-shell");
+    addSurfaceBlurSwitch(blur, "Blur behind the bar", "perihelion-bar");
+    addSurfaceBlurSwitch(blur, "Blur behind the dock", "perihelion-dock");
+    addSurfaceBlurSwitch(blur, "Blur behind desktop widgets", "perihelion-shell");
     for (&BLUR_TAIL) |*o| addOpt(blur, o);
     gtk.gtk_box_append(outer, @ptrCast(blur));
 
@@ -2383,7 +2383,10 @@ fn buildXWaylandPage() *gtk.GtkBox {
     {
         const row = gtk.adw_action_row_new();
         gtk.adw_preferences_row_set_title(@ptrCast(row), "Enable XWayland");
-        gtk.adw_action_row_set_subtitle(row, "Always on in Mango: the X11 layer is built in and has no off switch, so X11-only apps can always start.");
+        gtk.adw_action_row_set_subtitle(row, if (ready)
+            "On. Mango always runs the X11 layer: it is built in and has no off switch, so X11-only apps can always start."
+        else
+            "Mango always runs the X11 layer when it can (there is no off switch), but it is not working right now: see Status.");
         const sw = gtk.gtk_switch_new();
         gtk.gtk_switch_set_active(sw, if (ready) 1 else 0);
         gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);

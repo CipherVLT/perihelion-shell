@@ -183,7 +183,6 @@ const CENTER_LAUNCHERS = [_]LauncherButton{
     .{ .label = "\u{f0ac} Browser", .command = "firefox" },
     .{ .label = "\u{f07c} Files", .command = "strata" },
     .{ .label = "\u{f120} Term", .command = "kitty" },
-    .{ .label = "\u{f1b6} Steam", .command = "steam" },
 };
 
 // Mirrors main.zig's CLOCK_FORMAT_* keys exactly — must agree between the
