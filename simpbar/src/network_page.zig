@@ -571,11 +571,6 @@ fn onWifiNetworks(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     launch(&[_]?[*:0]const u8{ "kitty", "--class", "perihelion-float", "-e", "nmtui-connect", null });
 }
 
-fn onRefreshClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
-    setMessage("");
-    refresh();
-}
-
 // ---------------------------------------------------------------------
 // The page
 // ---------------------------------------------------------------------
@@ -649,13 +644,13 @@ pub fn build() *gtk.GtkBox {
     // -- Saved connections ----------------------------------------------
     const saved = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(saved, "Saved VPN connections");
-    gtk.gtk_box_append(outer, @ptrCast(saved));
     g_saved_list = hp.newListBox();
     gtk.gtk_list_box_set_selection_mode(g_saved_list.?, 0); // GTK_SELECTION_NONE
-    gtk.gtk_box_append(outer, @ptrCast(g_saved_list.?));
+    gtk.adw_preferences_group_add(saved, @ptrCast(g_saved_list.?));
+    gtk.gtk_box_append(outer, @ptrCast(saved));
 
+    // The page keeps itself current (every 4 s), so there is no Refresh.
     hp.appendActionButton(outer, "Add VPN", @ptrCast(&onAddVpn), null);
-    hp.appendActionButton(outer, "Refresh", @ptrCast(&onRefreshClicked), null);
 
     const message = gtk.gtk_label_new("");
     gtk.gtk_label_set_wrap(message, 1);

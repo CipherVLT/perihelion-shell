@@ -2490,7 +2490,6 @@ const CENTER_LAUNCHERS = [_]LauncherButton{
     .{ .label = "\u{f0ac} Browser", .command = "firefox" }, // fa-globe
     .{ .label = "\u{f07c} Files", .command = "strata" }, // fa-folder-open
     .{ .label = "\u{f120} Term", .command = "kitty" }, // fa-terminal
-    .{ .label = "\u{f1b6} Steam", .command = "steam" }, // fa-steam
 };
 
 // custom/power from "modules-right" — icon only in the real config, no text.
