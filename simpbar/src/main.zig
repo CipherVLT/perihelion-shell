@@ -858,7 +858,8 @@ fn renderDistroTile(font: *font_mod.Font, codepoint: u32, dst: []u32) bool {
     const tile = ap.workspace_active_color | 0xFF000000;
     const ink = ap.bg_color | 0xFF000000;
     const nf: f32 = @floatFromInt(n);
-    const radius: f32 = nf * 0.28;
+    // Round in the dock: concentric with the dock's rounded end it sits in.
+    const radius: f32 = if (dock_mode) nf * 0.5 else nf * 0.28;
     @memset(dst, 0);
     for (0..n) |y| {
         for (0..n) |x| {
@@ -3463,16 +3464,14 @@ fn dockConfig(cfg: Config) Config {
     // (was 10), and ends sized for the icon's round body rather than its
     // square bounds. Off: the roomy layout (9 px air, 18 px spacing).
     launcher_gap = if (cfg.dock.shrink) 6 else 18;
-    // Ends: far enough in that the icon clears the rounded end (circle of
-    // radius r around the end's center). Shrunk, it clears the icon's round
-    // body (most icon themes draw a circle or squircle inside the square,
-    // ~80% of it); otherwise the full square plus air.
-    const r: f32 = @floatFromInt(@min(cfg.dock.corner_radius, h / 2));
-    const icon_half: f32 = @as(f32, @floatFromInt(launcher_icon_size)) / 2.0;
-    const half: f32 = if (cfg.dock.shrink) icon_half * 0.8 else icon_half + 1.0;
-    const clear: f32 = if (half >= r) r else r - @sqrt(r * r - half * half);
-    const base: i64 = if (cfg.dock.shrink) 4 else 10;
-    dock_pill_pad = @max(base, @as(i64, @intFromFloat(@ceil(clear))) + @divTrunc(base, 2));
+    // Ends: the first and last icon sit exactly as far from the end as from
+    // the top and bottom (half the air), so on a capsule each end icon is
+    // concentric with its rounded cap: an even rim all the way round. (The
+    // old pad was sized for a round icon body; the square-ish launcher tile
+    // and its hover glow then left a gap that tapered to sharp points at
+    // the cap's top and bottom, the "spiky" end.) A smaller corner radius
+    // only adds room, so this holds for every radius.
+    dock_pill_pad = @max(2, @as(i64, @intCast(air / 2)));
     return c;
 }
 
@@ -9165,7 +9164,9 @@ fn drawDockGlow(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i6
     // As much breathing room as the dock has (Shrink the dash leaves little).
     const room = @divTrunc(@as(i64, @intCast(buf_height)) - size, 2) - 1;
     const pad = std.math.clamp(@divTrunc(size, 6), 0, @max(room, 0));
-    const radius: i32 = @intCast(@divTrunc(size + 2 * pad, 3));
+    // Round, like the dock's ends and most app icons: at the dock's ends it
+    // stays concentric with the cap instead of poking corners into it.
+    const radius: i32 = @intCast(@divTrunc(size + 2 * pad, 2));
     const alpha: u8 = @intFromFloat(std.math.clamp(lit, 0.0, 1.0) * DOCK_GLOW_ALPHA);
     if (alpha == 0) return;
     fillRoundedRectOver(pixels, buf_width, buf_height, x0 - pad, y0 - pad, x0 + size + pad, y0 + size + pad, radius, wash, alpha);
@@ -9578,6 +9579,54 @@ fn fillRoundedRect(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0:
 /// already there toward `color` (the buffer's premultiplied convention): a
 /// ring drawn first and a body drawn over it meet without a dark seam, and
 /// on the transparent surface the edge fades out cleanly.
+/// How much white the dock's borderless hairline edge carries over the body.
+const DOCK_EDGE_LIFT: f32 = 0.18;
+
+/// Everything outside the rounded rect x0..x1 × y0..y1 (radius r) fades
+/// out with antialiased coverage, so nothing drawn inside the dock (icon
+/// art, hover glows, the media chip) can poke past its rounded ends. Only
+/// the corner squares are touched. Pixels are premultiplied, so scaling
+/// all four channels is exact.
+fn clipToRoundedRect(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i64, x1: i64, y1: i64, radius: i64) void {
+    if (x1 <= x0 or y1 <= y0 or radius <= 0) return;
+    const r: f32 = @min(@as(f32, @floatFromInt(radius)), @as(f32, @floatFromInt(@min(x1 - x0, y1 - y0))) / 2.0);
+    const ri: i64 = @intFromFloat(@ceil(r));
+    const corners = [_][2]i64{ .{ x0, y0 }, .{ x1 - ri, y0 }, .{ x0, y1 - ri }, .{ x1 - ri, y1 - ri } };
+    const fx0: f32 = @floatFromInt(x0);
+    const fy0: f32 = @floatFromInt(y0);
+    const fx1: f32 = @floatFromInt(x1);
+    const fy1: f32 = @floatFromInt(y1);
+    for (corners) |c| {
+        var py = @max(0, c[1]);
+        while (py < @min(@as(i64, @intCast(buf_height)), c[1] + ri)) : (py += 1) {
+            var px = @max(0, c[0]);
+            while (px < @min(@as(i64, @intCast(buf_width)), c[0] + ri)) : (px += 1) {
+                const fx = @as(f32, @floatFromInt(px)) + 0.5;
+                const fy = @as(f32, @floatFromInt(py)) + 0.5;
+                const ccx = std.math.clamp(fx, fx0 + r, fx1 - r);
+                const ccy = std.math.clamp(fy, fy0 + r, fy1 - r);
+                const d = @sqrt((fx - ccx) * (fx - ccx) + (fy - ccy) * (fy - ccy));
+                const cov = std.math.clamp(r - d + 0.5, 0.0, 1.0);
+                if (cov >= 1.0) continue;
+                const idx = @as(usize, @intCast(py)) * buf_width + @as(usize, @intCast(px));
+                pixels[idx] = scalePremul(pixels[idx], cov);
+            }
+        }
+    }
+}
+
+fn scalePremul(p: u32, k: f32) u32 {
+    if (k <= 0.0) return 0;
+    var out: u32 = 0;
+    var sh: u5 = 0;
+    while (true) : (sh += 8) {
+        const v: f32 = @floatFromInt((p >> sh) & 0xFF);
+        out |= @as(u32, @intFromFloat(v * k + 0.5)) << sh;
+        if (sh == 24) break;
+    }
+    return out;
+}
+
 fn fillRoundedRectAA(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i64, x1: i64, y1: i64, radius: i32, color: u32) void {
     if (x1 <= x0 or y1 <= y0) return;
     const fx0: f32 = @floatFromInt(x0);
@@ -11562,10 +11611,17 @@ fn paintDock(bar: *Bar, pixels: [*]u32, time_text: []const u8, mpris_text: []con
             fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), clearGlass(ap.workspace_active_color, ap.colored_glass) | 0xFF000000);
             fillRoundedRectAA(pixels, bar.width, bar.height, px0 + ring, ring, px1 - ring, buf_h - ring, @intCast(@max(0, pill_r - ring)), bg_fill);
         } else {
-            fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), bg_fill);
+            // No border: a 1 px light hairline (the drawer's glass edge),
+            // then the body inset by it. Gives the glass a clean, defined
+            // outline, and the slightly more opaque edge hides the stair-
+            // stepped rim of the compositor's blur (Mango masks its blur by
+            // our alpha, pixel by pixel), which showed as rough corners.
+            fillRoundedRectAA(pixels, bar.width, bar.height, px0, 0, px1, buf_h, @intCast(pill_r), lerpArgb(bg_fill, 0xFFFFFFFF, DOCK_EDGE_LIFT));
+            fillRoundedRectAA(pixels, bar.width, bar.height, px0 + 1, 1, px1 - 1, buf_h - 1, @intCast(@max(0, pill_r - 1)), bg_fill);
         }
         paintBackgroundEffect(bar, pixels, bar.width, bar.height, px0 + ring, px1 - ring, ring, buf_h - ring, @max(0, pill_r - ring));
     }
+    defer if (total > 0) clipToRoundedRect(pixels, bar.width, bar.height, pack_start - dock_pill_pad, 0, pack_start + total + dock_pill_pad, buf_h, pill_r);
 
     // Groups left to right; pens recorded back for the next frame.
     const left_end = drawLeftGroup(pixels, bar.width, bar.height, bar.font, barWorkspaces(bar), time_text, mpris_text, mpris_playing, bar.mpris_frac, center_start_last, pack_start, &bar.click_regions);
@@ -11625,7 +11681,8 @@ fn paintMorph(bar: *Bar, pixels: [*]u32, e: f32, time_text: []const u8, mpris_te
     // rect (clipped, correct) and must not invert the rounding.
     const user_r: i64 = @intCast(@min(current_config.appearance.corner_radius_px, @min(bar.width, bar.height) / 2));
     const pr = @max(0, lerpI64(user_r, @divTrunc(buf_h, 2), e));
-    fillRoundedRect(pixels, bar.width, bar.height, lerpI64(0, pack.start - dock_pill_pad, e), 0, lerpI64(buf_w, pack.start + pack.total + dock_pill_pad, e), buf_h, @intCast(pr), bg_fill);
+    // Antialiased like the settled dock, so the edges stay smooth mid-morph.
+    fillRoundedRectAA(pixels, bar.width, bar.height, lerpI64(0, pack.start - dock_pill_pad, e), 0, lerpI64(buf_w, pack.start + pack.total + dock_pill_pad, e), buf_h, @intCast(pr), bg_fill);
     paintBackgroundEffect(bar, pixels, bar.width, bar.height, lerpI64(0, pack.start - dock_pill_pad, e), lerpI64(buf_w, pack.start + pack.total + dock_pill_pad, e), 0, buf_h, pr);
 
     const left_end = drawLeftGroup(pixels, bar.width, bar.height, bar.font, barWorkspaces(bar), time_text, mpris_text, mpris_playing, bar.mpris_frac, C, L, &bar.click_regions);
