@@ -354,7 +354,8 @@ pub const GAsyncReadyCallback = ?*const fn (?*anyopaque, *GAsyncResult, ?*anyopa
 pub extern "c" fn gtk_file_dialog_new() *GtkFileDialog;
 pub extern "c" fn gtk_file_dialog_set_title(self: *GtkFileDialog, title: [*:0]const u8) void;
 pub extern "c" fn gtk_file_dialog_open(self: *GtkFileDialog, parent: ?*GtkWindow, cancellable: ?*anyopaque, callback: GAsyncReadyCallback, user_data: ?*anyopaque) void;
-pub extern "c" fn gtk_file_dialog_open_finish(self: *GtkFileDialog, result: *GAsyncResult) ?*GioFile;
+// The third argument is the GError** every *_finish takes; pass null.
+pub extern "c" fn gtk_file_dialog_open_finish(self: *GtkFileDialog, result: *GAsyncResult, err: ?*?*anyopaque) ?*GioFile;
 pub extern "c" fn g_file_get_path(file: *GioFile) ?[*:0]const u8;
 
 // g_timeout_add — Boot tab's post-apply verification loop: the conf copy
