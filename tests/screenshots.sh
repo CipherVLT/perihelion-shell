@@ -70,6 +70,7 @@ case "$*" in
     else echo "$wg:wireguard:no::no:Home (WireGuard)"; fi
     echo "99999999-8888-7777-6666-555555555555:vpn:no::yes:Work & Office (OpenVPN)" ;;
 esac
+exit 0
 NM
 chmod +x "${work}/fake/nmcli"
 
