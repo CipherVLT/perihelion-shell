@@ -115,6 +115,10 @@ jobs:
             "$qmlformat" "$f" >/dev/null || { echo "QML syntax error in $f"; exit 1; }
           done
           echo "QML OK"
+      - name: Test the app drawer's icon theme lookup
+        run: |
+          command -v node >/dev/null || dnf5 install -y --setopt=install_weak_deps=False nodejs
+          tests/drawer-icons.sh
       - name: Test perihelion-theme
         run: |
           if [ -f perihelion-theme ]; then

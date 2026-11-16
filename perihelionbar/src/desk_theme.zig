@@ -27,6 +27,15 @@ extern "c" fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
 extern "c" fn rename(oldpath: [*:0]const u8, newpath: [*:0]const u8) c_int;
 extern "c" fn mkdir(path: [*:0]const u8, mode: c_uint) c_int;
 extern "c" fn fork() c_int;
+extern "c" fn readlink(path: [*:0]const u8, buf: [*]u8, size: usize) isize;
+extern "c" fn symlink(target: [*:0]const u8, linkpath: [*:0]const u8) c_int;
+extern "c" fn unlink(path: [*:0]const u8) c_int;
+extern "c" fn rmdir(path: [*:0]const u8) c_int;
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+const F_OK: c_int = 0;
+const W_OK: c_int = 2;
+const DT_UNKNOWN: u8 = 0;
+const DT_DIR: u8 = 4;
 
 /// glibc dirent on Linux: d_name starts after ino(8) + off(8) +
 /// reclen(2) + type(1). Only the name is read; the rest is padding here.
@@ -220,7 +229,280 @@ pub fn discoverGtkThemes() void {
 }
 
 pub fn discoverIcons() void {
+    repairUserIconThemes();
     scanInto(&icon_themes, .icon);
+}
+
+// ---------------------------------------------------------------------
+// Icon theme repair.
+//
+// Theme variants often keep most of their icons behind relative links into
+// their base theme: MacTahoe-dark's apps/scalable is
+// "../../MacTahoe/apps/scalable", Papirus-Dark links into Papirus. Two
+// common ways to install them break those links, and then the variant
+// shows (almost) no icons in GTK, the dock and the app drawer alike:
+//
+//   - the download holds several themes and was unpacked as one folder:
+//     ~/.icons/MacTahoe-blue/{MacTahoe-blue,MacTahoe-blue-dark,...}. GTK
+//     sees none of them; a variant moved out alone points at nothing.
+//   - the variant and its base sit in different icon folders (one in
+//     ~/.icons, the other in ~/.local/share/icons or /usr/share/icons).
+//
+// Settings fixes both when it lists the themes, only ever in your own icon
+// folders: such a wrapper folder is replaced by the themes inside it, and a
+// broken link is pointed at the base theme where it really is. A variant
+// whose base is installed nowhere can't be fixed; Settings says so instead
+// of applying it (iconThemeMissing).
+// ---------------------------------------------------------------------
+
+/// Where a dangling relative link points: the theme it reaches into and the
+/// rest of the path from the icon folder ("MacTahoe/apps/scalable").
+pub const LinkTarget = struct { theme: []const u8, rest: []const u8 };
+
+/// `depth` is how many folders below the icon folder the link itself sits
+/// (1 for <theme>/apps, 2 for <theme>/apps/scalable). Only a link that
+/// climbs exactly back to the icon folder names a sibling theme. Pure.
+pub fn linkTargetTheme(target: []const u8, depth: usize) ?LinkTarget {
+    var t = target;
+    var k: usize = 0;
+    while (std.mem.startsWith(u8, t, "../")) {
+        t = t[3..];
+        k += 1;
+    }
+    if (k != depth or t.len == 0) return null;
+    const slash = std.mem.indexOfScalar(u8, t, '/') orelse t.len;
+    const theme = t[0..slash];
+    if (theme.len == 0 or std.mem.eql(u8, theme, ".") or std.mem.eql(u8, theme, "..")) return null;
+    return .{ .theme = theme, .rest = t };
+}
+
+fn existsZ(p: [:0]const u8) bool {
+    return access(p.ptr, F_OK) == 0;
+}
+
+fn isSymlinkZ(p: [:0]const u8) bool {
+    var lb: [8]u8 = undefined;
+    return readlink(p.ptr, &lb, lb.len) > 0;
+}
+
+/// The icon folders, in GTK's order: yours, then the system's.
+fn iconRoots(bufs: *[3][512]u8) [3][]const u8 {
+    const home = homeDir();
+    return .{
+        std.fmt.bufPrint(&bufs[0], "{s}/.icons", .{home}) catch "",
+        std.fmt.bufPrint(&bufs[1], "{s}/.local/share/icons", .{home}) catch "",
+        "/usr/share/icons",
+    };
+}
+
+/// Replaces folders in `root` that hold nothing but icon themes with those
+/// themes. Returns how many folders it unwrapped.
+pub fn unnestIconFolders(root: []const u8) usize {
+    var zr: [576]u8 = undefined;
+    const rz = std.fmt.bufPrintZ(&zr, "{s}", .{root}) catch return 0;
+    const dir = opendir(rz.ptr) orelse return 0;
+    // Names first: the loop below renames entries of this folder.
+    var names: [MAX_NAMES][MAX_NAME]u8 = undefined;
+    var lens: [MAX_NAMES]usize = undefined;
+    var n: usize = 0;
+    while (readdir(dir)) |e| {
+        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&e.d_name)));
+        if (name.len == 0 or name[0] == '.' or name.len >= MAX_NAME or n == MAX_NAMES) continue;
+        @memcpy(names[n][0..name.len], name);
+        lens[n] = name.len;
+        n += 1;
+    }
+    _ = closedir(dir);
+    var moved: usize = 0;
+    for (0..n) |i| {
+        if (unnestOne(root, names[i][0..lens[i]])) moved += 1;
+    }
+    return moved;
+}
+
+fn unnestOne(root: []const u8, name: []const u8) bool {
+    var ob: [576]u8 = undefined;
+    const outer = std.fmt.bufPrintZ(&ob, "{s}/{s}", .{ root, name }) catch return false;
+    if (isSymlinkZ(outer) or !isDir(outer)) return false;
+    var ib: [600]u8 = undefined;
+    if (existsZ(std.fmt.bufPrintZ(&ib, "{s}/index.theme", .{outer}) catch return false)) return false;
+
+    // Everything inside must be an icon theme folder, and each name must be
+    // free beside the wrapper (except the wrapper's own name, which it frees).
+    const dir = opendir(outer.ptr) orelse return false;
+    var kids: [16][MAX_NAME]u8 = undefined;
+    var klens: [16]usize = undefined;
+    var k: usize = 0;
+    var ok = true;
+    while (readdir(dir)) |e| {
+        const c = std.mem.span(@as([*:0]const u8, @ptrCast(&e.d_name)));
+        if (std.mem.eql(u8, c, ".") or std.mem.eql(u8, c, "..")) continue;
+        if (k == kids.len or c.len >= MAX_NAME) {
+            ok = false;
+            break;
+        }
+        var cb: [700]u8 = undefined;
+        const cp = std.fmt.bufPrintZ(&cb, "{s}/{s}", .{ outer, c }) catch {
+            ok = false;
+            break;
+        };
+        var cib: [720]u8 = undefined;
+        const ci = std.fmt.bufPrintZ(&cib, "{s}/index.theme", .{cp}) catch {
+            ok = false;
+            break;
+        };
+        if (isSymlinkZ(cp) or !isDir(cp) or !existsZ(ci)) {
+            ok = false;
+            break;
+        }
+        if (!std.mem.eql(u8, c, name)) {
+            var db: [700]u8 = undefined;
+            const dp = std.fmt.bufPrintZ(&db, "{s}/{s}", .{ root, c }) catch {
+                ok = false;
+                break;
+            };
+            if (existsZ(dp) or isSymlinkZ(dp)) {
+                ok = false;
+                break;
+            }
+        }
+        @memcpy(kids[k][0..c.len], c);
+        klens[k] = c.len;
+        k += 1;
+    }
+    _ = closedir(dir);
+    if (!ok or k == 0) return false;
+
+    var tb: [600]u8 = undefined;
+    const tmp = std.fmt.bufPrintZ(&tb, "{s}/.{s}.perihelion-unwrap", .{ root, name }) catch return false;
+    if (existsZ(tmp) or isSymlinkZ(tmp)) return false;
+    if (rename(outer.ptr, tmp.ptr) != 0) return false;
+    for (0..k) |i| {
+        const c = kids[i][0..klens[i]];
+        var fb: [700]u8 = undefined;
+        var db: [700]u8 = undefined;
+        const from = std.fmt.bufPrintZ(&fb, "{s}/{s}", .{ tmp, c }) catch continue;
+        const to = std.fmt.bufPrintZ(&db, "{s}/{s}", .{ root, c }) catch continue;
+        _ = rename(from.ptr, to.ptr);
+    }
+    if (rmdir(tmp.ptr) != 0) {
+        // Something stayed behind: put the rest back where it was.
+        if (!existsZ(outer)) _ = rename(tmp.ptr, outer.ptr);
+    }
+    return true;
+}
+
+pub const ThemeHealth = struct {
+    /// Links pointed at their base theme in another icon folder.
+    fixed: usize = 0,
+    /// The first theme a link reaches into that is installed nowhere.
+    missing: [MAX_NAME]u8 = undefined,
+    missing_len: usize = 0,
+
+    pub fn missingName(self: *const ThemeHealth) []const u8 {
+        return self.missing[0..self.missing_len];
+    }
+};
+
+/// Checks `<root>/<theme>`'s links (two folders deep, where variants keep
+/// them) against `roots`, fixing what it can when the theme is yours.
+pub fn checkIconTheme(roots: []const []const u8, root: []const u8, theme: []const u8, h: *ThemeHealth) void {
+    var tb: [576]u8 = undefined;
+    const td = std.fmt.bufPrintZ(&tb, "{s}/{s}", .{ root, theme }) catch return;
+    const writable = access(td.ptr, W_OK) == 0;
+    walkLinks(roots, td, 1, writable, h);
+}
+
+fn walkLinks(roots: []const []const u8, dir_path: [:0]const u8, depth: usize, writable: bool, h: *ThemeHealth) void {
+    const dir = opendir(dir_path.ptr) orelse return;
+    defer _ = closedir(dir);
+    while (readdir(dir)) |e| {
+        const name = std.mem.span(@as([*:0]const u8, @ptrCast(&e.d_name)));
+        if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
+        var pb: [640]u8 = undefined;
+        const p = std.fmt.bufPrintZ(&pb, "{s}/{s}", .{ dir_path, name }) catch continue;
+        var lb: [512]u8 = undefined;
+        const n = readlink(p.ptr, &lb, lb.len);
+        if (n > 0) {
+            const len: usize = @intCast(n);
+            if (len >= lb.len or existsZ(p)) continue; // a link that works
+            fixLink(roots, p, lb[0..len], depth, writable, h);
+            continue;
+        }
+        if (depth >= 2) continue;
+        const is_dir = e.d_type == DT_DIR or (e.d_type == DT_UNKNOWN and isDir(p));
+        if (is_dir) walkLinks(roots, p, depth + 1, writable, h);
+    }
+}
+
+fn fixLink(roots: []const []const u8, link: [:0]const u8, target: []const u8, depth: usize, writable: bool, h: *ThemeHealth) void {
+    const lt = linkTargetTheme(target, depth) orelse return;
+    for (roots) |r| {
+        if (r.len == 0) continue;
+        var cb: [640]u8 = undefined;
+        const cand = std.fmt.bufPrintZ(&cb, "{s}/{s}", .{ r, lt.rest }) catch continue;
+        if (!existsZ(cand)) continue;
+        if (!writable) return; // installed, just not where a system theme can see it
+        var nb: [680]u8 = undefined;
+        const tmp = std.fmt.bufPrintZ(&nb, "{s}.perihelion-new", .{link}) catch return;
+        _ = unlink(tmp.ptr);
+        if (symlink(cand.ptr, tmp.ptr) != 0) return;
+        if (rename(tmp.ptr, link.ptr) != 0) {
+            _ = unlink(tmp.ptr);
+            return;
+        }
+        h.fixed += 1;
+        return;
+    }
+    if (h.missing_len == 0 and lt.theme.len < MAX_NAME) {
+        @memcpy(h.missing[0..lt.theme.len], lt.theme);
+        h.missing_len = lt.theme.len;
+    }
+}
+
+/// Unwraps theme folders and repairs links in every theme in your icon
+/// folders (~/.icons, ~/.local/share/icons). Cheap: two folder levels.
+pub fn repairUserIconThemes() void {
+    var bufs: [3][512]u8 = undefined;
+    const roots = iconRoots(&bufs);
+    for (roots[0..2]) |r| {
+        if (r.len == 0) continue;
+        _ = unnestIconFolders(r);
+    }
+    for (roots[0..2]) |r| {
+        if (r.len == 0) continue;
+        var zr: [576]u8 = undefined;
+        const rz = std.fmt.bufPrintZ(&zr, "{s}", .{r}) catch continue;
+        const dir = opendir(rz.ptr) orelse continue;
+        defer _ = closedir(dir);
+        while (readdir(dir)) |e| {
+            const name = std.mem.span(@as([*:0]const u8, @ptrCast(&e.d_name)));
+            if (name.len == 0 or name[0] == '.') continue;
+            var h: ThemeHealth = .{};
+            checkIconTheme(&roots, r, name, &h);
+        }
+    }
+}
+
+/// "" when icon theme `name` is whole; otherwise the theme it takes its
+/// icons from that isn't installed (MacTahoe-blue for MacTahoe-blue-dark
+/// on its own). Repairs what it can first.
+pub fn iconThemeMissing(name: []const u8, out: []u8) []const u8 {
+    var bufs: [3][512]u8 = undefined;
+    const roots = iconRoots(&bufs);
+    for (roots) |r| {
+        if (r.len == 0) continue;
+        var ib: [640]u8 = undefined;
+        const idx = std.fmt.bufPrintZ(&ib, "{s}/{s}/index.theme", .{ r, name }) catch continue;
+        if (!existsZ(idx)) continue;
+        var h: ThemeHealth = .{};
+        checkIconTheme(&roots, r, name, &h);
+        const m = h.missingName();
+        const len = @min(m.len, out.len);
+        @memcpy(out[0..len], m[0..len]);
+        return out[0..len];
+    }
+    return out[0..0];
 }
 
 pub fn cursorLabels() []const [*:0]const u8 {
@@ -1421,4 +1703,118 @@ test "compose mango rule omits unknown refresh on fresh" {
     var out: [512]u8 = undefined;
     const s = composeMangoRule("DP-2", 1920, 1080, 0, 0, 0, null, true, &out);
     try std.testing.expectEqualStrings("monitor_rule = name:DP-2, width:1920, height:1080, x:0, y:0, rr:0, vrr:0", s);
+}
+
+extern "c" fn getpid() c_int;
+
+fn testMkdirs(comptime fmt: []const u8, args: anytype) !void {
+    var b: [600]u8 = undefined;
+    const p = try std.fmt.bufPrint(&b, fmt, args);
+    var i: usize = 1;
+    while (i <= p.len) : (i += 1) {
+        if (i == p.len or p[i] == '/') {
+            var z: [600]u8 = undefined;
+            const pz = try std.fmt.bufPrintZ(&z, "{s}", .{p[0..i]});
+            _ = mkdir(pz.ptr, 0o755);
+        }
+    }
+}
+
+fn testTouch(comptime fmt: []const u8, args: anytype) !void {
+    var b: [600]u8 = undefined;
+    const p = try std.fmt.bufPrintZ(&b, fmt, args);
+    const fd = open(p.ptr, O_WRONLY_CREAT_TRUNC, 0o644);
+    try std.testing.expect(fd >= 0);
+    _ = close(fd);
+}
+
+fn testLink(target: [:0]const u8, comptime fmt: []const u8, args: anytype) !void {
+    var b: [600]u8 = undefined;
+    const p = try std.fmt.bufPrintZ(&b, fmt, args);
+    try std.testing.expectEqual(@as(c_int, 0), symlink(target.ptr, p.ptr));
+}
+
+fn testExists(comptime fmt: []const u8, args: anytype) bool {
+    var b: [600]u8 = undefined;
+    const p = std.fmt.bufPrintZ(&b, fmt, args) catch return false;
+    return existsZ(p);
+}
+
+test "linkTargetTheme names the sibling theme a link climbs to" {
+    const t = std.testing;
+    const a = linkTargetTheme("../../MacTahoe/apps/scalable", 2).?;
+    try t.expectEqualStrings("MacTahoe", a.theme);
+    try t.expectEqualStrings("MacTahoe/apps/scalable", a.rest);
+    const b = linkTargetTheme("../Papirus/64x64", 1).?;
+    try t.expectEqualStrings("Papirus", b.theme);
+    try t.expect(linkTargetTheme("../../MacTahoe/apps", 1) == null); // climbs past the icon folder
+    try t.expect(linkTargetTheme("apps", 1) == null); // inside the same theme
+    try t.expect(linkTargetTheme("/usr/share/icons/X/apps", 1) == null);
+    try t.expect(linkTargetTheme("../..", 1) == null);
+}
+
+test "icon themes: a wrapped download is unwrapped, links are repaired, a missing base is named" {
+    const t = std.testing;
+    var bb: [128]u8 = undefined;
+    const base = try std.fmt.bufPrint(&bb, "/tmp/perihelion-icontest-{d}", .{getpid()});
+    _ = spawnWait(&.{ "rm", "-rf", base });
+    defer _ = spawnWait(&.{ "rm", "-rf", base });
+
+    // ~/.icons: MacTahoe-blue.tar.xz unpacked as one folder, as an archive
+    // with three themes in it is.
+    try testMkdirs("{s}/home-icons/MacTahoe-blue/MacTahoe-blue/apps/scalable", .{base});
+    try testTouch("{s}/home-icons/MacTahoe-blue/MacTahoe-blue/index.theme", .{base});
+    try testTouch("{s}/home-icons/MacTahoe-blue/MacTahoe-blue/apps/scalable/firefox.svg", .{base});
+    try testMkdirs("{s}/home-icons/MacTahoe-blue/MacTahoe-blue-dark/apps/32", .{base});
+    try testTouch("{s}/home-icons/MacTahoe-blue/MacTahoe-blue-dark/index.theme", .{base});
+    try testLink("../../MacTahoe-blue/apps/scalable", "{s}/home-icons/MacTahoe-blue/MacTahoe-blue-dark/apps/scalable", .{base});
+    try testMkdirs("{s}/home-icons/MacTahoe-blue/MacTahoe-blue-light", .{base});
+    try testTouch("{s}/home-icons/MacTahoe-blue/MacTahoe-blue-light/index.theme", .{base});
+    try testLink("../MacTahoe-blue/apps", "{s}/home-icons/MacTahoe-blue/MacTahoe-blue-light/apps", .{base});
+    // A plain folder of something else is left alone.
+    try testMkdirs("{s}/home-icons/notes", .{base});
+    try testTouch("{s}/home-icons/notes/readme.txt", .{base});
+
+    // ~/.local/share/icons: Papirus-Dark whose base is in the system folder,
+    // and a variant whose base is installed nowhere.
+    try testMkdirs("{s}/share-icons/Papirus-Dark", .{base});
+    try testTouch("{s}/share-icons/Papirus-Dark/index.theme", .{base});
+    try testLink("../Papirus/64x64", "{s}/share-icons/Papirus-Dark/64x64", .{base});
+    try testMkdirs("{s}/share-icons/Lonely-dark/apps", .{base});
+    try testTouch("{s}/share-icons/Lonely-dark/index.theme", .{base});
+    try testLink("../../Gone/apps/scalable", "{s}/share-icons/Lonely-dark/apps/scalable", .{base});
+    try testMkdirs("{s}/sys/Papirus/64x64/apps", .{base});
+    try testTouch("{s}/sys/Papirus/index.theme", .{base});
+    try testTouch("{s}/sys/Papirus/64x64/apps/kitty.svg", .{base});
+
+    var rb: [3][128]u8 = undefined;
+    const roots = [_][]const u8{
+        try std.fmt.bufPrint(&rb[0], "{s}/home-icons", .{base}),
+        try std.fmt.bufPrint(&rb[1], "{s}/share-icons", .{base}),
+        try std.fmt.bufPrint(&rb[2], "{s}/sys", .{base}),
+    };
+
+    try t.expectEqual(@as(usize, 1), unnestIconFolders(roots[0]));
+    try t.expectEqual(@as(usize, 0), unnestIconFolders(roots[1]));
+    try t.expect(testExists("{s}/home-icons/MacTahoe-blue/index.theme", .{base}));
+    try t.expect(testExists("{s}/home-icons/MacTahoe-blue-dark/apps/scalable/firefox.svg", .{base}));
+    try t.expect(testExists("{s}/home-icons/MacTahoe-blue-light/apps/scalable/firefox.svg", .{base}));
+    try t.expect(testExists("{s}/home-icons/notes/readme.txt", .{base}));
+    try t.expect(!testExists("{s}/home-icons/.MacTahoe-blue.perihelion-unwrap", .{base}));
+
+    var h1: ThemeHealth = .{};
+    checkIconTheme(&roots, roots[0], "MacTahoe-blue-dark", &h1);
+    try t.expectEqual(@as(usize, 0), h1.fixed);
+    try t.expectEqualStrings("", h1.missingName());
+
+    var h2: ThemeHealth = .{};
+    checkIconTheme(&roots, roots[1], "Papirus-Dark", &h2);
+    try t.expectEqual(@as(usize, 1), h2.fixed);
+    try t.expectEqualStrings("", h2.missingName());
+    try t.expect(testExists("{s}/share-icons/Papirus-Dark/64x64/apps/kitty.svg", .{base}));
+
+    var h3: ThemeHealth = .{};
+    checkIconTheme(&roots, roots[1], "Lonely-dark", &h3);
+    try t.expectEqual(@as(usize, 0), h3.fixed);
+    try t.expectEqualStrings("Gone", h3.missingName());
 }
