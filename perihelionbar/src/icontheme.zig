@@ -148,7 +148,7 @@ fn iconRoots(store: []u8, out: [][]const u8) usize {
     var it = std.mem.splitScalar(u8, data_dirs, ':');
     while (it.next()) |d| {
         if (d.len == 0 or d[0] != '/') continue;
-        add(store, &w, out, &n, "{s}/icons", .{std.mem.trimRight(u8, d, "/")});
+        add(store, &w, out, &n, "{s}/icons", .{std.mem.trimEnd(u8, d, "/")});
     }
     add(store, &w, out, &n, "/usr/share/icons", .{});
     add(store, &w, out, &n, "/var/lib/flatpak/exports/share/icons", .{});
