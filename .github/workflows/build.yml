@@ -54,6 +54,12 @@ jobs:
       - name: Unit-test the Network page's nmcli parser
         working-directory: perihelionbar
         run: /opt/zig/zig test src/network.zig -lc
+      - name: Unit-test the icon theme lookup
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-icons
+      - name: Unit-test the theme settings writers
+        working-directory: perihelionbar
+        run: /opt/zig/zig test src/desk_theme.zig -lc
       - name: "Live test: one bar and one dock under every toggle"
         run: |
           # The real bar and Settings against a headless compositor, flipping

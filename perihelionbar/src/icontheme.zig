@@ -2,9 +2,9 @@
 //! property gives you — e.g. "steam_tray_mono" — when an app doesn't embed
 //! raw pixel data via IconPixmap) to an actual image file, and decodes it.
 //!
-//! This is a deliberately simplified version of the icon theme spec: it
-//! doesn't parse index.theme, doesn't follow theme Inherits chains, and
-//! doesn't detect which theme is actually configured — it searches
+//! The configured theme (Perihelion Settings' Icon Theme) is searched the
+//! spec's way: its index.theme folders and its Inherits chain (buildPlan).
+//! Past that it searches
 //! Flatpak's exported icon dirs (many sandboxed apps' icons only live
 //! there) and the hicolor theme (the spec-mandated universal fallback),
 //! then the always-installed Adwaita sets (for legacy names only they
@@ -46,9 +46,19 @@ pub fn configuredTheme() []const u8 {
     return theme_name_buf[0..theme_name_len];
 }
 
-/// Re-reads gtk-icon-theme-name from ~/.config/gtk-3.0/settings.ini.
-/// Call at startup and on every config reload; never fails.
-pub fn refreshConfiguredTheme() void {
+/// Re-reads gtk-icon-theme-name from ~/.config/gtk-3.0/settings.ini and
+/// rebuilds the search plan for it. Call at startup and on every config
+/// reload; never fails. True when the theme is not the one before.
+pub fn refreshConfiguredTheme() bool {
+    var old_buf: [128]u8 = undefined;
+    const old_len = theme_name_len;
+    @memcpy(old_buf[0..old_len], theme_name_buf[0..old_len]);
+    readConfiguredTheme();
+    buildPlan();
+    return !std.mem.eql(u8, old_buf[0..old_len], theme_name_buf[0..theme_name_len]);
+}
+
+fn readConfiguredTheme() void {
     theme_name_len = 0;
     const home = homeDir();
     var pbuf: [512]u8 = undefined;
@@ -82,6 +92,232 @@ pub fn refreshConfiguredTheme() void {
         theme_name_len = v.len;
         return;
     }
+}
+
+// ---------------------------------------------------------------------
+// The configured theme, the way the icon theme spec reads it: its
+// index.theme says which folders hold icons (Directories=; MacTahoe and
+// Breeze keep them as apps/scalable or apps/48, Numix-Circle as 48/apps,
+// Adwaita as 48x48/apps) and which themes fill its gaps (Inherits=, e.g.
+// breeze-dark -> breeze, MacTahoe-dark -> MacTahoe). Guessing one layout
+// is what made every theme but Numix-Circle fall through to the stock
+// Adwaita / hicolor icons. hicolor itself is left to the fallback below.
+//
+// The plan is every "<root>/<theme>/<folder>" to try, best first, built
+// once per theme change; a lookup then only probes files.
+// ---------------------------------------------------------------------
+
+const PLAN_MAX = 2048;
+const PLAN_BYTES = 192 * 1024;
+const CHAIN_MAX = 8;
+var plan_bytes: [PLAN_BYTES]u8 = undefined;
+var plan_used: usize = 0;
+var plan_off: [PLAN_MAX]u32 = undefined;
+var plan_len: [PLAN_MAX]u16 = undefined;
+var plan_n: usize = 0;
+
+fn planEntry(i: usize) []const u8 {
+    return plan_bytes[plan_off[i] .. plan_off[i] + plan_len[i]];
+}
+
+/// Icon roots in spec order: the user's, then $XDG_DATA_DIRS/icons
+/// (default /usr/local/share and /usr/share), then Flatpak's exports.
+fn iconRoots(store: []u8, out: [][]const u8) usize {
+    var n: usize = 0;
+    var w: usize = 0;
+    const home = homeDir();
+    const add = struct {
+        fn f(st: []u8, wp: *usize, o: [][]const u8, np: *usize, comptime fmt: []const u8, args: anytype) void {
+            if (np.* >= o.len) return;
+            const s = std.fmt.bufPrint(st[wp.*..], fmt, args) catch return;
+            for (o[0..np.*]) |prev| {
+                if (std.mem.eql(u8, prev, s)) return;
+            }
+            o[np.*] = s;
+            np.* += 1;
+            wp.* += s.len;
+        }
+    }.f;
+    add(store, &w, out, &n, "{s}/.icons", .{home});
+    if (getenv("XDG_DATA_HOME")) |d| {
+        add(store, &w, out, &n, "{s}/icons", .{std.mem.span(d)});
+    } else {
+        add(store, &w, out, &n, "{s}/.local/share/icons", .{home});
+    }
+    const data_dirs: []const u8 = if (getenv("XDG_DATA_DIRS")) |d| std.mem.span(d) else "/usr/local/share:/usr/share";
+    var it = std.mem.splitScalar(u8, data_dirs, ':');
+    while (it.next()) |d| {
+        if (d.len == 0 or d[0] != '/') continue;
+        add(store, &w, out, &n, "{s}/icons", .{std.mem.trimRight(u8, d, "/")});
+    }
+    add(store, &w, out, &n, "/usr/share/icons", .{});
+    add(store, &w, out, &n, "/var/lib/flatpak/exports/share/icons", .{});
+    return n;
+}
+
+fn readSmallFile(path: [:0]const u8, buf: []u8) ?[]const u8 {
+    const fd = open(path.ptr, 0, 0);
+    if (fd < 0) return null;
+    defer _ = close(fd);
+    var total: usize = 0;
+    while (total < buf.len) {
+        const n = read(fd, buf[total..].ptr, buf.len - total);
+        if (n <= 0) break;
+        total += @intCast(n);
+    }
+    return buf[0..total];
+}
+
+/// The value of `key` in index.theme's [Icon Theme] section.
+pub fn indexValue(text: []const u8, key: []const u8) ?[]const u8 {
+    var in_main = false;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        if (line[0] == '[') {
+            in_main = std.mem.eql(u8, line, "[Icon Theme]");
+            continue;
+        }
+        if (!in_main) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        if (std.mem.eql(u8, std.mem.trim(u8, line[0..eq], " \t"), key)) return std.mem.trim(u8, line[eq + 1 ..], " \t");
+    }
+    return null;
+}
+
+/// How good a folder is for drawing at the bar's sizes (16-64 px): vector
+/// first, then raster near 48-128 px, then the rest; symbolic (one-color)
+/// folders last, so an app gets its full-color icon.
+pub fn dirScore(dir: []const u8) i32 {
+    if (std.mem.indexOf(u8, dir, "symbolic") != null) return 100;
+    if (std.mem.indexOf(u8, dir, "scalable") != null) return 10000;
+    var size: i32 = 0;
+    var i: usize = 0;
+    while (i < dir.len) : (i += 1) {
+        if (dir[i] < '0' or dir[i] > '9') continue;
+        var j = i;
+        while (j < dir.len and dir[j] >= '0' and dir[j] <= '9') j += 1;
+        size = std.fmt.parseInt(i32, dir[i..j], 10) catch 0;
+        // "48@2x" is a 96 px icon
+        if (j + 1 < dir.len and dir[j] == '@' and dir[j + 1] >= '1' and dir[j + 1] <= '9') size *= dir[j + 1] - '0';
+        break;
+    }
+    if (size == 0) return 300;
+    if (size >= 48 and size <= 128) return 5000 + size;
+    if (size > 128) return 4000 - @divTrunc(size, 8);
+    return 1000 + size;
+}
+
+const DirRank = struct { off: u32, len: u16, score: i32 };
+
+fn rankLess(_: void, a: DirRank, b: DirRank) bool {
+    return a.score > b.score;
+}
+
+fn planAdd(root: []const u8, theme: []const u8, dir: []const u8) void {
+    if (plan_n >= PLAN_MAX) return;
+    const s = std.fmt.bufPrint(plan_bytes[plan_used..], "{s}/{s}/{s}", .{ root, theme, dir }) catch return;
+    plan_off[plan_n] = @intCast(plan_used);
+    plan_len[plan_n] = @intCast(s.len);
+    plan_used += s.len;
+    plan_n += 1;
+}
+
+var index_buf: [512 * 1024]u8 = undefined;
+
+fn buildPlan() void {
+    plan_n = 0;
+    plan_used = 0;
+    const picked = configuredTheme();
+    if (picked.len == 0) return;
+
+    var roots_store: [4096]u8 = undefined;
+    var roots: [16][]const u8 = undefined;
+    const nroots = iconRoots(&roots_store, &roots);
+
+    var chain_store: [CHAIN_MAX][128]u8 = undefined;
+    var chain: [CHAIN_MAX][]const u8 = undefined;
+    var nchain: usize = 0;
+    @memcpy(chain_store[0][0..picked.len], picked);
+    chain[0] = chain_store[0][0..picked.len];
+    nchain = 1;
+
+    var ci: usize = 0;
+    while (ci < nchain) : (ci += 1) {
+        const theme = chain[ci];
+        // The first index.theme found describes the theme; its folders are
+        // tried under every root that has the theme (a user copy can add
+        // to a system one).
+        var text: ?[]const u8 = null;
+        for (roots[0..nroots]) |root| {
+            var pb: [600]u8 = undefined;
+            const p = std.fmt.bufPrintZ(&pb, "{s}/{s}/index.theme", .{ root, theme }) catch continue;
+            if (readSmallFile(p, &index_buf)) |t| {
+                text = t;
+                break;
+            }
+        }
+        const t = text orelse continue;
+
+        // Its folders, best first.
+        var ranks: [1024]DirRank = undefined;
+        var nr: usize = 0;
+        var dir_store: [64 * 1024]u8 = undefined;
+        var dw: usize = 0;
+        for ([_][]const u8{ "Directories", "ScaledDirectories" }) |key| {
+            const list = indexValue(t, key) orelse continue;
+            var it = std.mem.splitScalar(u8, list, ',');
+            while (it.next()) |raw| {
+                const d = std.mem.trim(u8, raw, " \t");
+                if (d.len == 0 or nr >= ranks.len or dw + d.len > dir_store.len) continue;
+                if (std.mem.indexOf(u8, d, "..") != null) continue;
+                @memcpy(dir_store[dw .. dw + d.len], d);
+                ranks[nr] = .{ .off = @intCast(dw), .len = @intCast(d.len), .score = dirScore(d) };
+                dw += d.len;
+                nr += 1;
+            }
+        }
+        std.mem.sort(DirRank, ranks[0..nr], {}, rankLess);
+        for (roots[0..nroots]) |root| {
+            var pb: [600]u8 = undefined;
+            const tdir = std.fmt.bufPrintZ(&pb, "{s}/{s}", .{ root, theme }) catch continue;
+            if (access(tdir.ptr, 0) != 0) continue;
+            for (ranks[0..nr]) |r| planAdd(root, theme, dir_store[r.off .. r.off + r.len]);
+        }
+
+        // Then what it inherits from (hicolor is the fallback's job).
+        if (indexValue(t, "Inherits")) |inh| {
+            var it = std.mem.splitScalar(u8, inh, ',');
+            while (it.next()) |raw| {
+                const name = std.mem.trim(u8, raw, " \t");
+                if (name.len == 0 or name.len > 127 or nchain >= CHAIN_MAX) continue;
+                if (std.mem.eql(u8, name, "hicolor") or std.mem.indexOfScalar(u8, name, '/') != null) continue;
+                var seen = false;
+                for (chain[0..nchain]) |c| seen = seen or std.mem.eql(u8, c, name);
+                if (seen) continue;
+                @memcpy(chain_store[nchain][0..name.len], name);
+                chain[nchain] = chain_store[nchain][0..name.len];
+                nchain += 1;
+            }
+        }
+    }
+}
+
+/// The configured theme's file for `name`, or null.
+fn searchPlan(name: []const u8, buf: []u8) ?[]const u8 {
+    var pb: [1024]u8 = undefined;
+    for (0..plan_n) |i| {
+        for ([_][]const u8{ ".svg", ".png" }) |ext| {
+            const p = tryPath(&pb, "{s}/{s}{s}", .{ planEntry(i), name, ext }) orelse continue;
+            if (fileExists(p)) {
+                const len = @min(p.len, buf.len);
+                @memcpy(buf[0..len], p[0..len]);
+                return buf[0..len];
+            }
+        }
+    }
+    return null;
 }
 
 fn tryPath(buf: []u8, comptime fmt: []const u8, args: anytype) ?[:0]const u8 {
@@ -153,46 +389,9 @@ fn searchIconPathIn(home: []const u8, name: []const u8, buf: []u8) ?[]const u8 {
         return null;
     }
 
-    // The user-picked theme first (perihelionbar-config's icon picker): user
-    // dirs, then system icons. Skipped when no theme is configured — then
-    // this resolves exactly as before.
-    const picked = configuredTheme();
-    if (picked.len != 0) {
-        // Perihelion: also the bare-number size dirs (48, 48@2x, ...) that themes
-        // like Numix-Circle use instead of 48x48.
-        const picked_sizes = [_][]const u8{ "scalable", "symbolic", "256x256", "128x128", "64x64", "48x48", "48@2x", "48", "64", "128", "256", "32x32", "32", "24x24", "24@2x", "24", "22x22", "22@2x", "22", "16x16", "16@2x", "16" };
-        const picked_ctxs = [_][]const u8{ "apps", "status", "actions", "devices" };
-        const picked_exts = [_][]const u8{ ".svg", ".png" };
-        var hbuf: [512]u8 = undefined;
-        const user_rels = [_][]const u8{ ".icons", ".local/share/icons" };
-        for (user_rels) |rel| {
-            const root = std.fmt.bufPrint(&hbuf, "{s}/{s}", .{ home, rel }) catch continue;
-            for (picked_sizes) |size| {
-                for (picked_ctxs) |ctx| {
-                    for (picked_exts) |ext| {
-                        const p = tryPath(&path_buf, "{s}/{s}/{s}/{s}/{s}{s}", .{ root, picked, size, ctx, name, ext }) orelse continue;
-                        if (fileExists(p)) {
-                            const len = @min(p.len, buf.len);
-                            @memcpy(buf[0..len], p[0..len]);
-                            return buf[0..len];
-                        }
-                    }
-                }
-            }
-        }
-        for (picked_sizes) |size| {
-            for (picked_ctxs) |ctx| {
-                for (picked_exts) |ext| {
-                    const p = tryPath(&path_buf, "/usr/share/icons/{s}/{s}/{s}/{s}{s}", .{ picked, size, ctx, name, ext }) orelse continue;
-                    if (fileExists(p)) {
-                        const len = @min(p.len, buf.len);
-                        @memcpy(buf[0..len], p[0..len]);
-                        return buf[0..len];
-                    }
-                }
-            }
-        }
-    }
+    // The user-picked theme first, through its own index.theme (see
+    // buildPlan). Skipped when no theme is configured.
+    if (searchPlan(name, buf)) |p| return p;
 
     // (root, theme dir, contexts): the user-level trees lead in their
     // historical order (Flatpak exports shadow system icons, as before),
@@ -644,3 +843,78 @@ test "a Lutris-style game icon resolves from the plain user dirs" {
     try t.expect(searchIconPathIn(home, "test_never_installed", &out) == null);
 }
 
+
+extern "c" fn write(fd: c_int, buf: [*]const u8, count: usize) isize;
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+extern "c" fn realpath(path: [*:0]const u8, resolved: ?[*]u8) ?[*:0]u8;
+
+test "folder ranking prefers vector, then 48-128 px, symbolic last" {
+    const t = std.testing;
+    try t.expect(dirScore("apps/scalable") > dirScore("48x48/apps"));
+    try t.expect(dirScore("48x48/apps") > dirScore("256x256/apps"));
+    try t.expect(dirScore("256x256/apps") > dirScore("16x16/apps"));
+    try t.expect(dirScore("24@2x/apps") > dirScore("24/apps")); // 48 px beats 24 px
+    try t.expect(dirScore("16x16/apps") > dirScore("symbolic/apps"));
+    try t.expectEqualStrings("apps/scalable,apps/48", indexValue("[Icon Theme]\nName=X\nDirectories=apps/scalable,apps/48\n\n[apps/48]\nSize=48\n", "Directories").?);
+    try t.expect(indexValue("[apps/48]\nDirectories=no\n", "Directories") == null);
+}
+
+test "the configured theme resolves through its own folders and Inherits" {
+    const t = std.testing;
+    // A MacTahoe-style theme (context/size folders) that inherits a
+    // Numix-style one (size/context folders); neither layout was found by
+    // the old fixed-path lookup.
+    var tmp = t.tmpDir(.{});
+    defer tmp.cleanup();
+    var rel_buf: [256]u8 = undefined;
+    const rel = try std.fmt.bufPrint(&rel_buf, ".zig-cache/tmp/{s}\x00", .{tmp.sub_path});
+    var abs_buf: [4096]u8 = undefined;
+    const abs_ptr = realpath(@ptrCast(rel.ptr), &abs_buf) orelse return error.SkipZigTest;
+    const home = std.mem.span(abs_ptr);
+    var path_buf: [600]u8 = undefined;
+
+    testMakeDirs(home, ".icons/Child/apps/scalable/");
+    testMakeDirs(home, ".icons/Child/apps/48/");
+    testMakeDirs(home, ".icons/Parent/48x48/apps/");
+    const writeFile = struct {
+        fn f(path: []const u8, text: []const u8) void {
+            var z: [600:0]u8 = undefined;
+            @memcpy(z[0..path.len], path);
+            z[path.len] = 0;
+            const fd = open(&z, 1 | 64 | 512, 0o644);
+            if (fd < 0) return;
+            _ = write(fd, text.ptr, text.len);
+            _ = close(fd);
+        }
+    }.f;
+    writeFile(try std.fmt.bufPrint(&path_buf, "{s}/.icons/Child/index.theme", .{home}),
+        "[Icon Theme]\nName=Child\nInherits=Parent,hicolor\nDirectories=apps/48,apps/scalable\n");
+    writeFile(try std.fmt.bufPrint(&path_buf, "{s}/.icons/Parent/index.theme", .{home}),
+        "[Icon Theme]\nName=Parent\nDirectories=48x48/apps\n");
+    testTouch(try std.fmt.bufPrint(&path_buf, "{s}/.icons/Child/apps/48/firefox.png", .{home}));
+    testTouch(try std.fmt.bufPrint(&path_buf, "{s}/.icons/Child/apps/scalable/firefox.svg", .{home}));
+    testTouch(try std.fmt.bufPrint(&path_buf, "{s}/.icons/Parent/48x48/apps/only-in-parent.png", .{home}));
+
+    var hz: [600:0]u8 = undefined;
+    @memcpy(hz[0..home.len], home);
+    hz[home.len] = 0;
+    _ = setenv("HOME", &hz, 1);
+    _ = setenv("XDG_DATA_DIRS", "/nonexistent", 1);
+    _ = unsetenv("XDG_DATA_HOME");
+    defer {
+        theme_name_len = 0;
+        plan_n = 0;
+    }
+
+    @memcpy(theme_name_buf[0..5], "Child");
+    theme_name_len = 5;
+    buildPlan();
+
+    var out: [600]u8 = undefined;
+    const ff = searchPlan("firefox", &out) orelse return error.TestUnexpectedResult;
+    try t.expect(std.mem.endsWith(u8, ff, "/.icons/Child/apps/scalable/firefox.svg")); // vector first
+    const inh = searchPlan("only-in-parent", &out) orelse return error.TestUnexpectedResult;
+    try t.expect(std.mem.endsWith(u8, inh, "/.icons/Parent/48x48/apps/only-in-parent.png"));
+    try t.expect(searchPlan("not-anywhere", &out) == null);
+}

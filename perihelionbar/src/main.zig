@@ -5622,7 +5622,7 @@ fn realMain() !void {
     resetLauncherViewOrder();
     writePidfile();
     logging.step("config loaded from {s}", .{config_json_path});
-    icontheme.refreshConfiguredTheme();
+    _ = icontheme.refreshConfiguredTheme();
 
     // DebugAllocator does leak tracking and guard work on every allocation;
     // keep it for Debug builds, but use libc's release allocator for the
@@ -6504,7 +6504,12 @@ fn realMain() !void {
                 // Icon theme follows settings.ini (written by perihelionbar-config's
                 // icon picker); re-read it so a picked theme applies on this
                 // same reload instead of waiting for a bar restart.
-                icontheme.refreshConfiguredTheme();
+                if (icontheme.refreshConfiguredTheme()) {
+                    // A new theme: running apps and the trash re-resolve
+                    // too (pins already do on every reload).
+                    trash_icon.resolved = false;
+                    for (&tail_icons) |*c| c.* = .{};
+                }
 
                 // The rain charset is resolved once per font+style+distro: a
                 // new font may lack glyphs the old one had (or vice versa),
