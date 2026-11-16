@@ -2864,7 +2864,7 @@ fn buildIconRow(group: *gtk.AdwPreferencesGroup) void {
 
     const row = gtk.adw_combo_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), "Icon Theme");
-    gtk.adw_action_row_set_subtitle(@ptrCast(row), "Icons for the bar's tray/launcher pins and GTK apps. Drop themes into ~/.icons to list them here.");
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), "Icons for the bar, dock, app drawer, GTK and Qt apps. Open apps update after a moment; the app drawer the next time it opens. Drop themes into ~/.icons to list them here.");
 
     if (vals.len == 0) {
         // Nothing scannable — still show a functional (if single-choice)

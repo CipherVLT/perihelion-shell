@@ -557,11 +557,89 @@ pub fn applyGtkTheme(name: []const u8) void {
     _ = spawnWait(&.{ "gsettings", "set", "org.gnome.desktop.interface", "gtk-theme", name });
 }
 
+/// Every place an icon theme is read from on Perihelion:
+///   GTK apps:      gsettings icon-theme (live) + gtk-3.0/4.0 settings.ini
+///   the bar, dock: gtk-3.0 settings.ini (re-read on the reload Settings sends)
+///   the app drawer: gtk-3.0 settings.ini (re-read each time it opens)
+///   Qt apps:       qt6ct.conf / qt5ct.conf [Appearance] icon_theme
+/// The Qt files used to be left alone, so Qt apps kept Numix-Circle.
 pub fn applyIconTheme(name: []const u8) void {
     if (name.len == 0) return;
     writeIniKey("gtk-3.0", "gtk-icon-theme-name", name);
     writeIniKey("gtk-4.0", "gtk-icon-theme-name", name);
     _ = spawnWait(&.{ "gsettings", "set", "org.gnome.desktop.interface", "icon-theme", name });
+    setQtIconTheme("qt6ct/qt6ct.conf", name);
+    setQtIconTheme("qt5ct/qt5ct.conf", name);
+}
+
+/// icon_theme in an existing qt6ct / qt5ct config (left alone when the file
+/// isn't there: that Qt setup isn't in use).
+fn setQtIconTheme(rel: []const u8, name: []const u8) void {
+    var pbuf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&pbuf, "{s}/.config/{s}", .{ homeDir(), rel }) catch return;
+    const existing = readFileAll(path) orelse return;
+    defer gpa.free(existing);
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    setIniInSection(existing, "Appearance", "icon_theme", name, &out);
+    _ = writeFileAtomic(path, out.items);
+}
+
+/// Sets `key=value` inside `[section]` of INI text, keeping every other
+/// line as it was: replaces the key where it is, or adds it right after the
+/// section header, or adds the section at the end. Pure (tested).
+fn setIniInSection(existing: []const u8, section: []const u8, key: []const u8, value: []const u8, out: *std.ArrayList(u8)) void {
+    var in_section = false;
+    var done = false;
+    var lines = std.mem.splitScalar(u8, existing, '\n');
+    var first = true;
+    while (lines.next()) |raw| {
+        if (!first) out.append(gpa, '\n') catch return;
+        first = false;
+        const t = std.mem.trim(u8, raw, " \t\r");
+        if (t.len > 1 and t[0] == '[' and t[t.len - 1] == ']') {
+            in_section = std.mem.eql(u8, t[1 .. t.len - 1], section);
+            out.appendSlice(gpa, raw) catch return;
+            if (in_section and !done) {
+                // Put it right under the header; a later copy is dropped.
+                out.append(gpa, '\n') catch return;
+                out.appendSlice(gpa, key) catch return;
+                out.append(gpa, '=') catch return;
+                out.appendSlice(gpa, value) catch return;
+                done = true;
+            }
+            continue;
+        }
+        if (in_section) {
+            if (std.mem.indexOfScalar(u8, t, '=')) |eq| {
+                if (std.mem.eql(u8, std.mem.trim(u8, t[0..eq], " \t"), key)) {
+                    // Drop this line, and the newline written for it.
+                    out.items.len -= 1;
+                    continue;
+                }
+            }
+        }
+        out.appendSlice(gpa, raw) catch return;
+    }
+    if (!done) {
+        if (out.items.len > 0 and out.items[out.items.len - 1] != '\n') out.append(gpa, '\n') catch return;
+        out.print(gpa, "[{s}]\n{s}={s}\n", .{ section, key, value }) catch return;
+    }
+}
+
+test "setIniInSection keeps the other sections and replaces in place" {
+    const t = std.testing;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(gpa);
+    setIniInSection("[Appearance]\ncolor_scheme_path=/x.conf\nicon_theme=Numix-Circle\nstyle=Fusion\n\n[Fonts]\nfixed=\"Mono,11\"\n", "Appearance", "icon_theme", "MacTahoe-dark", &out);
+    try t.expectEqualStrings("[Appearance]\nicon_theme=MacTahoe-dark\ncolor_scheme_path=/x.conf\nstyle=Fusion\n\n[Fonts]\nfixed=\"Mono,11\"\n", out.items);
+    out.clearRetainingCapacity();
+    setIniInSection("[Fonts]\nfixed=a\n", "Appearance", "icon_theme", "breeze", &out);
+    try t.expectEqualStrings("[Fonts]\nfixed=a\n[Appearance]\nicon_theme=breeze\n", out.items);
+    out.clearRetainingCapacity();
+    // A key of the same name in another section is not touched.
+    setIniInSection("[Interface]\nicon_theme=keep\n[Appearance]\n", "Appearance", "icon_theme", "x", &out);
+    try t.expectEqualStrings("[Interface]\nicon_theme=keep\n[Appearance]\nicon_theme=x\n", out.items);
 }
 
 /// Live-applies the cursor under Hyprland without a session restart.

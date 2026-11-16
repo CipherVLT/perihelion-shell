@@ -97,6 +97,25 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run src/main.zig unit tests");
     test_step.dependOn(&run_tests.step);
 
+    // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
+    // which main.zig's tests don't reach.
+    const icon_mod = b.createModule(.{
+        .root_source_file = b.path("src/icontheme.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    icon_mod.addImport("gdkpixbuf", b.createModule(.{
+        .root_source_file = b.path("src/gdkpixbuf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }));
+    icon_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{});
+    const icon_tests = b.addTest(.{ .root_module = icon_mod, .use_llvm = true, .use_lld = true });
+    const icon_test_step = b.step("test-icons", "Run src/icontheme.zig unit tests");
+    icon_test_step.dependOn(&b.addRunArtifact(icon_tests).step);
+
     // perihelionbar-welcome: separate GTK4/libadwaita companion app, independent
     // of the bar above (no Wayland/freetype/gdk-pixbuf deps). Talks to
     // GTK/libadwaita through hand-written extern bindings in

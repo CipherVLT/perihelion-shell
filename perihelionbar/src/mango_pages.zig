@@ -2506,7 +2506,7 @@ fn buildXWaylandPage() *gtk.GtkBox {
     const display: ?[]const u8 = if (getenv("DISPLAY")) |d| std.mem.span(d) else null;
     const ready = installed and display != null and display.?.len > 0;
 
-    const status = newGroup("XWayland", "X11-only apps (Vital and many other audio plug-ins, older games, some Wine and Java apps) run through XWayland. Wayland-native apps are completely unaffected by this setting.");
+    const status = newGroup("XWayland", "X11 compatibility layer");
     {
         const row = gtk.adw_action_row_new();
         gtk.adw_preferences_row_set_title(@ptrCast(row), "Enable XWayland compatibility layer");

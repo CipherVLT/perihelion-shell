@@ -14,6 +14,12 @@ import Quickshell.Io
 // candidate per name. One subprocess per scan (~4k lines), no cache file to go
 // stale: once at startup, then again whenever the drawer opens so icons
 // installed alongside new apps resolve on their first appearance.
+//
+// The icon theme picked in Perihelion Settings (gtk-icon-theme-name in
+// ~/.config/gtk-3.0/settings.ini) wins, then the themes it inherits from,
+// then hicolor and the plain/Flatpak locations, and only then any other
+// installed theme (for a name nothing above has). Each scan builds a fresh
+// map, so a theme change takes effect the next time the drawer opens.
 Singleton {
     id: root
 
@@ -37,6 +43,54 @@ Singleton {
     ]
 
     property var best: ({})     // basename -> { path: ..., rank: ... }
+
+    readonly property string scanScript: [
+        'cfg="${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0/settings.ini"',
+        'theme=$(sed -n "s/^[[:space:]]*gtk-icon-theme-name[[:space:]]*=[[:space:]]*//p" "$cfg" 2>/dev/null | head -n 1 | tr -d "\\r")',
+        'queue=$theme; seen=,; n=0',
+        'while [ -n "$queue" ] && [ "$n" -lt 8 ]; do',
+        '  t=${queue%%,*}',
+        '  if [ "$t" = "$queue" ]; then queue=; else queue=${queue#*,}; fi',
+        '  t=$(printf %s "$t" | tr -d " \\t")',
+        '  case "$t" in ""|hicolor|*/*) continue ;; esac',
+        '  case "$seen" in *",$t,"*) continue ;; esac',
+        '  seen="$seen$t,"; n=$((n + 1)); echo "@@theme $t"',
+        '  for r in "$@"; do',
+        '    if [ -f "$r/$t/index.theme" ]; then',
+        '      inh=$(sed -n "/^\\[Icon Theme\\]/,/^\\[/s/^Inherits[[:space:]]*=[[:space:]]*//p" "$r/$t/index.theme" | head -n 1 | tr -d "\\r")',
+        '      [ -n "$inh" ] && queue="${queue:+$queue,}$inh"',
+        '      break',
+        '    fi',
+        '  done',
+        'done',
+        "find \"$@\" -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null",
+        'exit 0'
+    ].join("\n")
+
+    // The picked theme and the ones it inherits, best first (from the scan).
+    property var themeChain: []
+
+    // Icon roots whose next path segment is a theme name.
+    readonly property var themeRoots: [
+        "/usr/share/icons",
+        (Quickshell.env("HOME") || "") + "/.local/share/icons",
+        (Quickshell.env("HOME") || "") + "/.icons",
+        "/var/lib/flatpak/exports/share/icons",
+        (Quickshell.env("HOME") || "") + "/.local/share/flatpak/exports/share/icons"
+    ]
+
+    // The theme a path belongs to ("" when it is not under a theme root).
+    function themeOf(path) {
+        for (var i = 0; i < themeRoots.length; i++) {
+            var r = themeRoots[i] + "/";
+            if (path.indexOf(r) === 0) {
+                var rest = path.substring(r.length);
+                var slash = rest.indexOf("/");
+                return slash > 0 ? rest.substring(0, slash) : "";
+            }
+        }
+        return "";
+    }
     property bool ready: false
 
     // Mirrors the scan process so a consumer can tell a finished walk from one
@@ -59,8 +113,22 @@ Singleton {
         scan.running = true;
     }
 
-    // Rank candidates so the closest-to-native-size icon wins. Higher is better.
-    function rankOf(path) {
+    // Rank candidates: the picked theme (and what it inherits) first, then
+    // the closest-to-native-size icon. Higher is better.
+    function rankOf(path, chain) {
+        var theme = themeOf(path);
+        if (theme !== "" && theme !== "hicolor") {
+            var at = chain.indexOf(theme);
+            if (at >= 0)
+                return (chain.length - at) * 100000 + sizeRank(path);
+            // Another installed theme: only for a name nothing else has.
+            return sizeRank(path) - 50000;
+        }
+        return sizeRank(path);
+    }
+
+    // Size and format preference within one tier.
+    function sizeRank(path) {
         var ext = path.substring(path.lastIndexOf(".") + 1).toLowerCase();
 
         // Flatpak appstream art is generic 64/128px raster art kept in a cache
@@ -99,24 +167,25 @@ Singleton {
             score += 300;
         }
 
-        // hicolor is the fallback theme; prefer a real theme's art when present.
-        if (path.indexOf("/hicolor/") !== -1)
-            score += 60;
+        // One-color symbolic art is for status icons; an app tile wants
+        // the full-color one.
+        if (path.indexOf("/symbolic/") !== -1)
+            score -= 900;
 
         return score;
     }
 
-    function offer(path) {
+    function offer(map, chain, path) {
         var dot = path.lastIndexOf(".");
         if (dot <= 0)
             return;
         var name = path.substring(path.lastIndexOf("/") + 1, dot);
         if (name.length === 0)
             return;
-        var rank = rankOf(path);
-        var cur = best[name];
+        var rank = rankOf(path, chain);
+        var cur = map[name];
         if (cur === undefined || rank > cur.rank) {
-            best[name] = { "path": path, "rank": rank };
+            map[name] = { "path": path, "rank": rank };
         }
     }
 
@@ -141,21 +210,31 @@ Singleton {
         // this machine are skipped instead of making `find` exit non-zero, and
         // the trailing `exit 0` keeps a missing optional root from looking like
         // a scan failure.
-        command: ["sh", "-c",
-                  "find \"$@\" -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null; exit 0",
-                  "appdrawer-icons"].concat(root.roots)
+        //
+        // Before the walk, the script prints the picked theme and the themes
+        // it inherits (breadth first, hicolor left out) as "@@theme NAME"
+        // lines, read from settings.ini and each theme's index.theme.
+        command: ["sh", "-c", root.scanScript, "appdrawer-icons"].concat(root.roots)
         running: true
         stdout: StdioCollector {
             onStreamFinished: {
                 var lines = String(this.text).split("\n");
+                var chain = [];
+                var map = {};
                 for (var i = 0; i < lines.length; i++) {
                     var l = lines[i].trim();
-                    if (l.length > 0)
-                        root.offer(l);
+                    if (l.indexOf("@@theme ") === 0)
+                        chain.push(l.substring(8));
+                    else if (l.length > 0)
+                        root.offer(map, chain, l);
                 }
+                // A fresh map each scan: winners from the previous theme
+                // must not linger.
+                root.themeChain = chain;
+                root.best = map;
                 root.ready = true;
                 root.scanning = false;
-                console.log("ICONS ready entries=" + Object.keys(root.best).length);
+                console.log("ICONS ready entries=" + Object.keys(root.best).length + " theme=" + chain.join(">"));
             }
         }
     }
