@@ -47,7 +47,7 @@ Singleton {
     readonly property string scanScript: [
         'cfg="${XDG_CONFIG_HOME:-$HOME/.config}/gtk-3.0/settings.ini"',
         'theme=$(sed -n "s/^[[:space:]]*gtk-icon-theme-name[[:space:]]*=[[:space:]]*//p" "$cfg" 2>/dev/null | head -n 1 | tr -d "\\r")',
-        'queue=$theme; seen=,; n=0',
+        'queue=$theme; seen=,; n=0; dirs=',
         'while [ -n "$queue" ] && [ "$n" -lt 8 ]; do',
         '  t=${queue%%,*}',
         '  if [ "$t" = "$queue" ]; then queue=; else queue=${queue#*,}; fi',
@@ -55,15 +55,25 @@ Singleton {
         '  case "$t" in ""|hicolor|*/*) continue ;; esac',
         '  case "$seen" in *",$t,"*) continue ;; esac',
         '  seen="$seen$t,"; n=$((n + 1)); echo "@@theme $t"',
+        '  inh=',
         '  for r in "$@"; do',
         '    if [ -f "$r/$t/index.theme" ]; then',
-        '      inh=$(sed -n "/^\\[Icon Theme\\]/,/^\\[/s/^Inherits[[:space:]]*=[[:space:]]*//p" "$r/$t/index.theme" | head -n 1 | tr -d "\\r")',
-        '      [ -n "$inh" ] && queue="${queue:+$queue,}$inh"',
-        '      break',
+        '      dirs="$dirs$r/$t',
+        '"',
+        '      [ -n "$inh" ] || inh=$(sed -n "/^\\[Icon Theme\\]/,/^\\[/s/^Inherits[[:space:]]*=[[:space:]]*//p" "$r/$t/index.theme" | head -n 1 | tr -d "\\r")',
         '    fi',
         '  done',
+        '  [ -n "$inh" ] && queue="${queue:+$queue,}$inh"',
         'done',
         "find \"$@\" -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) 2>/dev/null",
+        // The picked theme and what it inherits, again, following symlinked
+        // folders: a variant such as MacTahoe-dark or Papirus-Dark keeps most
+        // of its icons behind links into its base theme, which the walk above
+        // does not enter. The paths keep the variant's name, so they rank as
+        // the picked theme. "@2x" folders are links back into the same theme.
+        'printf %s "$dirs" | while IFS= read -r d; do',
+        "  [ -n \"$d\" ] && find -L \"$d\" -name '*@2x' -prune -o -type f \\( -iname '*.png' -o -iname '*.svg' -o -iname '*.xpm' \\) -print 2>/dev/null",
+        'done',
         'exit 0'
     ].join("\n")
 

@@ -2847,10 +2847,38 @@ fn buildFontRow(group: *gtk.AdwPreferencesGroup) void {
 // settings.ini, which the bar's resolver reads) and reloads the bar.
 // ---------------------------------------------------------------------
 
+extern "c" fn adw_alert_dialog_new(heading: ?[*:0]const u8, body: ?[*:0]const u8) *anyopaque;
+extern "c" fn adw_alert_dialog_add_response(self: *anyopaque, id: [*:0]const u8, label: [*:0]const u8) void;
+
+// The theme the row shows as applied, to go back to when a pick is refused.
+var g_icon_idx: c_uint = 0;
+var g_icon_reverting = false;
+
 fn onIconChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    if (g_icon_reverting) return;
     const idx = gtk.adw_combo_row_get_selected(row);
     const vals = desk.iconValues();
     if (idx >= vals.len) return;
+    // A variant whose base theme isn't installed has (almost) no icons of
+    // its own: applying it would drop the bar, dock, drawer and apps back
+    // to the plain fallback icons. Say what's missing and keep the current
+    // theme instead.
+    var mb: [desk.MAX_NAME]u8 = undefined;
+    const missing = desk.iconThemeMissing(vals[idx], &mb);
+    if (missing.len > 0) {
+        var hb: [desk.MAX_NAME + 48]u8 = undefined;
+        var bb: [3 * desk.MAX_NAME + 256]u8 = undefined;
+        const heading = std.fmt.bufPrintZ(&hb, "\u{201c}{s}\u{201d} is incomplete", .{vals[idx]}) catch "This icon theme is incomplete";
+        const body = std.fmt.bufPrintZ(&bb, "It takes its icons from \u{201c}{s}\u{201d}, which isn't installed. Put {s} in ~/.icons as well (it usually comes in the same download), then pick this theme again. Your icons were left as they were.", .{ missing, missing }) catch "It takes its icons from another theme that isn't installed. Your icons were left as they were.";
+        const dialog = adw_alert_dialog_new(heading.ptr, body.ptr);
+        adw_alert_dialog_add_response(dialog, "ok", "OK");
+        hg.adw_dialog_present(@ptrCast(dialog), @ptrCast(row));
+        g_icon_reverting = true;
+        gtk.adw_combo_row_set_selected(row, g_icon_idx);
+        g_icon_reverting = false;
+        return;
+    }
+    g_icon_idx = idx;
     desk.applyIconTheme(vals[idx]);
     saveAndSignal();
 }
@@ -2889,6 +2917,7 @@ fn buildIconRow(group: *gtk.AdwPreferencesGroup) void {
     buf[vals.len] = null;
     gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&buf))));
     gtk.adw_combo_row_set_selected(row, selected_idx);
+    g_icon_idx = selected_idx;
     _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onIconChanged), null, null, 0);
 
     gtk.adw_preferences_group_add(group, @ptrCast(row));
