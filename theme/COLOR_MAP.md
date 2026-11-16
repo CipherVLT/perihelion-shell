@@ -1,9 +1,9 @@
-# Catppuccin → simpbar color map
+# Catppuccin → perihelionbar color map
 
-simpbar reads a flat JSON of named keys from `~/.config/simpbar/matugen.json`.
+perihelionbar reads a flat JSON of named keys from `~/.config/perihelionbar/matugen.json`.
 There is no internal Catppuccin (or named-palette) registry yet — only these keys.
 
-| simpbar key                 | Suggested Catppuccin role      | Notes                          |
+| perihelionbar key                 | Suggested Catppuccin role      | Notes                          |
 |----------------------------|--------------------------------|--------------------------------|
 | `bg_color`                 | `base` / `mantle`              | Bar background                 |
 | `text_color`               | `text`                         | Primary text                   |
@@ -28,7 +28,7 @@ There is no internal Catppuccin (or named-palette) registry yet — only these k
 
 ## Why wallpaper colors can look “wrong”
 
-simpbar only consumes the keys above. Matugen produces Material You roles
+perihelionbar only consumes the keys above. Matugen produces Material You roles
 (`primary`, `surface`, `on_surface`, …). The upstream template maps those
 roles into the keys. When you want a *named* Catppuccin look, use the static
 presets in `presets/` instead of (or after) a matugen run.

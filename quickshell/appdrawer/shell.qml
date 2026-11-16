@@ -61,7 +61,7 @@ ShellRoot {
 
         // Apply a random wallpaper with the drawer staying shut. Note there is
         // deliberately no `setWallpaper(path)`: Quickshell's IPC cannot marshal
-        // a string argument across the boundary, and `simpbar-wallpaper set <img>`
+        // a string argument across the boundary, and `perihelionbar-wallpaper set <img>`
         // is a better entry point for that anyway -- it owns the swaybg swap,
         // the matugen run and the state file, and needs no daemon running.
         function randomWallpaper() {

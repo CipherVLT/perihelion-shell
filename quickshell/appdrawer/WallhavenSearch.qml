@@ -6,7 +6,7 @@ import Quickshell.Io
 
 // Results of a wallhaven.cc search, as a preview grid source.
 //
-// A thin wrapper over `simpbar-wallpaper search <q> --thumbs --meta`, in the
+// A thin wrapper over `perihelionbar-wallpaper search <q> --thumbs --meta`, in the
 // same style as WallpaperModel: the engine owns the API call, the API key,
 // the purity gate and every wallhaven quirk (categories are filtered locally,
 // the single-wallpaper lookup needs a key, results come 24 to a page, and so
@@ -16,7 +16,7 @@ import Quickshell.Io
 //
 // Nothing is downloaded yet -- the
 // grid shows remote thumbnails, and clicking a tile is what fetches the full
-// wallpaper: `simpbar-wallpaper fetch <url> --apply`. That single command both
+// wallpaper: `perihelionbar-wallpaper fetch <url> --apply`. That single command both
 // lands it in the wallpaper folder and puts it on screen, so the picked tile
 // shows up in the local grid on the next refresh with the "current" badge
 // following it, exactly as if it had been downloaded from a terminal.
@@ -154,7 +154,7 @@ Singleton {
         // --pages 2: the first screenful is ~48 tiles, same as More presses.
         // The engine stops early at the last page, so short selections are
         // unaffected.
-        searcher.command = ["simpbar-wallpaper", "search", q, "--thumbs", "--meta", "--pages", "2"].concat(filterArgs());
+        searcher.command = ["perihelionbar-wallpaper", "search", q, "--thumbs", "--meta", "--pages", "2"].concat(filterArgs());
         searcher.running = true;
     }
 
@@ -174,7 +174,7 @@ Singleton {
         status = n > 1
             ? "Loading pages " + (page + 1) + "–" + (page + n) + " of " + lastPage + "…"
             : "Loading page " + (page + 1) + " of " + lastPage + "…";
-        searcher.command = ["simpbar-wallpaper", "search", query, "--thumbs", "--meta", "--page", String(page + 1), "--pages", String(n)].concat(filterArgs());
+        searcher.command = ["perihelionbar-wallpaper", "search", query, "--thumbs", "--meta", "--page", String(page + 1), "--pages", String(n)].concat(filterArgs());
         searcher.running = true;
     }
 
@@ -220,7 +220,7 @@ Singleton {
             return;
         applying = true;
         status = "Saving wallhaven-" + r.id + "…";
-        applier.command = ["simpbar-wallpaper", "fetch", r.full, "--apply"];
+        applier.command = ["perihelionbar-wallpaper", "fetch", r.full, "--apply"];
         applier.running = true;
     }
 }

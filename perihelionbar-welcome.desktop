@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Perihelion Bar Welcome
+Comment=Setup actions, keybindings, and links for the perihelionbar Hyprland setup
+Exec=perihelionbar-welcome
+Icon=perihelionbar-welcome
+Terminal=false
+Categories=Settings;
+StartupNotify=true

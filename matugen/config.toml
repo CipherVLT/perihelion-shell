@@ -1,5 +1,5 @@
-# matugen — Material You colorscheme generator, wired into simpbar + a whole
-# desktop: simpbar, MangoWM + Hyprland, foot terminal, GTK (nautilus/nemo),
+# matugen — Material You colorscheme generator, wired into perihelionbar + a whole
+# desktop: perihelionbar, MangoWM + Hyprland, foot terminal, GTK (nautilus/nemo),
 # Qt/qt6ct (dolphin), Vesktop & Equibop Discord clients, the Fluxer chat
 # client, Zen and the swaync notification center.
 #
@@ -21,14 +21,14 @@
 [config]
 version_check = false
 # Keep `matugen image` fully non-interactive — the wallpaper hook
-# (simpbar-wallpaper) runs it in the background with no terminal, and without an
+# (perihelionbar-wallpaper) runs it in the background with no terminal, and without an
 # explicit fallback + preference matugen stops to ask which source color to
 # use. closest-to-fallback keeps the picked color near the neutral teal
 # fallback below; change both to taste.
 fallback_color = "#80CBC4"
 prefer = "closest-to-fallback"
 
-# The wallpaper itself is owned by simpbar-wallpaper + swaybg
+# The wallpaper itself is owned by perihelionbar-wallpaper + swaybg
 # on this setup — matugen only recolors things, it must never set the
 # wallpaper. set = false + a no-op command keeps it that way (matugen 4.x
 # requires the command field to parse even when set is false).
@@ -36,23 +36,23 @@ prefer = "closest-to-fallback"
 set = false
 command = "true"
 
-# ═══════════════════════════ simpbar ═══════════════════════════
-# Renders the ten colors this bar draws into ~/.config/simpbar/matugen.json
-# (simpbar merges and applies whatever the file contains, key by key).
-[templates.simpbar]
-input_path = "~/.config/matugen/templates/simpbar.json"
-output_path = "~/.config/simpbar/matugen.json"
+# ═══════════════════════════ perihelionbar ═══════════════════════════
+# Renders the ten colors this bar draws into ~/.config/perihelionbar/matugen.json
+# (perihelionbar merges and applies whatever the file contains, key by key).
+[templates.perihelionbar]
+input_path = "~/.config/matugen/templates/perihelionbar.json"
+output_path = "~/.config/perihelionbar/matugen.json"
 # Live-reload the running bar AND the desktop widgets after the colors are
-# written — simpbar-shell takes the same SIGUSR1 (see reloadTheme in its
+# written — perihelionbar-shell takes the same SIGUSR1 (see reloadTheme in its
 # main.zig), otherwise the widgets keep yesterday's palette while the bar
 # moves. Uses pgrep (the bar's own pidfile can go stale across restarts);
 # harmless when neither is running.
-post_hook = "sh -c 'for P in simpbar simpbar-shell; do PID=$(pgrep -x \"$P\" | head -n1); [ -n \"$PID\" ] && kill -USR1 \"$PID\" 2>/dev/null || true; done'"
+post_hook = "sh -c 'for P in perihelionbar perihelionbar-shell; do PID=$(pgrep -x \"$P\" | head -n1); [ -n \"$PID\" ] && kill -USR1 \"$PID\" 2>/dev/null || true; done'"
 
 # ═══════════════════════════ Hyprland ═══════════════════════════
 # Generates ~/.config/hypr/matugen-colors.lua (exports the MD3 palette and
 # applies Material You borders via hl.config()). hyprland.lua must load it at
-# the END, after hyprland-simpbar so these colors win:
+# the END, after hyprland-perihelionbar so these colors win:
 #     pcall(require, "matugen-colors")
 [templates.hyprland]
 input_path = "~/.config/matugen/templates/hyprland-colors.lua"

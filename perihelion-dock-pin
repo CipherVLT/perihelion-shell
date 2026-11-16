@@ -5,7 +5,7 @@
     perihelion-dock-pin --unpin 3            (the dock's right-click "Unpin")
 
 Adds the app (its name, launch command and icon from the .desktop file) to
-the end of the pinned launchers in ~/.config/simpbar/config.json, which the
+the end of the pinned launchers in ~/.config/perihelionbar/config.json, which the
 dock shows left of the trash, then tells the bar and the dock to reload.
 An app that is already pinned is left alone.
 """
@@ -17,7 +17,7 @@ import signal
 import sys
 import tempfile
 
-CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "simpbar")
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "perihelionbar")
 CONFIG = os.path.join(CONFIG_DIR, "config.json")
 
 
@@ -86,7 +86,7 @@ def save(cfg):
         json.dump(cfg, f, indent=2)
         f.write("\n")
     os.replace(tmp, CONFIG)
-    signal_pidfile("simpbar.pid")
+    signal_pidfile("perihelionbar.pid")
     signal_pidfile("dock.pid")
 
 

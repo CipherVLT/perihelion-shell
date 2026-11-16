@@ -1,0 +1,157 @@
+const std = @import("std");
+const Build = std.Build;
+
+// zig-wayland exposes a build-time helper (Scanner) that turns protocol XML
+// into Zig source at build time. This import works because `wayland` is
+// declared as a dependency in build.zig.zon.
+const Scanner = @import("wayland").Scanner;
+
+pub fn build(b: *Build) !void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const wayland_dep = b.dependency("wayland", .{});
+
+    const scanner = Scanner.create(b, .{});
+
+    // Core protocol module produced by the scanner. We import specific
+    // interfaces from it below via `wayland.client.wl` / `.zwlr`.
+    const wayland_mod = b.createModule(.{ .root_source_file = scanner.result });
+
+    // Core Wayland interfaces we need: surfaces, shared memory, outputs.
+    scanner.addSystemProtocol("stable/xdg-shell/xdg-shell.xml");
+
+    // wlr-layer-shell is NOT part of upstream wayland-protocols — it's a
+    // wlroots extension. Vendor the XML yourself; see protocols/README.md.
+    scanner.addCustomProtocol(b.path("protocols/wlr-layer-shell-unstable-v1.xml"));
+
+    // Generate bindings up to the given protocol version. Bump these if you
+    // need newer requests/events.
+    scanner.generate("wl_compositor", 4);
+    scanner.generate("wl_shm", 1);
+    scanner.generate("wl_seat", 7);
+    scanner.generate("wl_output", 4);
+    scanner.generate("xdg_wm_base", 3);
+    scanner.generate("zwlr_layer_shell_v1", 4);
+
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("wayland", wayland_mod);
+    // gdk-pixbuf's hand-written Zig declarations (icontheme.zig's decoder).
+    exe_mod.addImport("gdkpixbuf", b.createModule(.{
+        .root_source_file = b.path("src/gdkpixbuf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }));
+    exe_mod.linkSystemLibrary("wayland-client", .{});
+    exe_mod.linkSystemLibrary("freetype2", .{}); // real Nerd Font/Unicode glyph rendering (src/font.zig)
+    exe_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{}); // tray icon-name -> PNG/SVG decode (src/icontheme.zig)
+    // No EGL/GLESv2/wayland-egl linkage: the bar presents exclusively through
+    // the wl_shm memfd path, so no GL stack is loaded into the process.
+    // gdk-pixbuf.h pulls in GLib headers that Zig's translate-c can't parse
+    // (back-to-back _Pragma(...) runs), so src/gdkpixbuf.zig declares the few
+    // calls we need by hand, like welcome_gtk.zig does for GTK. No C file is
+    // compiled.
+
+    const exe = b.addExecutable(.{
+        .name = "perihelion-bar",
+        .root_module = exe_mod,
+    });
+    // Zig 0.16 defaults Debug builds to the self-hosted x86 backend +
+    // self-hosted ELF linker, and both fall over on this project:
+    //   - the backend segfaults compiling the Debug binaries
+    //     ("process terminated with signal SEGV"), and
+    //   - zig ld cannot handle the R_X86_64_PC64 relocations in the
+    //     .sframe section that GCC 16's crt1.o ships
+    //     ("fatal linker error: unhandled relocation type ...
+    //      in crt1.o:.sframe").
+    // ReleaseFast already picks LLVM+LLD by mode default; pin both
+    // explicitly so every optimize mode builds the same way.
+    exe.use_llvm = true;
+    exe.use_lld = true;
+
+    _ = wayland_dep;
+
+    b.installArtifact(exe);
+
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    const run_step = b.step("run", "Run perihelionbar");
+    run_step.dependOn(&run_cmd.step);
+
+    // Unit tests: the ~40 `test` blocks at the bottom of src/main.zig (the
+    // file calls itself `main` as a module, so everything above is linker
+    // dead weight — the tests only pull what they exercise). Runs with
+    // `zig build test`; same module wiring as the exe, minus the install.
+    const tests = b.addTest(.{
+        .root_module = exe_mod,
+        .use_llvm = true, // same backend pin as the exe above
+        .use_lld = true,
+    });
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run src/main.zig unit tests");
+    test_step.dependOn(&run_tests.step);
+
+    // perihelionbar-welcome: separate GTK4/libadwaita companion app, independent
+    // of the bar above (no Wayland/freetype/gdk-pixbuf deps). Talks to
+    // GTK/libadwaita through hand-written extern bindings in
+    // src/welcome_gtk.zig rather than @cImport — see that file for why.
+    const welcome_mod = b.createModule(.{
+        .root_source_file = b.path("src/welcome_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    welcome_mod.linkSystemLibrary("gtk4", .{});
+    welcome_mod.linkSystemLibrary("libadwaita-1", .{});
+    welcome_mod.linkSystemLibrary("gobject-2.0", .{});
+    welcome_mod.linkSystemLibrary("glib-2.0", .{});
+    welcome_mod.linkSystemLibrary("gio-2.0", .{});
+
+    const welcome_exe = b.addExecutable(.{
+        .name = "perihelionbar-welcome",
+        .root_module = welcome_mod,
+    });
+    welcome_exe.use_llvm = true; // see perihelionbar exe above: Debug defaults SEGV/ld-lld
+    welcome_exe.use_lld = true;
+    b.installArtifact(welcome_exe);
+
+    const run_welcome_cmd = b.addRunArtifact(welcome_exe);
+    run_welcome_cmd.step.dependOn(b.getInstallStep());
+    const run_welcome_step = b.step("run-welcome", "Run perihelionbar-welcome");
+    run_welcome_step.dependOn(&run_welcome_cmd.step);
+
+    // perihelionbar-config: GUI for configuring the bar's appearance/module
+    // layout and creating/pinning desktop shortcuts. Same dep set as
+    // perihelionbar-welcome (no Wayland/freetype/gdk-pixbuf) — reuses
+    // src/welcome_gtk.zig's GObject bindings directly.
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path("src/config_main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    config_mod.linkSystemLibrary("gtk4", .{});
+    config_mod.linkSystemLibrary("libadwaita-1", .{});
+    config_mod.linkSystemLibrary("gobject-2.0", .{});
+    config_mod.linkSystemLibrary("glib-2.0", .{});
+    config_mod.linkSystemLibrary("gio-2.0", .{});
+
+    const config_exe = b.addExecutable(.{
+        .name = "perihelion-settings",
+        .root_module = config_mod,
+    });
+    config_exe.use_llvm = true; // see perihelionbar exe above: Debug defaults SEGV/ld-lld
+    config_exe.use_lld = true;
+    b.installArtifact(config_exe);
+
+    const run_config_cmd = b.addRunArtifact(config_exe);
+    run_config_cmd.step.dependOn(b.getInstallStep());
+    const run_config_step = b.step("run-config", "Run perihelionbar-config");
+    run_config_step.dependOn(&run_config_cmd.step);
+}

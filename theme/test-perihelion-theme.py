@@ -112,13 +112,13 @@ try:
     os.makedirs(os.path.join(cfg, "kitty"))
     with open(os.path.join(cfg, "mango", "config.conf"), "w", encoding="utf-8") as f:
         f.write("focus_color=0x8aadf4ff\n")
-    os.makedirs(os.path.join(cfg, "simpbar"))
-    with open(os.path.join(cfg, "simpbar", "theme"), "w", encoding="utf-8") as f:
+    os.makedirs(os.path.join(cfg, "perihelionbar"))
+    with open(os.path.join(cfg, "perihelionbar", "theme"), "w", encoding="utf-8") as f:
         f.write("flavor=macchiato\naccent=wallpaper\ntint=off\n")
 
     r = run(home, img("green-purple.png"))
     check(r.returncode == 0, "full run succeeds" + ("" if r.returncode == 0 else ": " + r.stderr))
-    with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
+    with open(os.path.join(cfg, "perihelionbar", "matugen.json"), encoding="utf-8") as f:
         mj = json.load(f)
     check(len([k for k in mj if k.endswith("_color")]) == 15 and mj["bg_color"] == "#24273a", "matugen.json: 15 keys, Macchiato base (theme file honored)")
     check(mj["bezel_color"] != mj["cava_color"] != mj["matrix_color"], "wave gradient gets three colors")
@@ -136,26 +136,26 @@ try:
           "Mango border follows the accent")
 
     # 4. Second run: nothing changes; a different wallpaper changes everything.
-    before = {p: pt.read(os.path.join(cfg, p)) for p in ("simpbar/matugen.json", "mango/config.conf")}
+    before = {p: pt.read(os.path.join(cfg, p)) for p in ("perihelionbar/matugen.json", "mango/config.conf")}
     run(home, img("green-purple.png"), "--force")
     check(all(pt.read(os.path.join(cfg, p)) == t for p, t in before.items()), "same wallpaper: same files, source line not repeated")
     run(home, img("dark-red.png"))
-    check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) != before["simpbar/matugen.json"], "new wallpaper: new colors")
+    check(pt.read(os.path.join(cfg, "perihelionbar", "matugen.json")) != before["perihelionbar/matugen.json"], "new wallpaper: new colors")
 
     # 5. Hand-edited files are left alone; "manual" turns it all off.
     with open(os.path.join(cfg, "fuzzel", "fuzzel.ini"), "w", encoding="utf-8") as f:
         f.write("[colors]\nbackground=000000ff\n")
     run(home, img("light.png"))
     check(pt.read(os.path.join(cfg, "fuzzel", "fuzzel.ini")) == "[colors]\nbackground=000000ff\n", "edited fuzzel colors kept")
-    with open(os.path.join(cfg, "simpbar", "config.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(cfg, "perihelionbar", "config.json"), "w", encoding="utf-8") as f:
         json.dump({"appearance": {"auto_theme": "manual"}}, f)
-    snap = pt.read(os.path.join(cfg, "simpbar", "matugen.json"))
+    snap = pt.read(os.path.join(cfg, "perihelionbar", "matugen.json"))
     r = run(home, img("green-purple.png"), "--force")
-    check(pt.read(os.path.join(cfg, "simpbar", "matugen.json")) == snap and "off" in r.stdout, "auto_theme manual: nothing written")
+    check(pt.read(os.path.join(cfg, "perihelionbar", "matugen.json")) == snap and "off" in r.stdout, "auto_theme manual: nothing written")
 
     # 6. fastfetch: Veyl OS's terminal-color layout (OS 31, WM 32, PC and
     # after 33), kept as is or restored from older 24-bit files.
-    os.remove(os.path.join(cfg, "simpbar", "config.json"))
+    os.remove(os.path.join(cfg, "perihelionbar", "config.json"))
     os.makedirs(os.path.join(share, "fastfetch"))
     veyl = """{
     "logo": {
@@ -244,7 +244,7 @@ try:
         with open(os.path.join(d, "config"), "w", encoding="utf-8") as f:
             f.write(cava_default)
     run(home, img("green-purple.png"), "--flavor", "mocha", "--force")
-    with open(os.path.join(cfg, "simpbar", "matugen.json"), encoding="utf-8") as f:
+    with open(os.path.join(cfg, "perihelionbar", "matugen.json"), encoding="utf-8") as f:
         mj = json.load(f)
     cv = pt.read(os.path.join(cfg, "cava", "config"))
     check(f"gradient_color_1 = '{mj['bezel_color']}'" in cv and f"gradient_color_3 = '{mj['matrix_color']}'" in cv,
@@ -339,7 +339,7 @@ try:
     check(open(own).read() == "/* mine */\n", "glass: a gtk.css of your own is left alone")
     r = run(gh, img("light.png"), "--force", "--glass", "off")
     check("--window-bg-color" not in open(os.path.join(g4, "perihelion-glass.css")).read(), "glass: off empties it")
-    with open(os.path.join(gh, ".config", "simpbar", "config.json"), "w") as f:
+    with open(os.path.join(gh, ".config", "perihelionbar", "config.json"), "w") as f:
         json.dump({"appearance": {"auto_theme": "manual"}}, f)
     run(gh, "--glass", "on")
     check("--window-bg-color" in open(os.path.join(g4, "perihelion-glass.css")).read(),
@@ -431,19 +431,19 @@ try:
     d = dry(tmp, "--color", "#3366cc", "--palette", "custom/sunset", "--tint", "off")
     check(d["matugen"]["bg_color"] == "#1b1020" and d["matugen"]["border_color"] == "#ff7a59",
           "your palette: background and accent used, the rest derived")
-    os.makedirs(os.path.join(tmp, ".config", "simpbar"), exist_ok=True)
-    with open(os.path.join(tmp, ".config", "simpbar", "theme"), "w") as f:
+    os.makedirs(os.path.join(tmp, ".config", "perihelionbar"), exist_ok=True)
+    with open(os.path.join(tmp, ".config", "perihelionbar", "theme"), "w") as f:
         f.write("style=catppuccin\npalette=custom/sunset\ntint=off\n")
     r = run(tmp, "--color", "#3366cc")
-    mj = json.load(open(os.path.join(tmp, ".config", "simpbar", "matugen.json")))
+    mj = json.load(open(os.path.join(tmp, ".config", "perihelionbar", "matugen.json")))
     check(r.returncode == 0 and mj["bg_color"] == "#1b1020", "theme file palette=custom/sunset: full run")
     with open(os.path.join(mine, "sunset.json"), "w") as f:
         json.dump({"colors": {"background": "#102030", "foreground": "#ffffff", "accent": "#ff7a59"}}, f)
     os.utime(os.path.join(mine, "sunset.json"), (1, 2_000_000_000))
     run(tmp, "--color", "#3366cc")
-    mj = json.load(open(os.path.join(tmp, ".config", "simpbar", "matugen.json")))
+    mj = json.load(open(os.path.join(tmp, ".config", "perihelionbar", "matugen.json")))
     check(mj["bg_color"] == "#102030", "your palette edited: recolored at the next run")
-    with open(os.path.join(tmp, ".config", "simpbar", "theme"), "w") as f:
+    with open(os.path.join(tmp, ".config", "perihelionbar", "theme"), "w") as f:
         f.write("palette=custom/broken\ntint=off\n")
     r = run(tmp, "--color", "#1e1e2e", "--force")
     check(r.returncode == 0 and "colors.background" in r.stderr, "broken palette: says why, falls back to Catppuccin")

@@ -6,7 +6,7 @@ import Quickshell.Io
 
 // Theme tokens.
 //
-// Colours come from matugen's generated file -- the same source simpbar's bar
+// Colours come from matugen's generated file -- the same source perihelionbar's bar
 // already follows -- so the drawer and the bar repaint together when the
 // wallpaper changes. JsonAdapter maps each declared property to a JSON key of
 // the same name, so these are live bindings rather than a parsed blob.
@@ -23,7 +23,7 @@ Singleton {
         // drops this config into every user's ~/.config/quickshell, so a
         // hardcoded home directory would point at the wrong user's matugen
         // output (or nothing at all) on every install but the developer's.
-        path: Quickshell.env("HOME") + "/.config/simpbar/matugen.json"
+        path: Quickshell.env("HOME") + "/.config/perihelionbar/matugen.json"
         // matugen rewrites this file on wallpaper change.
         watchChanges: true
         blockLoading: true
@@ -93,7 +93,7 @@ Singleton {
     // a small gap), and follows changes made in Perihelion Settings.
     FileView {
         id: barCfg
-        path: Quickshell.env("HOME") + "/.config/simpbar/config.json"
+        path: Quickshell.env("HOME") + "/.config/perihelionbar/config.json"
         watchChanges: true
         onFileChanged: reload()
     }

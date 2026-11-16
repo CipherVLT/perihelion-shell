@@ -18,9 +18,9 @@ mkdir -p "${out}"
 work=$(mktemp -d)
 export HOME="${work}/home" XDG_RUNTIME_DIR="${work}/run"
 export XDG_CONFIG_HOME="${HOME}/.config" XDG_CACHE_HOME="${HOME}/.cache" XDG_STATE_HOME="${HOME}/.local/state"
-mkdir -p "${HOME}/.config/simpbar" "${HOME}/.config/mango/cfg" "${XDG_RUNTIME_DIR}" "${work}/fake"
+mkdir -p "${HOME}/.config/perihelionbar" "${HOME}/.config/mango/cfg" "${XDG_RUNTIME_DIR}" "${work}/fake"
 chmod 700 "${XDG_RUNTIME_DIR}"
-unset WAYLAND_DISPLAY DISPLAY SIMPBAR_DOCK
+unset WAYLAND_DISPLAY DISPLAY PERIHELIONBAR_DOCK
 export PATH="${work}/fake:${bin}:${PATH}"
 # Software drawing; no portal or accessibility bus to wait for.
 export GSK_RENDERER=cairo GDK_BACKEND=wayland GTK_A11Y=none ADW_DISABLE_PORTAL=1 NO_AT_BRIDGE=1
@@ -76,7 +76,7 @@ chmod +x "${work}/fake/nmcli"
 
 font=$(fc-match -f '%{file}' monospace)
 write_bar_config() {  # $1 = dock border true|false
-    cat > "${HOME}/.config/simpbar/config.json" <<JSON
+    cat > "${HOME}/.config/perihelionbar/config.json" <<JSON
 {"appearance":{"font_path":"${font}","position":"top","bg_opacity_percent":55},
  "dock":{"enabled":true,"border":$1,"shrink":true,"trash":true,"app_drawer":true,"media":true}}
 JSON
@@ -136,21 +136,21 @@ FAKE_VPN=down settings_shot Network network-vpn-disconnected
 echo "Theme mode"
 theme() { PERIHELION_GLASS_FORCE=1 python3 -I "${repo}/perihelion-theme" --color '#d9a441' --force "$@" >/dev/null 2>&1; }
 # Auto mode with a light palette: light window glass (the look in the report).
-printf 'mode=auto\npalette=catppuccin-latte\n' > "${HOME}/.config/simpbar/theme"
+printf 'mode=auto\npalette=catppuccin-latte\n' > "${HOME}/.config/perihelionbar/theme"
 theme --palette catppuccin-latte --mode auto
 settings_shot Appearance theme-1-auto-light-palette
 # Dark picked in Settings, light glass still on disk: Settings must be dark at once.
-printf 'mode=dark\npalette=catppuccin-latte\n' > "${HOME}/.config/simpbar/theme"
+printf 'mode=dark\npalette=catppuccin-latte\n' > "${HOME}/.config/perihelionbar/theme"
 settings_shot Appearance theme-2-dark-over-stale-light-glass
 # After perihelion-theme has rewritten the glass for Dark.
 theme --palette catppuccin-latte --mode dark
 settings_shot Appearance theme-3-dark
 settings_shot XWayland theme-4-dark-mango-page
-rm -rf "${HOME}/.config/gtk-4.0" "${HOME}/.config/gtk-3.0" "${HOME}/.config/simpbar/theme"
+rm -rf "${HOME}/.config/gtk-4.0" "${HOME}/.config/gtk-3.0" "${HOME}/.config/perihelionbar/theme"
 
 echo "Dock"
 dock_shots() {  # $1 = label
-    SIMPBAR_DOCK=1 setsid -f perihelion-bar >>"${work}/bar.log" 2>&1
+    PERIHELIONBAR_DOCK=1 setsid -f perihelion-bar >>"${work}/bar.log" 2>&1
     sleep 2
     shot "dock-$1" -g "450,930 600x70"
     # the pointer over the launcher, at the left end

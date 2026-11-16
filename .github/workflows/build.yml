@@ -1,4 +1,4 @@
-# Compile check: builds the bar, Simpbar Config and simpbar-shell on Fedora
+# Compile check: builds the bar, Perihelion Bar Config and perihelionbar-shell on Fedora
 # with the same Zig release Perihelion's ISO uses, and checks the scripts.
 name: Build
 
@@ -45,14 +45,14 @@ jobs:
             tar -xJf zig.tar.xz --strip-components=1 && rm zig.tar.xz*
           fi
           /opt/zig/zig version
-      - name: Build the bar and Simpbar Config
-        working-directory: simpbar
+      - name: Build the bar and Perihelion Bar Config
+        working-directory: perihelionbar
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
       - name: Unit-test the single-copy module
-        working-directory: simpbar
+        working-directory: perihelionbar
         run: /opt/zig/zig test src/singleton.zig -lc
       - name: Unit-test the Network page's nmcli parser
-        working-directory: simpbar
+        working-directory: perihelionbar
         run: /opt/zig/zig test src/network.zig -lc
       - name: "Live test: one bar and one dock under every toggle"
         run: |
@@ -61,7 +61,7 @@ jobs:
           dnf5 install -y --setopt=install_weak_deps=False \
             sway procps-ng fontconfig dejavu-sans-mono-fonts util-linux gawk findutils
           useradd -m tester
-          cp -r simpbar/zig-out/bin /tmp/perihelion-bin && chmod -R a+rX /tmp/perihelion-bin
+          cp -r perihelionbar/zig-out/bin /tmp/perihelion-bin && chmod -R a+rX /tmp/perihelion-bin
           cp tests/singleton-live.sh /tmp/ && chmod a+rx /tmp/singleton-live.sh
           # Fedora's sway carries a file capability the container can't
           # grant (exec fails); a plain copy has none.
@@ -96,8 +96,8 @@ jobs:
           name: screenshots
           path: /tmp/shots
           if-no-files-found: warn
-      - name: Build simpbar-shell
-        working-directory: simpbar-shell
+      - name: Build perihelionbar-shell
+        working-directory: perihelionbar-shell
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
       - name: Check the app drawer's QML parses
         run: |

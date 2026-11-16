@@ -11,9 +11,9 @@
 # Author: XeroLinux Team
 # License: GPL-3.0
 #
-# Featherlite system installer (maintained inside the simpbar repo): base
+# Featherlite system installer (maintained inside the perihelionbar repo): base
 # system + first-boot WM staging (the full desktop still comes from the
-# simpbar installer, auto-opened on first login), Limine bootloader instead
+# perihelionbar installer, auto-opened on first login), Limine bootloader instead
 # of GRUB. Base-system flow otherwise unchanged from upstream v2.0.0.
 
 set -Eeuo pipefail
@@ -2108,7 +2108,7 @@ select_firstboot() {
 
     gum style --foreground 245 --margin "0 2" \
         "Phase 1 installs only the window manager + a terminal." \
-        "On first login the terminal opens with the simpbar" \
+        "On first login the terminal opens with the perihelionbar" \
         "installer running — that is what builds the desktop."
     echo ""
 
@@ -2809,17 +2809,17 @@ install_extra_software() {
 # ────────────────────────────────────────────────────────────────────────────────
 # Installs the chosen WM, its portal and the terminal into the target,
 # then writes the trigger that opens install.sh on first graphical login:
-# a WM autostart stub calling /usr/local/bin/simpbar-firstboot.
+# a WM autostart stub calling /usr/local/bin/perihelionbar-firstboot.
 #
 # Exactly-once mechanics (install.sh merges configs, never deletes, so the
 # trigger must clean up after itself):
-#   * every stub file carries a `# simpbar-firstboot stub` marker;
+#   * every stub file carries a `# perihelionbar-firstboot stub` marker;
 #   * the launcher fires the installer while no done-file exists;
 #   * the first run WITH the done-file present (written by install.sh on
 #     success — including a manual TTY run before any graphical login)
 #     removes every marker-bearing stub and exits silently.
 # A user who never wants the auto-launch just runs
-# `touch ~/.config/simpbar/.firstboot-done` once.
+# `touch ~/.config/perihelionbar/.firstboot-done` once.
 #
 # Failure policy matches the rest of phase 1: warn, never abort.
 install_firstboot_wm() {
@@ -2885,25 +2885,25 @@ MANGOSESSIONEOF
 
     # ── 3. terminal choice + launcher ───────────────────────────────
     # Choice file mirrors the browser-choice pattern (data, not code).
-    mkdir -p "$th/.config/simpbar"
-    printf '%s\n' "${CONFIG[firstboot_term]}" > "$th/.config/simpbar/terminal-choice" 2>/dev/null \
+    mkdir -p "$th/.config/perihelionbar"
+    printf '%s\n' "${CONFIG[firstboot_term]}" > "$th/.config/perihelionbar/terminal-choice" 2>/dev/null \
         || { show_warning "terminal-choice not recorded"; echo "WARN: terminal-choice not recorded" >> "$th/firstboot-install.log"; }
 
-    cat > "$MOUNTPOINT/usr/local/bin/simpbar-firstboot" << 'FIRSTBOOTEOF'
+    cat > "$MOUNTPOINT/usr/local/bin/perihelionbar-firstboot" << 'FIRSTBOOTEOF'
 #!/bin/sh
-# Featherlite first-boot: open the simpbar desktop installer in the user's
+# Featherlite first-boot: open the perihelionbar desktop installer in the user's
 # terminal. Fires on every graphical login UNTIL install.sh records success
-# (~/.config/simpbar/.firstboot-done); the first run past that point
+# (~/.config/perihelionbar/.firstboot-done); the first run past that point
 # removes the stub autostart files (marker-checked below, so real configs
 # are never touched) and exits silently. To opt out without installing:
-# touch ~/.config/simpbar/.firstboot-done
-# Everything below logs to ~/.cache/simpbar-firstboot.log — autostart
+# touch ~/.config/perihelionbar/.firstboot-done
+# Everything below logs to ~/.cache/perihelionbar-firstboot.log — autostart
 # failures are otherwise invisible (no terminal exists yet to show them).
 set -u
 mkdir -p "$HOME/.cache" 2>/dev/null || true
-exec >>"$HOME/.cache/simpbar-firstboot.log" 2>&1
-MARKER="simpbar-firstboot stub"
-DONE="$HOME/.config/simpbar/.firstboot-done"
+exec >>"$HOME/.cache/perihelionbar-firstboot.log" 2>&1
+MARKER="perihelionbar-firstboot stub"
+DONE="$HOME/.config/perihelionbar/.firstboot-done"
 if [ -f "$DONE" ]; then
     # Done: retract the stubs (only files still carrying our marker) and go
     # quiet. The mango stubs share their paths with the real config, which
@@ -2927,14 +2927,14 @@ if [ -f "$DONE" ]; then
     fi
     exit 0
 fi
-TERM_BIN="$(cat "$HOME/.config/simpbar/terminal-choice" 2>/dev/null)"
+TERM_BIN="$(cat "$HOME/.config/perihelionbar/terminal-choice" 2>/dev/null)"
 [ -n "$TERM_BIN" ] || TERM_BIN="foot"
 echo "firstboot start $(date) term=$TERM_BIN"
 if ! command -v "$TERM_BIN" >/dev/null 2>&1; then
     echo "terminal $TERM_BIN not found — cannot open installer"
     exit 0
 fi
-INSTALL_CMD='curl -sSL https://raw.githubusercontent.com/jaytheoutpatient/simpbar/main/install.sh | bash'
+INSTALL_CMD='curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash'
 if [ "$TERM_BIN" = "kitty" ]; then
     exec "$TERM_BIN" bash -c "$INSTALL_CMD; exec bash"
 elif [ "$TERM_BIN" = "wezterm" ]; then
@@ -2943,8 +2943,8 @@ else
     exec "$TERM_BIN" -e bash -c "$INSTALL_CMD; exec bash"
 fi
 FIRSTBOOTEOF
-    chmod 755 "$MOUNTPOINT/usr/local/bin/simpbar-firstboot" 2>/dev/null \
-        || { show_warning "/usr/local/bin/simpbar-firstboot not installed"; echo "WARN: simpbar-firstboot not installed" >> "$th/firstboot-install.log"; }
+    chmod 755 "$MOUNTPOINT/usr/local/bin/perihelionbar-firstboot" 2>/dev/null \
+        || { show_warning "/usr/local/bin/perihelionbar-firstboot not installed"; echo "WARN: perihelionbar-firstboot not installed" >> "$th/firstboot-install.log"; }
 
     # ── 4. WM autostart stubs (marker-bearing, retracted above) ─────
     if [[ "${CONFIG[firstboot_wm]}" == "mango" ]]; then
@@ -2956,17 +2956,17 @@ FIRSTBOOTEOF
         # (same filename merge).
         mkdir -p "$th/.config/mango/cfg"
         cat > "$th/.config/mango/config.conf" << MANGOCONFSTUBEOF
-# simpbar-firstboot stub — launches the desktop installer once, then
-# retracts itself (see /usr/local/bin/simpbar-firstboot). Overwritten by
+# perihelionbar-firstboot stub — launches the desktop installer once, then
+# retracts itself (see /usr/local/bin/perihelionbar-firstboot). Overwritten by
 # the real config when install.sh runs.
 source=~/.config/mango/cfg/autostart.conf
 bind=SUPER,Return,spawn,${CONFIG[firstboot_term]}
 MANGOCONFSTUBEOF
         cat > "$th/.config/mango/cfg/autostart.conf" << 'MANGOSTUBEOF'
-# simpbar-firstboot stub — launches the desktop installer once, then
-# retracts itself (see /usr/local/bin/simpbar-firstboot). Overwritten by
+# perihelionbar-firstboot stub — launches the desktop installer once, then
+# retracts itself (see /usr/local/bin/perihelionbar-firstboot). Overwritten by
 # the real config when install.sh runs.
-exec_once = /usr/local/bin/simpbar-firstboot
+exec_once = /usr/local/bin/perihelionbar-firstboot
 MANGOSTUBEOF
     else
         # Hyprland 0.55+ loads hyprland.lua when present and otherwise falls
@@ -2978,18 +2978,18 @@ MANGOSTUBEOF
         # that install.sh deploys has no marker and is left alone).
         mkdir -p "$th/.config/hypr"
         cat > "$th/.config/hypr/hyprland.lua" << HYPRLUASTUBEOF
--- simpbar-firstboot stub — launches the desktop installer once, then
--- retracts itself (see /usr/local/bin/simpbar-firstboot). Overwritten by
+-- perihelionbar-firstboot stub — launches the desktop installer once, then
+-- retracts itself (see /usr/local/bin/perihelionbar-firstboot). Overwritten by
 -- the real config when install.sh runs.
 hl.on("hyprland.start", function()
-    hl.exec_cmd("/usr/local/bin/simpbar-firstboot")
+    hl.exec_cmd("/usr/local/bin/perihelionbar-firstboot")
 end)
 hl.bind("SUPER + Return", hl.dsp.exec_cmd("${CONFIG[firstboot_term]}"))
 HYPRLUASTUBEOF
         cat > "$th/.config/hypr/hyprland.conf" << HYPRCONFSTUBEOF
-# simpbar-firstboot stub — launches the desktop installer once, then
-# retracts itself (see /usr/local/bin/simpbar-firstboot).
-exec-once = /usr/local/bin/simpbar-firstboot
+# perihelionbar-firstboot stub — launches the desktop installer once, then
+# retracts itself (see /usr/local/bin/perihelionbar-firstboot).
+exec-once = /usr/local/bin/perihelionbar-firstboot
 bind = SUPER, Return, exec, ${CONFIG[firstboot_term]}
 HYPRCONFSTUBEOF
     fi
@@ -3076,11 +3076,11 @@ perform_installation() {
             "$_fb_done + terminal staged for first boot." \
             "" \
             "Remove the installation media and reboot, log in" \
-            "via ly — a terminal opens with the simpbar" \
+            "via ly — a terminal opens with the perihelionbar" \
             "desktop installer running." \
             "" \
             "If it doesn't open, run post-reboot:" \
-            "  curl -sSL https://raw.githubusercontent.com/jaytheoutpatient/simpbar/main/install.sh | bash"
+            "  curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash"
     else
         gum style --foreground 82 --bold --border double --border-foreground 82 \
             --align center --width 60 --margin "1 2" --padding "1 2" \
@@ -3089,13 +3089,13 @@ perform_installation() {
             "No desktop environment was installed — that is intentional." \
             "" \
             "Remove the installation media and reboot, then set up" \
-            "the simpbar desktop:" \
-            "  curl -sSL https://raw.githubusercontent.com/jaytheoutpatient/simpbar/main/install.sh | bash"
+            "the perihelionbar desktop:" \
+            "  curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash"
     fi
     echo ""
     # Auto-reboot: the base install is complete and the ISO environment is
     # done — unmount, sync, and reboot so first boot lands in the new system
-    # (ly → first-boot WM staging, which opens the simpbar desktop
+    # (ly → first-boot WM staging, which opens the perihelionbar desktop
     # installer). Countdown is cancellable with Ctrl+C.
     echo "Rebooting in 10 seconds (press Ctrl+C to cancel)..."
     for _rb in 10 9 8 7 6 5 4 3 2 1; do
@@ -3562,10 +3562,10 @@ ID=featherlite
 ID_LIKE=arch
 BUILD_ID=rolling
 ANSI_COLOR="0;36"
-HOME_URL="https://github.com/jaytheoutpatient/simpbar"
+HOME_URL="https://github.com/CipherVLT/perihelion-shell"
 DOCUMENTATION_URL="https://wiki.archlinux.org/"
-SUPPORT_URL="https://github.com/jaytheoutpatient/simpbar"
-BUG_REPORT_URL="https://github.com/jaytheoutpatient/simpbar/issues"
+SUPPORT_URL="https://github.com/CipherVLT/perihelion-shell"
+BUG_REPORT_URL="https://github.com/CipherVLT/perihelion-shell/issues"
 LOGO=archlinux
 FEATHEROS
 
@@ -3573,7 +3573,7 @@ FEATHEROS
 
     # bluez is already in the critical base set, but Arch ships
     # bluetooth.service disabled. Enable it so the adapter is ready at login:
-    # the simpbar drawer's Bluetooth tab talks to bluez over D-Bus and would
+    # the perihelionbar drawer's Bluetooth tab talks to bluez over D-Bus and would
     # otherwise show "No adapter" until the service is started by hand.
     arch-chroot "$MOUNTPOINT" systemctl enable bluetooth.service \
         || show_warning "Could not enable bluetooth.service — enable it manually after reboot: systemctl enable --now bluetooth"
@@ -3655,7 +3655,7 @@ write_limine_conf() {
     {
         echo "timeout: 5"
         echo "default_entry: 1"
-        # Menu footer branding — simpbar-config's Boot tab picks this up as
+        # Menu footer branding — perihelionbar-config's Boot tab picks this up as
         # its default and restyles it (colors/wallpaper) on demand.
         echo "interface_branding: Featherlite"
         echo ""

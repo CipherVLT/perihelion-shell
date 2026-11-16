@@ -8,7 +8,7 @@ import Quickshell.Io
 // Linux glyph) to a Nerd Font linux-* logo codepoint, and exposes it as a
 // QML string for a Text item to render. Nerd Font rather than an icon-theme
 // file because the glyph is guaranteed present (same font file the bar
-// renders its icons from, installed by the simpbar installer) while a
+// renders its icons from, installed by the perihelionbar installer) while a
 // themed distributor-logo file may or may not exist. Every codepoint below
 // was verified present in JetBrainsMonoNerdFont-Regular.ttf.
 Singleton {
@@ -45,7 +45,7 @@ Singleton {
         "manjaro": 0xf312, "arcolinux": 0xf346, "archcraft": 0xf345,
         "crystal": 0xf348, "xerolinux": 0xf34a, "biglinux": 0xf347,
         // Featherlite is Arch-based with no Nerd Font glyph of its own, so
-        // it wears the Arch logo (mirrored in simpbar/src/main.zig).
+        // it wears the Arch logo (mirrored in perihelionbar/src/main.zig).
         "featherlite": 0xf303,
         "debian": 0xf306, "ubuntu": 0xf31b, "pop": 0xf32a, "pop_os": 0xf32a,
         "linuxmint": 0xf30e, "zorin": 0xf32f, "elementary": 0xf309,

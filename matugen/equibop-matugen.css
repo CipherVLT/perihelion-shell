@@ -9,7 +9,7 @@
  * NOTE: This file is a matugen template.
  * matugen replaces the Material You tokens (e.g. colors.primary.dark.hex)
  * throughout this file on every wallpaper change. Files:
- *   template:  ~/simpbar/matugen/equibop-matugen.css
+ *   template:  ~/perihelionbar/matugen/equibop-matugen.css
  *   output:    ~/.config/equibop/themes/matugen.theme.css
  * Enabled automatically in ~/.config/equibop/settings/settings.json by the
  * matugen post_hook. Status colors (online/idle/dnd) keep Discord semantics.

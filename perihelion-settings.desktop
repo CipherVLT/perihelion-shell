@@ -7,6 +7,6 @@ Exec=perihelion-settings
 Icon=perihelion-settings
 Terminal=false
 Categories=Settings;DesktopSettings;
-Keywords=bar;dock;theme;colors;wallpaper;widgets;simpbar;
+Keywords=bar;dock;theme;colors;wallpaper;widgets;perihelionbar;
 StartupNotify=true
 StartupWMClass=io.github.ciphervlt.perihelion.Settings
