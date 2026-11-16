@@ -76,8 +76,10 @@ jobs:
       - name: "Pictures: every Settings page and the dock, on a headless compositor"
         run: |
           dnf5 install -y --setopt=install_weak_deps=False \
-            grim swaybg dbus-daemon ImageMagick adwaita-icon-theme adwaita-sans-fonts \
-            papirus-icon-theme numix-icon-theme-circle
+            grim swaybg dbus-daemon ImageMagick adwaita-icon-theme adwaita-sans-fonts
+          # Icon packs for the dock pictures; any Fedora no longer ships is skipped.
+          dnf5 install -y --setopt=install_weak_deps=False --skip-unavailable \
+            papirus-icon-theme numix-icon-theme numix-icon-theme-circle
           mkdir -p /tmp/shots-repo && cp -r tests perihelion-theme theme /tmp/shots-repo/ && chmod -R a+rX /tmp/shots-repo
           mkdir -p /tmp/shots && chown tester /tmp/shots
           runuser -u tester -- env SWAY=/tmp/sway dbus-run-session -- \
