@@ -1941,7 +1941,7 @@ const G_LAYOUT = [_]Group{
         oTg(.layout, "dwindle_manual_split", false, "Manual splits", ""),
     } },
     .{ .title = "Scroller", .opts = &.{
-        oNum(.layout, "scroller_structs", 20, 0, 512, 1, "Side margin (px)", "Space kept free beside a full-width window."),
+        oNum(.layout, "scroller_structs", 20, 0, 300, 1, "Side margin (px)", "Space kept free beside a full-width window."),
         oFlt(.layout, "scroller_default_proportion", 0.9, 0.1, 1.0, 0.05, "New window width", "As a share of the screen."),
         oTg(.layout, "scroller_ignore_proportion_single", true, "A single window ignores widths", ""),
         oFlt(.layout, "scroller_default_proportion_single", 1.0, 0.1, 1.0, 0.05, "Single window width", "Used when the row above is off."),
@@ -1990,11 +1990,11 @@ const G_MISC = [_]Group{
         oFlt(.misc, "scratchpad_height_ratio", 0.9, 0.1, 1.0, 0.05, "Height", ""),
     } },
     .{ .title = "Overview", .opts = &.{
-        oNum(.misc, "overview_gap_inner", 5, 0, 1000, 1, "Gap between windows (px)", ""),
-        oNum(.misc, "overview_gap_outer", 30, 0, 1000, 1, "Gap to the screen edge (px)", ""),
+        oNum(.misc, "overview_gap_inner", 5, 0, 300, 1, "Gap between windows (px)", ""),
+        oNum(.misc, "overview_gap_outer", 30, 0, 300, 1, "Gap to the screen edge (px)", ""),
         oTg(.misc, "enable_hotarea", false, "Hot corner", "Moving the pointer into a screen corner opens the overview."),
         oCmb(.misc, "hotarea_corner", "2", &CORNER_LABELS, &CORNER_VALUES, "Corner", ""),
-        oNum(.misc, "hotarea_size", 10, 1, 1000, 1, "Corner size (px)", ""),
+        oNum(.misc, "hotarea_size", 10, 1, 300, 1, "Corner size (px)", ""),
         oTg(.misc, "hotarea_disable_on_fullscreen", true, "Not while a window is fullscreen", ""),
     } },
     .{ .title = "Configuration", .opts = &.{
@@ -2005,8 +2005,8 @@ const G_MISC = [_]Group{
 // -- Render -----------------------------------------------------------
 
 const G_RENDER = [_]Group{
-    .{ .title = "Frames", .desc = "Variable refresh rate (VRR) and HDR are set per monitor, on the Monitors page.", .opts = &.{
-        oCmb(.misc, "allow_tearing", "0", &TEAR_LABELS, &TEAR_VALUES, "Tearing", "Lets games show a frame the moment it is ready: lower input lag, at the cost of visible tear lines. Add a force_tearing window rule for the game as well."),
+    .{ .title = "Tearing", .opts = &.{
+        oCmb(.misc, "allow_tearing", "0", &TEAR_LABELS, &TEAR_VALUES, "Allow tearing", "A game shows each frame the moment it is ready: the lowest input lag, at the cost of visible tear lines. Fullscreen windows only is the usual choice for games. A window can also be forced with a force_tearing window rule."),
     } },
     .{ .title = "Effects", .opts = &.{
         oTg(.appearance, "blur_optimized", true, "Cache the blurred wallpaper", "The frost behind glass is made once per wallpaper instead of every frame. Turning this off blurs live windows too, at a real GPU cost."),
@@ -2017,7 +2017,7 @@ const G_RENDER = [_]Group{
 
 const G_CURSOR = [_]Group{
     .{ .title = "Behaviour", .opts = &.{
-        oNum(.misc, "cursor_hide_timeout", 0, 0, 3600, 1, "Hide when idle (seconds)", "0 never hides it."),
+        oNum(.misc, "cursor_hide_timeout", 0, 0, 300, 1, "Hide when idle (seconds)", "0 never hides it."),
         oTg(.misc, "cursor_hide_on_keypress", false, "Hide while typing", ""),
         oTg(.misc, "warp_cursor", true, "Jump to the focused window", "Changing focus with the keyboard moves the pointer to that window."),
         oTg(.misc, "drag_warp_cursor", true, "Follow a window dragged into a tile", ""),
@@ -2184,7 +2184,7 @@ fn addOpt(group: *gtk.AdwPreferencesGroup, o: *const Opt) void {
             gtk.gtk_widget_set_valign(@ptrCast(spin), gtk.ALIGN_CENTER);
             const handler: gtk.GCallback = if (is_float) @ptrCast(&onOptFloat) else @ptrCast(&onFieldSpin);
             _ = gtk.g_signal_connect_data(@ptrCast(spin), "value-changed", handler, @ptrCast(fieldFor(doc, o.key, is_float, null)), null, 0);
-            gtk.adw_action_row_add_suffix(row, @ptrCast(spin));
+            hp.attachNumber(row, spin); // a slider
             gtk.adw_preferences_group_add(group, @ptrCast(row));
         },
         .text => {
@@ -2253,7 +2253,9 @@ fn addInfoRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, text: []cons
 // compositor (read when Mango starts, before it opens the GPU).
 // ---------------------------------------------------------------------
 
-const EnvToggle = struct { name: []const u8, value: []const u8 };
+/// `inverted`: the switch is ON while the variable is absent (the variable
+/// turns something off).
+const EnvToggle = struct { name: []const u8, value: []const u8, inverted: bool = false };
 
 fn envLineIndex(name: []const u8) ?usize {
     for (doc_env.lines.items, 0..) |l, i| {
@@ -2287,14 +2289,15 @@ fn setEnvToggle(t: *const EnvToggle, on: bool) void {
 
 fn onEnvToggle(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
     const t: *const EnvToggle = @ptrCast(@alignCast(user_data.?));
-    setEnvToggle(t, gtk.gtk_switch_get_active(sw) != 0);
+    setEnvToggle(t, (gtk.gtk_switch_get_active(sw) != 0) != t.inverted);
 }
 
 fn addEnvToggle(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, sub: [:0]const u8, t: *const EnvToggle) void {
-    hp.addSwitchRow(group, title, sub, envIs(t), @ptrCast(&onEnvToggle), @ptrCast(@constCast(t)));
+    hp.addSwitchRow(group, title, sub, envIs(t) != t.inverted, @ptrCast(&onEnvToggle), @ptrCast(@constCast(t)));
 }
 
 const ENV_SOFT_CURSOR = EnvToggle{ .name = "WLR_NO_HARDWARE_CURSORS", .value = "1" };
+const ENV_NO_SCANOUT = EnvToggle{ .name = "WLR_SCENE_DISABLE_DIRECT_SCANOUT", .value = "1", .inverted = true };
 
 // ---------------------------------------------------------------------
 // Pages
@@ -2341,9 +2344,133 @@ fn buildMiscPage() *gtk.GtkBox {
     return outer;
 }
 
+// Variable refresh rate. Mango has two real controls: `vrr` on each
+// monitor_rule (always on for that monitor) and the window rule
+// vrr_only_fullscreen (VRR only while that window is fullscreen, with the
+// monitor's own vrr at 0). The row below sets them together.
+const VRR_RULE = "vrr_only_fullscreen:1,app_id:.*";
+const VRR_LABELS = [_][*:0]const u8{ "Off", "Fullscreen windows only", "Always on" };
+const VRR_SUB = "Fullscreen windows only keeps the desktop at a steady refresh rate and uses VRR just for a fullscreen game or video. That avoids the stutter VRR causes on the desktop, where the rate jumps every time the pointer moves: laggy drag and drop, juddering video.";
+const VRR_SUB_NEEDS_MONITORS = "Always on is set per monitor, and no monitor is listed yet: open Monitors, press Auto-detect, then choose it again. " ++ VRR_SUB;
+
+fn vrrRuleIndex() ?usize {
+    var i: usize = 0;
+    while (i < doc_rules.lineCount()) : (i += 1) {
+        const kv = mango.parseKV(doc_rules.line(i)) orelse continue;
+        if (!std.mem.eql(u8, kv.key, "window_rule")) continue;
+        if (std.mem.eql(u8, std.mem.trim(u8, kv.value, " \t"), VRR_RULE)) return i;
+    }
+    return null;
+}
+
+const MonitorVrr = struct { rules: usize = 0, on: usize = 0 };
+
+fn monitorVrr() MonitorVrr {
+    var out: MonitorVrr = .{};
+    var i: usize = 0;
+    while (i < doc_monitors.lineCount()) : (i += 1) {
+        const kv = mango.parseKV(doc_monitors.line(i)) orelse continue;
+        if (!std.mem.eql(u8, kv.key, "monitor_rule")) continue;
+        out.rules += 1;
+        if (std.mem.eql(u8, ruleField(kv.value, "vrr"), "1")) out.on += 1;
+    }
+    return out;
+}
+
+/// 0 off, 1 fullscreen windows only, 2 always on: what the files say now.
+fn vrrMode() c_uint {
+    if (vrrRuleIndex() != null) return 1;
+    return if (monitorVrr().on > 0) 2 else 0;
+}
+
+/// `value` (a monitor_rule's fields) with vrr set to `on`, into `buf`.
+fn ruleWithVrr(value: []const u8, on: bool, buf: []u8) ?[]const u8 {
+    const want: []const u8 = if (on) "vrr:1" else "vrr:0";
+    var w: usize = 0;
+    var found = false;
+    var it = std.mem.splitScalar(u8, value, ',');
+    while (it.next()) |raw| {
+        const part = std.mem.trim(u8, raw, " \t");
+        if (part.len == 0) continue;
+        var piece = part;
+        if (std.mem.indexOfScalar(u8, part, ':')) |c| {
+            if (std.mem.eql(u8, std.mem.trim(u8, part[0..c], " \t"), "vrr")) {
+                piece = want;
+                found = true;
+            }
+        }
+        const sep: []const u8 = if (w > 0) "," else "";
+        const out = std.fmt.bufPrint(buf[w..], "{s}{s}", .{ sep, piece }) catch return null;
+        w += out.len;
+    }
+    if (!found) {
+        const out = std.fmt.bufPrint(buf[w..], "{s}{s}", .{ if (w > 0) "," else "", want }) catch return null;
+        w += out.len;
+    }
+    return buf[0..w];
+}
+
+fn setMonitorsVrr(on: bool) void {
+    var i: usize = 0;
+    while (i < doc_monitors.lineCount()) : (i += 1) {
+        const kv = mango.parseKV(doc_monitors.line(i)) orelse continue;
+        if (!std.mem.eql(u8, kv.key, "monitor_rule")) continue;
+        var vb: [1024]u8 = undefined;
+        const fields = ruleWithVrr(kv.value, on, &vb) orelse continue;
+        var lb: [1100]u8 = undefined;
+        const text = std.fmt.bufPrint(&lb, "monitor_rule={s}", .{fields}) catch continue;
+        doc_monitors.setLine(i, text);
+    }
+}
+
+fn onVrrChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx > 2) return;
+    if (idx == vrrMode()) return; // already what the files say
+    if (idx == 2 and monitorVrr().rules == 0) {
+        // Nothing to switch on: say so and show what is really set.
+        gtk.adw_action_row_set_subtitle(@ptrCast(row), VRR_SUB_NEEDS_MONITORS);
+        gtk.adw_combo_row_set_selected(row, vrrMode());
+        return;
+    }
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), VRR_SUB);
+    setMonitorsVrr(idx == 2);
+    const rule_at = vrrRuleIndex();
+    if (idx == 1 and rule_at == null) {
+        doc_rules.appendLine("window_rule=" ++ VRR_RULE);
+    } else if (idx != 1) {
+        if (rule_at) |i| doc_rules.removeLine(i);
+    }
+    _ = doc_monitors.save();
+    _ = doc_rules.save();
+    rebuildRuleList(&g_rp_monitors);
+    rebuildRuleList(&g_rp_wrules);
+    reload();
+}
+
 fn buildRenderPage() *gtk.GtkBox {
     const outer = hp.pageBox();
+
+    const vrr = newGroup("Variable refresh rate", "VRR (FreeSync, G-Sync) lets the monitor follow the frame rate instead of a fixed one.");
+    {
+        var arr: [VRR_LABELS.len + 1]?[*:0]const u8 = undefined;
+        for (VRR_LABELS, 0..) |l, i| arr[i] = l;
+        arr[VRR_LABELS.len] = null;
+        const row = gtk.adw_combo_row_new();
+        gtk.adw_preferences_row_set_title(@ptrCast(row), "Use VRR");
+        gtk.adw_action_row_set_subtitle(@ptrCast(row), VRR_SUB);
+        gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&arr))));
+        gtk.adw_combo_row_set_selected(row, vrrMode());
+        _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onVrrChanged), null, null, 0);
+        gtk.adw_preferences_group_add(vrr, @ptrCast(row));
+    }
+    gtk.gtk_box_append(outer, @ptrCast(vrr));
+
     addGroups(outer, &G_RENDER);
+
+    const present = newGroup("Presentation", "");
+    addEnvToggle(present, "Direct scanout", "A fullscreen window is handed straight to the display, skipping the compositor: less latency and GPU work. Turn it off if a fullscreen game or video flickers, shows black, or loses its colors." ++ RELOGIN, &ENV_NO_SCANOUT);
+    gtk.gtk_box_append(outer, @ptrCast(present));
     return outer;
 }
 
@@ -2379,29 +2506,25 @@ fn buildXWaylandPage() *gtk.GtkBox {
     const display: ?[]const u8 = if (getenv("DISPLAY")) |d| std.mem.span(d) else null;
     const ready = installed and display != null and display.?.len > 0;
 
-    const status = newGroup("X11 compatibility layer", "X11-only apps (Vital and many other audio plug-ins, older games, some Wine and Java apps) run through XWayland. Wayland apps are not affected by anything here.");
+    const status = newGroup("XWayland", "X11-only apps (Vital and many other audio plug-ins, older games, some Wine and Java apps) run through XWayland. Wayland-native apps are completely unaffected by this setting.");
     {
         const row = gtk.adw_action_row_new();
-        gtk.adw_preferences_row_set_title(@ptrCast(row), "Enable XWayland");
-        gtk.adw_action_row_set_subtitle(row, if (ready)
-            "On. Mango always runs the X11 layer: it is built in and has no off switch, so X11-only apps can always start."
+        gtk.adw_preferences_row_set_title(@ptrCast(row), "Enable XWayland compatibility layer");
+        var buf: [200]u8 = undefined;
+        var esc: [300]u8 = undefined;
+        const text: []const u8 = if (!installed)
+            "Unavailable: the Xwayland server is not installed (sudo dnf install xorg-x11-server-Xwayland)."
+        else if (ready)
+            (std.fmt.bufPrint(&buf, "On, serving X11 apps on display {s}. Mango keeps this layer on and has no setting to turn it off, so the switch is fixed.", .{display.?}) catch "On.")
         else
-            "Mango always runs the X11 layer when it can (there is no off switch), but it is not working right now: see Status.");
+            "Not running in this session. Log out and back in.";
+        gtk.adw_action_row_set_subtitle(row, escapeZ(text, &esc));
         const sw = gtk.gtk_switch_new();
         gtk.gtk_switch_set_active(sw, if (ready) 1 else 0);
         gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
         gtk.gtk_widget_set_sensitive(@ptrCast(sw), 0);
         gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
         gtk.adw_preferences_group_add(status, @ptrCast(row));
-    }
-    var buf: [200]u8 = undefined;
-    if (!installed) {
-        addInfoRow(status, "Status", "Not available: the Xwayland server is not installed. Install it with: sudo dnf install xorg-x11-server-Xwayland", "dialog-warning-symbolic");
-    } else if (ready) {
-        const text = std.fmt.bufPrint(&buf, "Ready. X11 apps connect to display {s}.", .{display.?}) catch "Ready.";
-        addInfoRow(status, "Status", text, "emblem-ok-symbolic");
-    } else {
-        addInfoRow(status, "Status", "Not running in this session. Log out and back in; if it stays off, this Mango build was made without X11 support.", "dialog-warning-symbolic");
     }
     gtk.gtk_box_append(outer, @ptrCast(status));
 
