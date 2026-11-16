@@ -165,9 +165,9 @@ background '#20242c'
 write_bar_config true;  dock_shots border-dark
 write_bar_config false; dock_shots noborder-dark
 # The trash follows the picked icon theme like the other icons (empty
-# under Papirus, full under Numix-Circle), where the theme is installed.
+# under Papirus, full under Numix-Circle / Numix), where the theme is installed.
 mkdir -p "${HOME}/.config/gtk-3.0"
-for it in Papirus:empty Numix-Circle:full; do
+for it in Papirus:empty Numix-Circle:full Numix:full; do
     name=${it%%:*}
     [[ -f /usr/share/icons/${name}/index.theme ]] || { echo "  (no ${name} installed)"; continue; }
     printf '[Settings]\ngtk-icon-theme-name=%s\n' "${name}" > "${HOME}/.config/gtk-3.0/settings.ini"
