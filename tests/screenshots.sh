@@ -164,6 +164,20 @@ write_bar_config false; dock_shots noborder-light
 background '#20242c'
 write_bar_config true;  dock_shots border-dark
 write_bar_config false; dock_shots noborder-dark
+# The trash follows the picked icon theme like the other icons (empty
+# under Papirus, full under Numix-Circle), where the theme is installed.
+mkdir -p "${HOME}/.config/gtk-3.0"
+for it in Papirus:empty Numix-Circle:full; do
+    name=${it%%:*}
+    [[ -f /usr/share/icons/${name}/index.theme ]] || { echo "  (no ${name} installed)"; continue; }
+    printf '[Settings]\ngtk-icon-theme-name=%s\n' "${name}" > "${HOME}/.config/gtk-3.0/settings.ini"
+    rm -rf "${HOME}/.local/share/Trash"
+    if [[ ${it#*:} == full ]]; then
+        mkdir -p "${HOME}/.local/share/Trash/files" && echo x > "${HOME}/.local/share/Trash/files/x"
+    fi
+    write_bar_config true; dock_shots "icons-${name}"
+done
+rm -rf "${HOME}/.config/gtk-3.0" "${HOME}/.local/share/Trash"
 # Enlarged, pixel for pixel, to judge the corners.
 for f in "${out}"/dock-*.png; do
     magick "${f}" -filter point -resize 300% "${f%.png}-3x.png" 2>/dev/null || true

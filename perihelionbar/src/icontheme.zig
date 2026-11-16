@@ -320,6 +320,12 @@ fn searchPlan(name: []const u8, buf: []u8) ?[]const u8 {
     return null;
 }
 
+/// The picked icon theme's own file for `name` (and what it inherits,
+/// hicolor left out), or null when the theme doesn't draw that icon.
+pub fn resolveThemedIconPath(name: []const u8, buf: []u8) ?[]const u8 {
+    return searchPlan(name, buf);
+}
+
 fn tryPath(buf: []u8, comptime fmt: []const u8, args: anytype) ?[:0]const u8 {
     const s = std.fmt.bufPrint(buf[0 .. buf.len - 1], fmt, args) catch return null;
     buf[s.len] = 0;

@@ -563,6 +563,11 @@ fn pinIconName(command: []const u8, out: []u8) ?[]const u8 {
 fn decodeIconIntoPixels(icon_name: []const u8, dst: []u32) bool {
     var path_buf: [512]u8 = undefined;
     const path_slice = icontheme.resolveIconPath(icon_name, &path_buf) orelse return false;
+    return decodeIconPathIntoPixels(path_slice, dst);
+}
+
+fn decodeIconPathIntoPixels(path_slice: []const u8, dst: []u32) bool {
+    if (path_slice.len >= 520) return false;
     var path_z_buf: [520]u8 = undefined;
     @memcpy(path_z_buf[0..path_slice.len], path_slice);
     path_z_buf[path_slice.len] = 0;
@@ -668,7 +673,22 @@ fn ensureTrashIcon() void {
     if (!dock_mode or trash_icon.resolved) return;
     trash_icon = .{ .resolved = true };
     trash_full = trashHasFiles();
-    // Perihelion's own (Numix-Circle style), then the icon theme's.
+    // The picked icon theme's own trash can first (MacTahoe, Papirus, Tela,
+    // Numix-Circle, ...), so it changes with the theme like every other dock
+    // icon. Perihelion's Numix-style can only stands in for a theme that has
+    // none; then anything else installed.
+    const theme_names = if (trash_full)
+        [_][]const u8{ "user-trash-full", "user-trash" }
+    else
+        [_][]const u8{ "user-trash", "user-trash-full" };
+    for (theme_names) |n| {
+        var path_buf: [512]u8 = undefined;
+        const p = icontheme.resolveThemedIconPath(n, &path_buf) orelse continue;
+        if (decodeIconPathIntoPixels(p, &trash_icon.pixels)) {
+            trash_icon.has_icon = true;
+            return;
+        }
+    }
     const names = if (trash_full)
         [_][]const u8{ "perihelion-trash-full", "perihelion-trash", "user-trash-full", "user-trash" }
     else
