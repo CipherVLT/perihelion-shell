@@ -294,7 +294,7 @@ fn buildPlan() void {
                 if (name.len == 0 or name.len > 127 or nchain >= CHAIN_MAX) continue;
                 if (std.mem.eql(u8, name, "hicolor") or std.mem.indexOfScalar(u8, name, '/') != null) continue;
                 var seen = false;
-                for (chain[0..nchain]) |c| seen = seen or std.mem.eql(u8, c, name);
+                for (chain[0..nchain]) |prev| seen = seen or std.mem.eql(u8, prev, name);
                 if (seen) continue;
                 @memcpy(chain_store[nchain][0..name.len], name);
                 chain[nchain] = chain_store[nchain][0..name.len];
