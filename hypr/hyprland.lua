@@ -35,25 +35,25 @@ local menu = "rofi -show drun"
 hl.on("hyprland.start", function()
 	--   hl.exec_cmd(terminal)
 	--   hl.exec_cmd("nm-applet")
-	hl.exec_cmd("simpbar &")
+	hl.exec_cmd("perihelionbar &")
 	-- App drawer daemon (quickshell). Started up front so the SUPER+Tab bind is
 	-- a plain IPC round trip instead of a cold start on first press.
 	hl.exec_cmd("appdrawer start")
 	--Delete this line to prevent it starting at every boot
-	hl.exec_cmd("simpbar-welcome")
+	hl.exec_cmd("perihelionbar-welcome")
 	-- This Line here ^^
 	hl.exec_cmd("swaync")
-	-- Restore the wallpaper from simpbar-wallpaper's state file, which also
+	-- Restore the wallpaper from perihelionbar-wallpaper's state file, which also
 	-- re-runs matugen so the whole desktop starts themed to match. This
 	-- replaces `waypaper --restore`: waypaper's GUI still works as a picker,
-	-- but the engine that owns the wallpaper is now simpbar-wallpaper, and
+	-- but the engine that owns the wallpaper is now perihelionbar-wallpaper, and
 	-- leaving waypaper's restore in place would have two programs disagreeing
 	-- about the current wallpaper again.
-	hl.exec_cmd("simpbar-restore-wallpaper")
+	hl.exec_cmd("perihelionbar-restore-wallpaper")
 	-- Desktop widgets (clock / weather / media / system cards) painted on the
 	-- wallpaper's background layer, started after the wallpaper engine so the
 	-- cards composite above the wallpaper like the bar does.
-	hl.exec_cmd("simpbar-shell &")
+	hl.exec_cmd("perihelionbar-shell &")
 	hl.exec_cmd("/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1")
 	--hl.exec_cmd("/usr/libexec/polkit-mate-authentication-agent-1")
 end)
@@ -130,8 +130,8 @@ hl.config({
 ---- INPUT ----
 ---------------
 
--- Input settings are managed by the Simpbar Config app, which writes
--- ~/.config/hypr/hyprland-simpbar.lua (loaded at the end of this file).
+-- Input settings are managed by the Perihelion Bar Config app, which writes
+-- ~/.config/hypr/hyprland-perihelionbar.lua (loaded at the end of this file).
 
 hl.gesture({
 	fingers = 3,
@@ -166,10 +166,10 @@ hl.bind(mainMod .. " + Space", hl.dsp.exec_cmd(menu))
 hl.bind(mainMod .. " + P", hl.dsp.window.pseudo())
 hl.bind(mainMod .. " + J", hl.dsp.layout("togglesplit")) -- dwindle only
 -- Restart the bar. The kill and the start are SEPARATE statements on purpose:
--- `pkill -x simpbar || simpbar &` parses as `(pkill || simpbar) &`, so whenever
+-- `pkill -x perihelionbar || perihelionbar &` parses as `(pkill || perihelionbar) &`, so whenever
 -- the bar is actually running -- the only case where you want a restart --
 -- pkill succeeds and the `||` short-circuits, meaning the bar never comes back.
-hl.bind(mainMod .. " + W", hl.dsp.exec_cmd("pkill -x simpbar; simpbar &"))
+hl.bind(mainMod .. " + W", hl.dsp.exec_cmd("pkill -x perihelionbar; perihelionbar &"))
 -- App drawer: a quickshell panel that slides up from under the bar, themed from
 -- the same matugen.json. Clicking empty bar space opens it too.
 -- Bare `appdrawer`: the installer puts the toggle in /usr/bin, which is on the
@@ -177,7 +177,7 @@ hl.bind(mainMod .. " + W", hl.dsp.exec_cmd("pkill -x simpbar; simpbar &"))
 hl.bind(mainMod .. " + Tab", hl.dsp.exec_cmd("appdrawer"))
 -- Wallpaper picker: the drawer's second tab, opened directly. Pairs with the
 -- bind above so the two are discoverable together, and spends no fresh letter.
--- `simpbar-wallpaper` bare would do the same thing; naming it here is clearer.
+-- `perihelionbar-wallpaper` bare would do the same thing; naming it here is clearer.
 hl.bind(mainMod .. " + SHIFT + Tab", hl.dsp.exec_cmd("appdrawer wallpapers"))
 -- Move focus with mainMod + arrow keys
 hl.bind(mainMod .. " + left", hl.dsp.focus({ direction = "left" }))
@@ -348,31 +348,31 @@ hl.window_rule({
 -- Frost the bar itself like the widgets below: same blur-behind-translucency
 -- deal (the bar's bg_opacity_percent tint controls the frosted strength).
 hl.layer_rule({
-	name = "simpbar-blur",
-	match = { namespace = "^simpbar$" },
+	name = "perihelionbar-blur",
+	match = { namespace = "^perihelionbar$" },
 	blur = true,
 	ignore_alpha = 0.5,
 })
 
--- Frost the desktop widgets (simpbar-shell) like the bar: a layer rule can
+-- Frost the desktop widgets (perihelionbar-shell) like the bar: a layer rule can
 -- add blur that a client can't request for itself on Wayland. ignore_alpha
 -- keeps the fully transparent parts of the surface (where the wallpaper shows
 -- straight through) crisp instead of washed out.
 hl.layer_rule({
-	name = "simpbar-shell-blur",
-	match = { namespace = "^simpbar-shell$" },
+	name = "perihelionbar-shell-blur",
+	match = { namespace = "^perihelionbar-shell$" },
 	blur = true,
 	ignore_alpha = 0.5,
 })
 
--- Load the simpbar-config Hyprland settings (keybinds, monitors, animations,
--- window rules, etc.). Managed by the Simpbar Config app — it recreates this
--- file from ~/.config/simpbar/hyprland.json whenever you change a setting.
+-- Load the perihelionbar-config Hyprland settings (keybinds, monitors, animations,
+-- window rules, etc.). Managed by the Perihelion Bar Config app — it recreates this
+-- file from ~/.config/perihelionbar/hyprland.json whenever you change a setting.
 -- pcall keeps this config valid if the file is ever missing.
-pcall(require, "hyprland-simpbar")
+pcall(require, "hyprland-perihelionbar")
 
 -- Load the Material You colors from matugen last so its border colors win
--- over hyprland-simpbar. Regenerated by matugen on every wallpaper change.
+-- over hyprland-perihelionbar. Regenerated by matugen on every wallpaper change.
 -- pcall keeps the config valid if matugen hasn't run / the file is being
 -- written right now.
 pcall(require, "matugen-colors")

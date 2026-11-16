@@ -82,7 +82,7 @@
         {
             "type": "custom",
             "key": "└ └",
-            "format": "Simpbar-Shell",
+            "format": "Perihelion Bar Shell",
             "keyColor": "yellow"
 	},
 	{

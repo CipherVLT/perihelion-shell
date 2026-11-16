@@ -4,11 +4,11 @@
 Two styles. Catppuccin (the default) reads the wallpaper, picks a Catppuccin
 flavor (Latte, Frappé, Macchiato or Mocha) from how light it is, and three
 Catppuccin accents from its strongest colors: every color is a real
-Catppuccin color. Material You runs matugen, simpbar's own theming engine, for
+Catppuccin color. Material You runs matugen, perihelionbar's own theming engine, for
 Material Design 3 colors made from the wallpaper (its scheme picker: tonal
 spot, vibrant, ...). Either way the colors go everywhere the shell draws:
 
-  ~/.config/simpbar/matugen.json        the bar, the cava wave, desktop widgets
+  ~/.config/perihelionbar/matugen.json        the bar, the cava wave, desktop widgets
   ~/.config/fuzzel/fuzzel.ini [colors]  the launcher and the power menu
   ~/.config/strata/themes/tokyo-night.toml   Strata, the file manager
   ~/.config/mango/colors.conf           Mango's window borders
@@ -23,7 +23,7 @@ spot, vibrant, ...). Either way the colors go everywhere the shell draws:
 
 and tells Perihelion Bar (bar and dock) and Perihelion Shell to reload (SIGUSR1).
 
-Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
+Settings, ~/.config/perihelionbar/theme (Perihelion Settings writes it):
   style=catppuccin   catppuccin (a palette, matched to the wallpaper), or
                      material (Material You, via matugen)
   palette=catppuccin-auto   catppuccin-auto|-latte|-frappe|-macchiato|-mocha,
@@ -46,7 +46,7 @@ Settings, ~/.config/simpbar/theme (Perihelion Settings writes it):
 
 A file you edited by hand is left alone: fuzzel colors,
 Strata theme and fastfetch colors are only rewritten while they still hold Perihelion's defaults
-or this script's own output. Turning off "Match the wallpaper" in Simpbar
+or this script's own output. Turning off "Match the wallpaper" in Perihelion Bar
 Config (auto_theme "manual") stops all of it.
 
 Usage:
@@ -76,7 +76,7 @@ import tempfile
 HOME = os.path.expanduser("~")
 CONFIG = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
 CACHE = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
-SIMPBAR = os.path.join(CONFIG, "simpbar")
+PERIHELIONBAR = os.path.join(CONFIG, "perihelionbar")
 SHARE = os.environ.get("PERIHELION_THEME_SHARE", "/usr/share/perihelion")
 
 MARKER = "perihelion-theme"
@@ -128,7 +128,7 @@ FLAVORS = ("latte", "frappe", "macchiato", "mocha")
 FLAVOR_NAMES = {"latte": "Catppuccin Latte", "frappe": "Catppuccin Frappé",
                 "macchiato": "Catppuccin Macchiato", "mocha": "Catppuccin Mocha",
                 "material": "Material You"}
-# matugen's --type values (simpbar's own list).
+# matugen's --type values (perihelionbar's own list).
 MATUGEN_SCHEMES = ("scheme-tonal-spot", "scheme-content", "scheme-expressive", "scheme-fidelity",
                    "scheme-fruit-salad", "scheme-monochrome", "scheme-neutral", "scheme-rainbow",
                    "scheme-vibrant", "scheme-smart")
@@ -1446,7 +1446,7 @@ def signal_procs(names, sig):
 def read_settings():
     s = {"style": "catppuccin", "palette": "catppuccin-auto", "tint": True,
          "accent": "wallpaper", "scheme": "scheme-content", "mode": "dark", "glass": True}
-    text = read(os.path.join(SIMPBAR, "theme")) or ""
+    text = read(os.path.join(PERIHELIONBAR, "theme")) or ""
     for line in text.splitlines():
         k, sep, v = line.partition("=")
         k, v = k.strip(), v.strip().lower()
@@ -1476,7 +1476,7 @@ def read_settings():
 
 def auto_theme_off():
     try:
-        with open(os.path.join(SIMPBAR, "config.json"), encoding="utf-8") as f:
+        with open(os.path.join(PERIHELIONBAR, "config.json"), encoding="utf-8") as f:
             return json.load(f).get("appearance", {}).get("auto_theme") == "manual"
     except (OSError, ValueError, AttributeError):
         return False
@@ -1491,7 +1491,7 @@ def current_wallpaper():
             return "image", value
         if kind == "color" and re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
             return "color", value
-    sb = read(os.path.join(SIMPBAR, "wallpaper")) or ""
+    sb = read(os.path.join(PERIHELIONBAR, "wallpaper")) or ""
     m = re.search(r"(?m)^path=(.+)$", sb)
     if m and os.path.isfile(m.group(1)):
         return "image", m.group(1)
@@ -1572,7 +1572,7 @@ def main(argv=None):
     stamp = hashlib.sha1(stamp_src.encode()).hexdigest()
     stamp_path = os.path.join(CACHE, "perihelion-theme", "last")
     if not (args.force or args.dry_run) and read(stamp_path) == stamp \
-            and os.path.isfile(os.path.join(SIMPBAR, "matugen.json")):
+            and os.path.isfile(os.path.join(PERIHELIONBAR, "matugen.json")):
         return 0
 
     if kind == "image":
@@ -1631,7 +1631,7 @@ def main(argv=None):
         return 0
 
     changed = []
-    if write(os.path.join(SIMPBAR, "matugen.json"),
+    if write(os.path.join(PERIHELIONBAR, "matugen.json"),
              json.dumps(matugen_json(theme), indent=2) + "\n"):
         changed.append("bar")
 
@@ -1718,7 +1718,7 @@ def main(argv=None):
         except (OSError, subprocess.SubprocessError):
             pass
 
-    signal_procs(("perihelion-bar", "perihelion-shell", "simpbar", "simpbar-shell"), signal.SIGUSR1)
+    signal_procs(("perihelion-bar", "perihelion-shell", "perihelionbar", "perihelionbar-shell"), signal.SIGUSR1)
     write(stamp_path, stamp)
     print(f"perihelion-theme: {theme['name']}{', tinted' if theme.get('tint') else ''}, accents "
           f"{', '.join(accents)}" + (f" ({', '.join(changed)} updated)" if changed else ""))

@@ -1354,7 +1354,7 @@ PanelWindow {
 
         // ---- wallhaven options (overlaid, inside the panel) -----------
         // Where the user's own wallhaven.cc API key goes, plus the content
-        // rating. Both are written to ~/.config/simpbar/wallhaven -- the same
+        // rating. Both are written to ~/.config/perihelionbar/wallhaven -- the same
         // file the engine reads -- so a key pasted here is exactly a key typed
         // in a terminal: one file, one meaning, no second store to drift. The
         // form only commits on Save, so closing without saving changes nothing.
@@ -1391,7 +1391,7 @@ PanelWindow {
 
             readonly property string path: (Quickshell.env("XDG_CONFIG_HOME")
                                             || Quickshell.env("HOME") + "/.config")
-                                        + "/simpbar/wallhaven"
+                                        + "/perihelionbar/wallhaven"
 
             // Whether the key arrives from the environment instead of this
             // file. The engine prefers WALLHAVEN_APIKEY over the file, so an
@@ -1413,7 +1413,7 @@ PanelWindow {
                 keyField.clear();
                 whReader.command = ["sh", "-c",
                     "cat \"$1\" 2>/dev/null || true",
-                    "simpbar-wallhaven-read",
+                    "perihelionbar-wallhaven-read",
                     whOpts.path];
                 whReader.running = true;
             }
@@ -1450,8 +1450,8 @@ PanelWindow {
                 whOpts.saving = true;
                 whOpts.status = "Saving…";
                 whWriter.command = ["sh", "-c",
-                    "mkdir -p \"$HOME/.config/simpbar\" && printf 'key=%s\\npurity=%s\\n' \"$1\" \"$2\" > \"$HOME/.config/simpbar/wallhaven\"",
-                    "simpbar-wallhaven-save",
+                    "mkdir -p \"$HOME/.config/perihelionbar\" && printf 'key=%s\\npurity=%s\\n' \"$1\" \"$2\" > \"$HOME/.config/perihelionbar/wallhaven\"",
+                    "perihelionbar-wallhaven-save",
                     keyField.text.trim(),
                     whOpts.purity];
                 whWriter.running = true;
@@ -1660,7 +1660,7 @@ PanelWindow {
         // Right-clicking a tile asks before writing anything here. Add
         // creates a real .desktop file (the same kind any classic desktop
         // context menu would leave behind) in ~/Desktop, which the
-        // simpbar-shell icon grid reads straight off disk: the file appears
+        // perihelionbar-shell icon grid reads straight off disk: the file appears
         // as an icon on the wallpaper without touching the daemon.
         Rectangle {
             id: deskPanel
@@ -1730,7 +1730,7 @@ PanelWindow {
                     // files and empty files parse as no icon at all.
                     'printf \'%s\' "$1" > "$f"\n' +
                     'echo "Added to the desktop: ${f##*/}"',
-                    "simpbar-add-desktop",
+                    "perihelionbar-add-desktop",
                     deskPanel.content(win.deskApp),
                     deskPanel.deskDir,
                     deskPanel.sanitizeBase(win.deskApp.name)];
@@ -1962,7 +1962,7 @@ PanelWindow {
         stderr: StdioCollector {}
     }
 
-    // Reads ~/.config/simpbar/wallhaven when the options popup opens. Read via
+    // Reads ~/.config/perihelionbar/wallhaven when the options popup opens. Read via
     // the same parse the widgets use, so the popup shows exactly what the
     // engine would see (missing file = no key, SFW).
     Process {

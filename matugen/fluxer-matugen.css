@@ -9,7 +9,7 @@
  * NOTE: This file is a matugen template.
  * matugen replaces the Material You tokens (e.g. colors.primary.dark.hex)
  * throughout this file on every wallpaper change. Files:
- *   template:  ~/simpbar/matugen/fluxer-matugen.css
+ *   template:  ~/perihelionbar/matugen/fluxer-matugen.css
  *   output:    ~/.config/fluxer/matugen.css
  * Applying: Fluxer has no theme directory and no auto-reload, so after a
  * wallpaper change re-apply the rendered file manually:

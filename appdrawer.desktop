@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=App Drawer
-Comment=Open the simpbar app drawer (SUPER+Tab)
+Comment=Open the perihelionbar app drawer (SUPER+Tab)
 # Bare `appdrawer`, not $HOME/.local/bin/appdrawer. The desktop-entry spec has
 # no environment-variable expansion for Exec, and GLib does not merely fail to
 # expand it -- `gio launch` rejects such a file outright and exits 1 without

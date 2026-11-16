@@ -1,16 +1,18 @@
 
 <img width="1254" height="1254" alt="Neon Gradient Feather Emblem" src="https://github.com/user-attachments/assets/a04835bf-6f32-4dc9-8dc7-68c03ae6553a" />
 
-# Simpbar
+# Perihelion Bar
 
 A native Zig/Wayland status bar for **Hyprland and MangoWM** — simple, clean, out of the way — plus an installer that sets up a ricing-friendly Arch desktop around it.
+
+Perihelion's own bar: it began as a fork of [simpbar](https://github.com/jaytheoutpatient/simpbar) by jaytheoutpatient (with his blessing) and has since been reworked throughout.
 
 Built for **Arch Linux** (EndeavourOS, CachyOS, Garuda, XeroLinux should work too). Pick your window manager (**Hyprland** or **MangoWM**) up front; **Chaotic-AUR** is configured for binary packages.
 
 ## Install
 
 ```
-curl -sSL https://raw.githubusercontent.com/jaytheoutpatient/simpbar/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
 ```
 
 Interactive — answers a few questions, asks for sudo **once**, then installs everything. Reboot when done (`systemctl reboot`).
@@ -19,20 +21,20 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 ## Desktop widgets
 
-`simpbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, calendar with reminders, analog watch, sticky note.
+`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, calendar with reminders, analog watch, sticky note.
 
 - Same matugen colors as the bar, translucent cards.
-- **Ctrl + drag** any card to move it — position saves to `~/.config/simpbar/shell.json`.
-- Calendar reminders live in `~/.config/simpbar/reminders.txt` (`YYYY-MM-DD HH:MM text`).
-- Notes save to `~/.config/simpbar/notes/`.
+- **Ctrl + drag** any card to move it — position saves to `~/.config/perihelionbar/shell.json`.
+- Calendar reminders live in `~/.config/perihelionbar/reminders.txt` (`YYYY-MM-DD HH:MM text`).
+- Notes save to `~/.config/perihelionbar/notes/`.
 
-**Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `simpbar-shell overview toggle` works from scripts too.
+**Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `perihelionbar-shell overview toggle` works from scripts too.
 
 ## Welcome & Config
 
-**Simpbar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.
+**Perihelion Bar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.
 
-**Simpbar Config:** bar appearance + modules + nine WM pages (General, Monitors, Animations, Keybinds, Window/Workspace/Layer Rules, Autostart, Environment). Hyprland writes `hyprland-simpbar.lua`, MangoWM edits `~/.config/mango/cfg/` directly.
+**Perihelion Bar Config:** bar appearance + modules + nine WM pages (General, Monitors, Animations, Keybinds, Window/Workspace/Layer Rules, Autostart, Environment). Hyprland writes `hyprland-perihelionbar.lua`, MangoWM edits `~/.config/mango/cfg/` directly.
 
 ## Keybindings
 

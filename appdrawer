@@ -17,7 +17,7 @@
 #   appdrawer power      open the drawer straight on the Power menu
 #                       (lock / log out / reboot / power off)
 #
-# Applying a wallpaper deliberately has no subcommand here: `simpbar-wallpaper
+# Applying a wallpaper deliberately has no subcommand here: `perihelionbar-wallpaper
 # set <img>` is the engine that actually does the work (swaybg swap, matugen
 # recolour, state file), and it runs fine with the drawer closed. Routing it
 # through IPC as well would mean two entry points that could disagree about

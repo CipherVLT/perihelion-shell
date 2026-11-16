@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Perihelion Bar Config
+Comment=Configure perihelionbar's appearance, module layout, and desktop shortcuts
+Exec=perihelionbar-config
+Icon=perihelionbar-config
+Terminal=false
+Categories=Settings;
+StartupNotify=true

@@ -6,7 +6,7 @@ import Quickshell.Io
 
 // The wallpaper list, and the thing that applies one.
 //
-// Deliberately a thin wrapper over the `simpbar-wallpaper` CLI rather than
+// Deliberately a thin wrapper over the `perihelionbar-wallpaper` CLI rather than
 // walking the wallpaper folders in QML. "Which files count as a wallpaper"
 // then has exactly one definition -- the same extension list swaybg can decode,
 // the same folder list, the same ~ expansion -- instead of two that drift. The
@@ -22,7 +22,7 @@ Singleton {
 
     readonly property string cfgDir: (Quickshell.env("XDG_CONFIG_HOME")
                                       || Quickshell.env("HOME") + "/.config")
-                                  + "/simpbar"
+                                  + "/perihelionbar"
 
     // Absolute path of the wallpaper currently applied. Compared against each
     // tile's path to badge the active one.
@@ -75,7 +75,7 @@ Singleton {
 
     function refresh() {
         ready = false;
-        lister.command = ["simpbar-wallpaper", "list"];
+        lister.command = ["perihelionbar-wallpaper", "list"];
         lister.running = true;
     }
 
@@ -117,7 +117,7 @@ Singleton {
     }
 
     function refreshCurrent() {
-        currentQuery.command = ["simpbar-wallpaper", "current"];
+        currentQuery.command = ["perihelionbar-wallpaper", "current"];
         currentQuery.running = true;
     }
 
@@ -166,7 +166,7 @@ Singleton {
             return;
         applying = true;
         status = "Setting " + nameOf(path) + "…";
-        setter.command = ["simpbar-wallpaper", "set", path];
+        setter.command = ["perihelionbar-wallpaper", "set", path];
         setter.running = true;
     }
 
@@ -175,7 +175,7 @@ Singleton {
             return;
         applying = true;
         status = "Picking a random wallpaper…";
-        setter.command = ["simpbar-wallpaper", "random"];
+        setter.command = ["perihelionbar-wallpaper", "random"];
         setter.running = true;
     }
 
@@ -242,7 +242,7 @@ Singleton {
             return;
         fetching = true;
         status = "Fetching today's Bing wallpaper…";
-        fetcher.command = ["simpbar-wallpaper", "bing", "--count", "1", "--apply"];
+        fetcher.command = ["perihelionbar-wallpaper", "bing", "--count", "1", "--apply"];
         fetcher.running = true;
     }
 
@@ -254,7 +254,7 @@ Singleton {
             return;
         fetching = true;
         status = "Drawing a random online wallpaper…";
-        fetcher.command = ["simpbar-wallpaper", "random", "--online"];
+        fetcher.command = ["perihelionbar-wallpaper", "random", "--online"];
         fetcher.running = true;
     }
 
