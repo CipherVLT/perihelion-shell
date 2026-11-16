@@ -8265,6 +8265,9 @@ fn drawWorkspaces(
         mx0 += w + workspace_gap;
     }
     if (any) drawRestingPill(pixels, buf_width, buf_height, run_start, run_end);
+    // Per-digit washes stay inside that pill's ring (see pill_clip).
+    pill_clip = if (any) clipToRun(run_start, run_end) else null;
+    defer pill_clip = null;
 
     var x0: i64 = x0_start;
     for (workspaces) |ws| {
@@ -8920,6 +8923,9 @@ fn drawCenterGroup(
     var wscan_run = false;
     var wscan_start: i64 = 0;
     var wscan_last_end: i64 = 0;
+    // Each workspace run's bounds, for clipping its digits' washes below.
+    var ws_runs: [8][2]i64 = undefined;
+    var ws_run_n: usize = 0;
     for (segs.items[0..segs.len]) |seg| {
         const seg_w = seg.icon_w + textPixelWidth(font, seg.label);
         const is_launcher = (seg.command != null or seg.focus_idx != null) and seg.ws_id == null;
@@ -8941,11 +8947,22 @@ fn drawCenterGroup(
         if (!is_ws and wscan_run) {
             wscan_run = false;
             drawRestingPill(pixels, buf_width, buf_height, wscan_start, wscan_last_end);
+            if (ws_run_n < ws_runs.len) {
+                ws_runs[ws_run_n] = .{ wscan_start, wscan_last_end };
+                ws_run_n += 1;
+            }
         }
         scan_x += seg_w + seg.gap_after;
     }
     if (scan_run) drawRestingPill(pixels, buf_width, buf_height, scan_start, scan_last_end + @divTrunc(launcher_gap, 2));
-    if (wscan_run) drawRestingPill(pixels, buf_width, buf_height, wscan_start, wscan_last_end);
+    if (wscan_run) {
+        drawRestingPill(pixels, buf_width, buf_height, wscan_start, wscan_last_end);
+        if (ws_run_n < ws_runs.len) {
+            ws_runs[ws_run_n] = .{ wscan_start, wscan_last_end };
+            ws_run_n += 1;
+        }
+    }
+    defer pill_clip = null;
 
     for (segs.items[0..segs.len]) |seg| {
         if (seg.ws_id) |ws_id| {
@@ -8953,6 +8970,11 @@ fn drawCenterGroup(
             const region_start = x0;
             const hover_start = region_start - @divTrunc(workspace_gap, 2);
             const hover_end = region_start + textPixelWidth(font, seg.label) + @divTrunc(workspace_gap, 2);
+            // Washes stay inside the ring of the run this digit belongs to.
+            pill_clip = null;
+            for (ws_runs[0..ws_run_n]) |run| {
+                if (hover_start >= run[0] and hover_end <= run[1]) pill_clip = clipToRun(run[0], run[1]);
+            }
             if (seg.ws_active) drawActivePill(pixels, buf_width, buf_height, hover_start, hover_end);
             // Urgent (not active) digits wear the amber alert instead (see
             // the left workspaces loop for the layering).
@@ -8968,6 +8990,7 @@ fn drawCenterGroup(
                 x0 += drawGlyphAt(pixels, buf_width, buf_height, font, x0, y0, cp, color, 0, buf_width);
             }
             click_regions.addScrollable(@intCast(hover_start), @intCast(hover_end), .{ .switch_workspace = ws_id }, .step_workspace);
+            pill_clip = null;
         } else if (seg.separator) {
             // A thin line in the text color, the middle half of the dock high.
             const h: i64 = @intCast(buf_height);
@@ -9352,7 +9375,7 @@ fn drawUrgentPill(pixels: [*]u32, buf_width: u32, buf_height: u32, x_start: i64,
     const h: i64 = @intCast(buf_height);
     const wt: i64 = bezelThick(x_end - x_start, h - 2 * HOVER_PILL_PAD_Y);
     const wr: i32 = @intCast(@max(@as(i64, 0), @as(i64, HOVER_PILL_RADIUS) - wt));
-    fillRoundedRect(pixels, buf_width, buf_height, x_start + wt, HOVER_PILL_PAD_Y + wt, x_end - wt, h - HOVER_PILL_PAD_Y - wt, wr, wash);
+    fillWash(pixels, buf_width, buf_height, x_start + wt, HOVER_PILL_PAD_Y + wt, x_end - wt, h - HOVER_PILL_PAD_Y - wt, wr, wash);
     const w = x_end - x_start;
     const uw = @max(@as(i64, 8), @divTrunc(w, 3));
     const cx = @divTrunc(x_start + x_end, 2);
@@ -9566,6 +9589,57 @@ fn fillRoundedRect(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0:
             if (inRoundedRect2(2 * px + 1, 2 * py + 1, X0, Y0, X1, Y1, R)) {
                 pixels[@as(usize, @intCast(py)) * buf_width + @as(usize, @intCast(px))] = color;
             }
+        }
+    }
+}
+
+/// The shared resting pill a per-digit wash is being drawn inside (the
+/// workspace run): its outer x bounds, or null outside one. A digit's own
+/// region is narrow, so its wash can only round its corners a little, far
+/// less than the run's ring curves at its two ends; drawn plain, the wash of
+/// the first or last digit pokes its squarer corners through the ring (the
+/// "left border doesn't connect" bug). While this is set, washes are cut to
+/// the inside of the run's ring instead.
+var pill_clip: ?[2]i64 = null;
+
+/// Whether the washes drawn now sit inside a shared resting pill.
+fn clipToRun(run_start: i64, run_end: i64) ?[2]i64 {
+    if (!current_config.appearance.module_pills or run_end <= run_start) return null;
+    return .{ run_start, run_end };
+}
+
+/// A pill wash: fillRoundedRect, cut to the inside of the shared pill's ring
+/// when one is set (pill_clip).
+fn fillWash(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, y0: i64, x1: i64, y1: i64, radius: i32, color: u32) void {
+    const clip = pill_clip orelse {
+        fillRoundedRect(pixels, buf_width, buf_height, x0, y0, x1, y1, radius, color);
+        return;
+    };
+    if (x1 <= x0 or y1 <= y0) return;
+    const h: i64 = @intCast(buf_height);
+    // The run's inner shape: what drawRestingPill fills inside its ring.
+    const ct: i64 = bezelThick(clip[1] - clip[0], h - 2 * HOVER_PILL_PAD_Y);
+    const cx0 = clip[0] + ct;
+    const cx1 = clip[1] - ct;
+    const cy0: i64 = HOVER_PILL_PAD_Y + ct;
+    const cy1: i64 = h - HOVER_PILL_PAD_Y - ct;
+    if (cx1 <= cx0 or cy1 <= cy0) return;
+    const cr: i64 = @min(@max(@as(i64, 0), @as(i64, HOVER_PILL_RADIUS) - ct), @divTrunc(@min(cx1 - cx0, cy1 - cy0), 2));
+    const r: i64 = @min(@as(i64, radius), @divTrunc(@min(x1 - x0, y1 - y0), 2));
+    if (r < 0) return;
+    const xs: i64 = @max(@max(0, x0), cx0);
+    const xe: i64 = @min(@min(@as(i64, @intCast(buf_width)), x1), cx1);
+    const ys: i64 = @max(@max(0, y0), cy0);
+    const ye: i64 = @min(@min(h, y1), cy1);
+    var py = ys;
+    while (py < ye) : (py += 1) {
+        var px = xs;
+        while (px < xe) : (px += 1) {
+            const cx = 2 * px + 1;
+            const cy = 2 * py + 1;
+            if (!inRoundedRect2(cx, cy, 2 * x0, 2 * y0, 2 * x1, 2 * y1, 2 * r)) continue;
+            if (!inRoundedRect2(cx, cy, 2 * cx0, 2 * cy0, 2 * cx1, 2 * cy1, 2 * cr)) continue;
+            pixels[@as(usize, @intCast(py)) * buf_width + @as(usize, @intCast(px))] = color;
         }
     }
 }
@@ -9879,7 +9953,7 @@ fn drawPill(pixels: [*]u32, buf_width: u32, buf_height: u32, x_start: i64, x_end
     // exactly), then the underline on top.
     const wt: i64 = bezelThick(x_end - x_start, h - 2 * HOVER_PILL_PAD_Y);
     const wr: i32 = @intCast(@max(@as(i64, 0), @as(i64, HOVER_PILL_RADIUS) - wt));
-    fillRoundedRect(pixels, buf_width, buf_height, x_start + wt, HOVER_PILL_PAD_Y + wt, x_end - wt, h - HOVER_PILL_PAD_Y - wt, wr, pill);
+    fillWash(pixels, buf_width, buf_height, x_start + wt, HOVER_PILL_PAD_Y + wt, x_end - wt, h - HOVER_PILL_PAD_Y - wt, wr, pill);
     // Centered dash, ~a third of the region wide (min 8px so narrow pills
     // like workspace digits still read), sitting just above the bottom edge.
     const w = x_end - x_start;

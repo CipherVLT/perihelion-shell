@@ -2081,7 +2081,7 @@ fn onAnimationsEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyop
 fn buildAnimationsRow(group: *gtk.AdwPreferencesGroup) void {
     const row = gtk.adw_action_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), "Animations");
-    gtk.adw_action_row_set_subtitle(row, "Fade the hover highlight and active-workspace pill, and move the bezel. Turning this off snaps highlights instantly and freezes the bezel.");
+    gtk.adw_action_row_set_subtitle(row, "Motion on the bar and dock: hover highlights fade in and out, the bezel ring travels or breathes, and the background effects and weather icon move. Off: highlights snap and everything holds still. Window animations are separate, under Mango, Animations.");
     gtk.adw_action_row_set_icon_name(row, "applications-graphics-symbolic");
 
     const sw = gtk.gtk_switch_new();
@@ -2318,10 +2318,23 @@ fn onBezelEffectChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaqu
     saveAndSignal();
 }
 
+/// The bezel is the ring Pill borders draws around pills; with that switch
+/// off there is no ring anywhere, so its style and effect rows are greyed
+/// (they used to stay live and visibly do nothing).
+var g_bezel_rows: [2]?*gtk.AdwComboRow = .{ null, null };
+
+fn syncBezelRows() void {
+    for (g_bezel_rows) |r| {
+        if (r) |row| gtk.gtk_widget_set_sensitive(@ptrCast(row), if (live_pill_borders) 1 else 0);
+    }
+}
+
 fn buildBezelEffectRow(group: *gtk.AdwPreferencesGroup) void {
     const row = gtk.adw_combo_row_new();
+    g_bezel_rows[0] = row;
+    defer syncBezelRows();
     gtk.adw_preferences_row_set_title(@ptrCast(row), "Bezel effect");
-    gtk.adw_action_row_set_subtitle(@ptrCast(row), "How the bezel moves: travel around the pill, gently swell in place, or sit still.");
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), "How the ring moves: travel around the pill, gently swell in place, or sit still. Needs Pill borders (below) and Animations on.");
 
     var buf: [BEZEL_EFFECT_LABELS.len + 1]?[*:0]const u8 = undefined;
     for (BEZEL_EFFECT_LABELS, 0..) |label, i| buf[i] = label;
@@ -2349,8 +2362,10 @@ fn onBezelStyleChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque
 
 fn buildBezelStyleRow(group: *gtk.AdwPreferencesGroup) void {
     const row = gtk.adw_combo_row_new();
+    g_bezel_rows[1] = row;
+    defer syncBezelRows();
     gtk.adw_preferences_row_set_title(@ptrCast(row), "Bezel style");
-    gtk.adw_action_row_set_subtitle(@ptrCast(row), "What the bezel ring wears: the wallpaper palette traveling around, the full hue wheel, or one solid Bezel Color (under Bar Colors).");
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), "The colors of the ring around pills and the active workspace: the wallpaper palette, the full hue wheel, or one solid Bezel Color (under Bar Colors). Needs Pill borders on.");
 
     var buf: [BEZEL_STYLE_LABELS.len + 1]?[*:0]const u8 = undefined;
     for (BEZEL_STYLE_LABELS, 0..) |label, i| buf[i] = label;
@@ -2416,6 +2431,7 @@ fn buildModulePillsRow(group: *gtk.AdwPreferencesGroup) void {
 /// and dash only, no rings.
 fn onPillBordersChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
     live_pill_borders = gtk.gtk_switch_get_active(sw) != 0;
+    syncBezelRows();
     saveAndSignal();
 }
 
@@ -2606,7 +2622,7 @@ fn addSpinRowCtx(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, min: f64,
     gtk.gtk_widget_set_valign(@ptrCast(spin), gtk.ALIGN_CENTER);
     _ = gtk.g_signal_connect_data(@ptrCast(spin), "value-changed", callback, user_data, null, 0);
 
-    gtk.adw_action_row_add_suffix(row, @ptrCast(spin));
+    hypr_pages.attachNumber(row, spin); // a slider (see hypr_pages.zig)
     gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 

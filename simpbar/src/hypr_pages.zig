@@ -306,6 +306,147 @@ fn addTextRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, target: *hyp
     addEntryRow(group, title, target.slice(), width, @ptrCast(&onTextChanged), @ptrCast(target));
 }
 
+// ---------------------------------------------------------------------
+// Sliders. Every number row in Perihelion Settings (sizes, widths, gaps,
+// opacities) is a slider with its value beside it, not a - / + stepper.
+//
+// The row's GtkSpinButton is kept as the value's owner, unseen: each row's
+// existing "value-changed" handler (which saves the setting) stays exactly
+// as it was. The slider drives it, and only once the drag has paused for a
+// moment, so sweeping a slider writes the config (and reloads the bar or
+// Mango) a few times, not sixty times a second. A range too wide for a
+// slider to hit exact values (more than SLIDER_MAX_STEPS steps, such as a
+// monitor position) keeps the number field.
+// ---------------------------------------------------------------------
+
+extern "c" fn gtk_scale_new_with_range(orientation: c_int, min: f64, max: f64, step: f64) *anyopaque;
+extern "c" fn gtk_scale_set_draw_value(scale: *anyopaque, draw_value: c_int) void;
+extern "c" fn gtk_range_get_value(range: *anyopaque) f64;
+extern "c" fn gtk_range_set_value(range: *anyopaque, value: f64) void;
+extern "c" fn gtk_spin_button_get_range(spin: *gtk.GtkSpinButton, min: *f64, max: *f64) void;
+extern "c" fn gtk_spin_button_get_increments(spin: *gtk.GtkSpinButton, step: *f64, page: *f64) void;
+extern "c" fn gtk_spin_button_get_digits(spin: *gtk.GtkSpinButton) c_uint;
+extern "c" fn gtk_widget_set_visible(widget: *anyopaque, visible: c_int) void;
+extern "c" fn g_get_monotonic_time() i64;
+
+const SLIDER_MAX_STEPS: f64 = 400;
+const SLIDER_WIDTH: c_int = 220;
+/// How long a slider must rest before its value is applied (microseconds).
+const SLIDER_SETTLE_US: i64 = 140_000;
+
+const Slider = struct {
+    scale: *anyopaque,
+    spin: *gtk.GtkSpinButton,
+    label: *gtk.GtkLabel,
+    min: f64,
+    step: f64,
+    digits: c_uint,
+    deadline: i64 = 0,
+    pending: bool = false,
+    /// Set when the row is destroyed (lists get rebuilt), so a timer still
+    /// in flight touches nothing.
+    dead: bool = false,
+};
+
+fn sliderLabel(s: *Slider, value: f64) void {
+    var buf: [32]u8 = undefined;
+    const text = if (s.digits == 0)
+        std.fmt.bufPrintZ(&buf, "{d}", .{@as(i64, @intFromFloat(@round(value)))}) catch return
+    else
+        std.fmt.bufPrintZ(&buf, "{d:.2}", .{value}) catch return;
+    gtk.gtk_label_set_text(s.label, text.ptr);
+}
+
+fn onSliderApply(user_data: ?*anyopaque) callconv(.c) c_int {
+    const s: *Slider = @ptrCast(@alignCast(user_data.?));
+    if (s.dead) {
+        s.pending = false;
+        return 0;
+    }
+    if (g_get_monotonic_time() < s.deadline) return 1;
+    s.pending = false;
+    gtk.gtk_spin_button_set_value(s.spin, gtk_range_get_value(s.scale));
+    return 0;
+}
+
+fn onSliderMoved(range: *anyopaque, user_data: ?*anyopaque) callconv(.c) void {
+    const s: *Slider = @ptrCast(@alignCast(user_data.?));
+    if (s.dead) return;
+    const v = gtk_range_get_value(range);
+    const eps = s.step * 0.001;
+    // Rest on the setting's own steps (whole pixels, 0.05, ...).
+    const snapped = s.min + @round((v - s.min) / s.step) * s.step;
+    if (@abs(snapped - v) > eps) {
+        gtk_range_set_value(range, snapped);
+        return;
+    }
+    sliderLabel(s, snapped);
+    if (@abs(hg.gtk_spin_button_get_value(s.spin) - snapped) <= eps) return;
+    s.deadline = g_get_monotonic_time() + SLIDER_SETTLE_US;
+    if (!s.pending) {
+        s.pending = true;
+        _ = gtk.g_timeout_add(40, onSliderApply, @ptrCast(s));
+    }
+}
+
+/// The value was set from somewhere else (a reset, a linked row): follow.
+fn onSliderSpinChanged(spin: *gtk.GtkSpinButton, user_data: ?*anyopaque) callconv(.c) void {
+    const s: *Slider = @ptrCast(@alignCast(user_data.?));
+    if (s.dead) return;
+    const v = hg.gtk_spin_button_get_value(spin);
+    if (@abs(gtk_range_get_value(s.scale) - v) > s.step * 0.001) gtk_range_set_value(s.scale, v);
+}
+
+fn onSliderDestroyed(_: *anyopaque, user_data: ?*anyopaque) callconv(.c) void {
+    const s: *Slider = @ptrCast(@alignCast(user_data.?));
+    s.dead = true;
+}
+
+/// Puts `spin`'s value on `row` as a slider with a value label (see above).
+/// `spin` must already have its range, value and "value-changed" handler.
+pub fn attachNumber(row: *gtk.AdwActionRow, spin: *gtk.GtkSpinButton) void {
+    var min: f64 = 0;
+    var max: f64 = 0;
+    var step: f64 = 1;
+    var page: f64 = 0;
+    gtk_spin_button_get_range(spin, &min, &max);
+    gtk_spin_button_get_increments(spin, &step, &page);
+    const s_opt: ?*Slider = if (step > 0 and max > min and (max - min) / step <= SLIDER_MAX_STEPS)
+        std.heap.c_allocator.create(Slider) catch null
+    else
+        null;
+    const s = s_opt orelse {
+        gtk.adw_action_row_add_suffix(row, @ptrCast(spin));
+        return;
+    };
+
+    const scale = gtk_scale_new_with_range(0, min, max, step); // 0 = horizontal
+    gtk_scale_set_draw_value(scale, 0);
+    gtk.gtk_widget_set_size_request(scale, SLIDER_WIDTH, -1);
+    gtk.gtk_widget_set_valign(scale, gtk.ALIGN_CENTER);
+
+    const label = gtk.gtk_label_new("");
+    gtk.gtk_label_set_xalign(label, 1.0);
+    gtk.gtk_widget_set_size_request(@ptrCast(label), 44, -1);
+    gtk.gtk_widget_set_valign(@ptrCast(label), gtk.ALIGN_CENTER);
+    gtk.gtk_widget_add_css_class(@ptrCast(label), "numeric");
+    gtk.gtk_widget_add_css_class(@ptrCast(label), "dim-label");
+
+    s.* = .{ .scale = scale, .spin = spin, .label = label, .min = min, .step = step, .digits = gtk_spin_button_get_digits(spin) };
+    const value = hg.gtk_spin_button_get_value(spin);
+    gtk_range_set_value(scale, value);
+    sliderLabel(s, value);
+
+    _ = gtk.g_signal_connect_data(scale, "value-changed", @ptrCast(&onSliderMoved), @ptrCast(s), null, 0);
+    _ = gtk.g_signal_connect_data(@ptrCast(spin), "value-changed", @ptrCast(&onSliderSpinChanged), @ptrCast(s), null, 0);
+    _ = gtk.g_signal_connect_data(scale, "destroy", @ptrCast(&onSliderDestroyed), @ptrCast(s), null, 0);
+
+    gtk.adw_action_row_add_suffix(row, scale);
+    gtk.adw_action_row_add_suffix(row, @ptrCast(label));
+    gtk.adw_action_row_add_suffix(row, @ptrCast(spin));
+    gtk_widget_set_visible(@ptrCast(spin), 0);
+}
+
 pub fn addSpinRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, min: f64, max: f64, step: f64, initial: f64, cb: gtk.GCallback, user_data: ?*anyopaque) void {
     const row = gtk.adw_action_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), title);
@@ -313,7 +454,7 @@ pub fn addSpinRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, min: f64
     gtk.gtk_spin_button_set_value(spin, initial);
     gtk.gtk_widget_set_valign(@ptrCast(spin), gtk.ALIGN_CENTER);
     _ = gtk.g_signal_connect_data(@ptrCast(spin), "value-changed", cb, user_data, null, 0);
-    gtk.adw_action_row_add_suffix(row, @ptrCast(spin));
+    attachNumber(row, spin);
     gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
