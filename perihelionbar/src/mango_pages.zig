@@ -2950,7 +2950,7 @@ fn dispRebuild() void {
     }
 
     // Scale & transform
-    const g3 = dispGroup(box, "Scale & transform", "Fractional scaling and rotation for the output.");
+    const g3 = dispGroup(box, "Scale and transform", "Fractional scaling and rotation for the output.");
     _ = dispSpinRow(g3, "Scale", "Fractional scaling applied to the output.", 0.5, 3.0, 0.05, 2, dispFloatOr(v, "scale", o.scale), @ptrCast(&onDispScaleChanged));
     var tl: [disp.transform_labels.len][*:0]const u8 = undefined;
     for (disp.transform_labels, 0..) |l, i| tl[i] = l.ptr;
