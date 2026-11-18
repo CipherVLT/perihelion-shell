@@ -955,7 +955,10 @@ fn onMangoCanvasDraw(_: *hg.GtkDrawingArea, cr: *hg.CairoT, w: c_int, h: c_int, 
     var line_idxs: [8]usize = undefined;
     const m = mangoMonitorLines(&line_idxs);
     var rects: [8]mon.ArrangeRect = undefined;
-    const n = mangoRects(&rects, line_idxs[0..m]);
+    var n = mangoRects(&rects, line_idxs[0..m]);
+    // No rules yet (a fresh install): draw the monitors as they are now.
+    const live = n == 0 and g_disp_n > 0;
+    if (live) n = dispLiveRects(&rects);
     const cw: i32 = @intCast(w);
     const ch: i32 = @intCast(h);
     hg.cairo_set_source_rgb(cr, 0.11, 0.11, 0.14);
@@ -1001,7 +1004,7 @@ fn onMangoCanvasDraw(_: *hg.GtkDrawingArea, cr: *hg.CairoT, w: c_int, h: c_int, 
         hg.cairo_set_font_size(cr, 12);
         hg.cairo_move_to(cr, sx + 6, sy + 16);
         var nbuf: [64]u8 = undefined;
-        const nm = mangoRuleName(line_idxs[i], &nbuf);
+        const nm = if (live) g_disp_outs[i].name() else mangoRuleName(line_idxs[i], &nbuf);
         var lbuf: [72:0]u8 = undefined;
         const zs = std.fmt.bufPrintZ(&lbuf, "{s}", .{if (nm.len != 0) nm else "???"}) catch "?";
         hg.cairo_show_text(cr, zs.ptr);
@@ -1032,6 +1035,7 @@ fn mangoCanvasHit(px: f64, py: f64) isize {
 }
 
 fn onMangoCanvasPressed(_: *hg.GtkGestureClick, n_press: c_int, x: f64, y: f64, user_data: ?*anyopaque) callconv(.c) void {
+    dispEnsureRules();
     const hit = mangoCanvasHit(x, y);
     if (hit >= 0) {
         g_mango_selected = @intCast(hit);
@@ -1063,6 +1067,7 @@ fn onMangoCanvasPressed(_: *hg.GtkGestureClick, n_press: c_int, x: f64, y: f64, 
 }
 
 fn onMangoDragBegin(_: *hg.GtkGestureDrag, x: f64, y: f64, _: ?*anyopaque) callconv(.c) void {
+    dispEnsureRules();
     const hit = mangoCanvasHit(x, y);
     g_mdrag_idx = hit;
     if (hit < 0) return;
@@ -1164,6 +1169,7 @@ fn onMangoDragEnd(_: *hg.GtkGestureDrag, _: f64, _: f64, _: ?*anyopaque) callcon
 }
 
 fn onMangoArrangeClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    dispEnsureRules();
     var line_idxs: [8]usize = undefined;
     const m = mangoMonitorLines(&line_idxs);
     var rects: [8]mon.ArrangeRect = undefined;
@@ -1177,6 +1183,7 @@ fn onMangoArrangeClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
 }
 
 fn onMangoAlignTopsClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
+    dispEnsureRules();
     var line_idxs: [8]usize = undefined;
     const m = mangoMonitorLines(&line_idxs);
     var rects: [8]mon.ArrangeRect = undefined;
@@ -2715,6 +2722,40 @@ fn dispRefreshOutputs() void {
         g_disp_n = disp.parseWlrRandr(out, &g_disp_outs);
     }
     if (g_disp_sel >= g_disp_n) g_disp_sel = 0;
+}
+
+/// The live monitors as canvas rectangles (logical size, so scale and
+/// rotation count), in g_disp_outs order. Disabled ones are left out.
+fn dispLiveRects(rects: []mon.ArrangeRect) usize {
+    var n: usize = 0;
+    for (g_disp_outs[0..g_disp_n]) |*o| {
+        if (n >= rects.len) break;
+        var sb: [16]u8 = undefined;
+        var lw: i32 = 0;
+        var lh: i32 = 0;
+        mon.logicalExtents(o.width, o.height, disp.fmtScale(o.scale, &sb), o.transform, &lw, &lh);
+        rects[n] = .{ .x = o.x, .y = o.y, .w = if (o.enabled) lw else 0, .h = if (o.enabled) lh else 0 };
+        n += 1;
+    }
+    return n;
+}
+
+/// Writes a rule for every listed monitor that has none, from its live
+/// state (so nothing changes on screen), before the canvas moves them.
+fn dispEnsureRules() void {
+    var added = false;
+    for (g_disp_outs[0..g_disp_n]) |*o| {
+        if (findMonitorRuleLine(o.name()) != null) continue;
+        var vb: [mango.MAX_LINE]u8 = undefined;
+        const v = disp.baseRule(o, &vb) orelse continue;
+        var lb: [mango.MAX_LINE]u8 = undefined;
+        doc_monitors.appendLine(std.fmt.bufPrint(&lb, "monitor_rule = {s}", .{v}) catch continue);
+        added = true;
+    }
+    if (added) {
+        _ = doc_monitors.save();
+        rebuildRuleList(&g_rp_monitors);
+    }
 }
 
 fn dispSelected() ?*disp.Output {
