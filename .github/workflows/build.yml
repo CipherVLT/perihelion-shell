@@ -60,6 +60,14 @@ jobs:
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc
+      - name: Unit-test the Display page (outputs, rules, colour presets, EDID, ICC, night light)
+        working-directory: perihelionbar
+        run: |
+          /opt/zig/zig test src/display.zig -lc
+          # The generated ICC profiles must open in Little CMS, the library
+          # wlroots (and so Mango) applies them with.
+          python3 -c 'import PIL.ImageCms' 2>/dev/null || dnf5 install -y --setopt=install_weak_deps=False python3-pillow
+          python3 ../tests/icc-check.py /tmp/perihelion-icc-test
       - name: "Live test: one bar and one dock under every toggle"
         run: |
           # The real bar and Settings against a headless compositor, flipping
