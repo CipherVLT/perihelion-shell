@@ -701,8 +701,16 @@ pub fn formatNightLight(nl: NightLight, out: []u8) ?[]const u8 {
 
 /// "20:00" for 1200.
 pub fn fmtClock(minutes: i32, buf: []u8) []const u8 {
-    const m = std.math.clamp(minutes, 0, 1439);
-    return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ @divTrunc(m, 60), @mod(m, 60) }) catch "00:00";
+    if (buf.len < 5) return "00:00";
+    const m: u32 = @intCast(std.math.clamp(minutes, 0, 1439));
+    const h = m / 60;
+    const mm = m % 60;
+    buf[0] = '0' + @as(u8, @intCast(h / 10));
+    buf[1] = '0' + @as(u8, @intCast(h % 10));
+    buf[2] = ':';
+    buf[3] = '0' + @as(u8, @intCast(mm / 10));
+    buf[4] = '0' + @as(u8, @intCast(mm % 10));
+    return buf[0..5];
 }
 
 // ---------------------------------------------------------------------
