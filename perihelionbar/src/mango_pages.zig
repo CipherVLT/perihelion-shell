@@ -30,6 +30,7 @@ const hypr = @import("hyprland.zig");
 const mango = @import("mango.zig");
 const desk = @import("desk_theme.zig");
 const mon = @import("monitors.zig");
+const disp = @import("display.zig");
 
 const gpa = std.heap.c_allocator;
 
@@ -540,7 +541,7 @@ var g_wrules_list: ?*gtk.GtkListBox = null;
 var g_lrules_list: ?*gtk.GtkListBox = null;
 var g_tagrules_list: ?*gtk.GtkListBox = null;
 
-const MON_SPEC = [_][:0]const u8{ "name", "width", "height", "refresh", "x", "y", "scale", "rr", "vrr", "mirror" };
+const MON_SPEC = [_][:0]const u8{ "name", "width", "height", "refresh", "x", "y", "scale", "rr", "vrr", "hdr", "icc", "disable" };
 const WIN_SPEC = [_][:0]const u8{ "app_id", "title", "is_floating", "is_scratchpad", "is_opensilent", "is_not_focus", "no_border", "no_animation", "no_blur", "no_shadow", "no_radius", "move_to_tag", "move_to_monitor" };
 const LAYER_SPEC = [_][:0]const u8{ "layer_name", "no_animation", "no_blur", "no_shadow", "no_radius", "animation_type_open", "animation_type_close" };
 const TAG_SPEC = [_][:0]const u8{ "id", "layout_name" };
@@ -550,8 +551,8 @@ var g_rp_monitors: RulePage = .{
     .key = "monitor_rule",
     .spec = &MON_SPEC,
     .list = &g_monitors_list,
-    .title = "Monitors",
-    .desc = "One row per monitor_rule. Values are comma-separated key:value pairs (name, width, height, refresh, x, y, scale, rr, vrr, mirror). Auto-detect fills them from the connected displays.",
+    .title = "Monitor rules",
+    .desc = "One row per monitor_rule. Values are comma-separated key:value pairs (name, width, height, refresh, x, y, scale, rr, vrr, hdr, icc, disable).",
     .add_label = "Add Monitor Rule",
     .add_value = "name:DP-1, width:1920, height:1080, refresh:60, x:0, y:0, rr:0, vrr:0",
     .dlg_title = "Edit Monitor Rule",
@@ -727,7 +728,7 @@ fn addRulePage(outer: *gtk.GtkBox, rp: *const RulePage) void {
 //     `wlr-randr` mode list (not just the current mode),
 //   - side-by-side / align-tops helpers,
 //   - and the original Auto-detect button (fills name/width/height/
-//     refresh/x/y from live outputs, preserving scale/rr/vrr/mirror).
+//     refresh/x/y from live outputs, preserving scale/rr/vrr/hdr/icc).
 // ---------------------------------------------------------------------
 
 const MANGO_CANVAS_W: c_int = 620;
@@ -796,6 +797,8 @@ fn onMonitorsDetectClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void 
     reload();
     rebuildRuleList(&g_rp_monitors);
     queueMangoCanvasDraw();
+    dispRefreshOutputs();
+    dispScheduleRebuild();
 }
 
 // --- Caps (full wlr-randr mode list) ---
@@ -879,7 +882,7 @@ fn mangoRuleName(line_idx: usize, buf: []u8) []const u8 {
 }
 
 /// Rewrites x/y for each monitor_rule, preserving every other pair
-/// (width/height/refresh/scale/rr/vrr/mirror) via composeMangoRule.
+/// (width/height/refresh/scale/rr/vrr/hdr/icc) via composeMangoRule.
 fn writeMangoPositions(rects: []const mon.ArrangeRect, line_idxs: []const usize) void {
     for (rects, 0..) |r, k| {
         if (k >= line_idxs.len) break;
@@ -1033,6 +1036,22 @@ fn onMangoCanvasPressed(_: *hg.GtkGestureClick, n_press: c_int, x: f64, y: f64, 
     if (hit >= 0) {
         g_mango_selected = @intCast(hit);
         queueMangoCanvasDraw();
+        // Show the clicked monitor's controls below the canvas.
+        {
+            var lis: [8]usize = undefined;
+            const cnt = mangoMonitorLines(&lis);
+            if (@as(usize, @intCast(hit)) < cnt) {
+                var nb: [64]u8 = undefined;
+                const nm = mangoRuleName(lis[@intCast(hit)], &nb);
+                for (g_disp_outs[0..g_disp_n], 0..) |*o, oi| {
+                    if (std.mem.eql(u8, o.name(), nm) and oi != g_disp_sel) {
+                        g_disp_sel = oi;
+                        g_disp_note[0] = 0;
+                        dispScheduleRebuild();
+                    }
+                }
+            }
+        }
         if (n_press >= 2) {
             var line_idxs: [8]usize = undefined;
             const m = mangoMonitorLines(&line_idxs);
@@ -1178,6 +1197,8 @@ fn onMangoAlignTopsClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void 
 fn onMangoCapsRefreshClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     refreshMangoCaps();
     queueMangoCanvasDraw();
+    dispRefreshOutputs();
+    dispScheduleRebuild();
 }
 
 // --- Capability-aware monitor_rule dialog ---
@@ -1262,7 +1283,6 @@ fn openMangoMonitorDialog(parent: *anyopaque, line: usize) void {
     const ss = ruleField(kv.value, "scale");
     const rrs = ruleField(kv.value, "rr");
     const vrs = ruleField(kv.value, "vrr");
-    const mir = ruleField(kv.value, "mirror");
 
     const content = hp.newDialogBox();
     const group = gtk.adw_preferences_group_new();
@@ -1324,7 +1344,6 @@ fn openMangoMonitorDialog(parent: *anyopaque, line: usize) void {
     addMangoField(group, "Scale", ss, "scale", 100);
     addMangoField(group, "RR", rrs, "rr", 100);
     addMangoField(group, "VRR", vrs, "vrr", 100);
-    addMangoField(group, "Mirror", mir, "mirror", 160);
     gtk.gtk_box_append(content, @ptrCast(group));
     const d = hg.adw_dialog_new();
     hg.adw_dialog_set_title(d, "Edit Monitor Rule");
@@ -2649,13 +2668,528 @@ fn buildLayoutPage() *gtk.GtkBox {
 // Monitors / Window Rules pages
 // ---------------------------------------------------------------------
 
-fn buildMonitorsPage() *gtk.GtkBox {
+// ---------------------------------------------------------------------
+// Display page: arrangement canvas, then per-monitor controls (enabled,
+// resolution, refresh rate, scale, transform, bit depth, colour
+// management) and the night light. Every change is written to
+// cfg/monitors.conf (monitor_rule / hdr_depth) and applied with
+// `mmsg dispatch reload_config`, which re-applies monitor rules live. The
+// logic lives in display.zig.
+// ---------------------------------------------------------------------
+
+extern "c" fn gtk_widget_get_first_child(widget: *anyopaque) ?*anyopaque;
+extern "c" fn gtk_box_remove(box: *anyopaque, child: *anyopaque) void;
+
+var g_disp_outs: [disp.MAX_OUT]disp.Output = undefined;
+var g_disp_n: usize = 0;
+var g_disp_sel: usize = 0;
+var g_disp_detail: ?*gtk.GtkBox = null;
+var g_disp_chips: ?*gtk.GtkBox = null;
+var g_disp_note: [160:0]u8 = [_:0]u8{0} ** 160;
+var g_disp_res_bufs: [mon.MAX_RES][16:0]u8 = undefined;
+var g_disp_res_ptrs: [mon.MAX_RES][*:0]const u8 = undefined;
+var g_disp_res_n: usize = 0;
+var g_disp_res_shown: usize = 0;
+var g_disp_hz_bufs: [mon.MAX_HZ][16:0]u8 = undefined;
+var g_disp_hz_ptrs: [mon.MAX_HZ][*:0]const u8 = undefined;
+var g_disp_hz_n: usize = 0;
+var g_disp_cm_row: ?*gtk.AdwComboRow = null;
+
+const DISP_PRESETS_FILE = ".config/perihelionbar/display-presets";
+const DISP_ICC_DIR = ".local/share/perihelion/icc";
+const NL_FILE = ".config/perihelion/nightlight.conf";
+
+fn homeZ() []const u8 {
+    return if (getenv("HOME")) |h| std.mem.span(h) else "/root";
+}
+
+fn dispNote(comptime fmt: []const u8, args: anytype) void {
+    const s = std.fmt.bufPrintZ(&g_disp_note, fmt, args) catch return;
+    _ = s;
+}
+
+fn dispRefreshOutputs() void {
+    g_disp_n = 0;
+    if (hypr.captureOutput(&.{"wlr-randr"}, 3000)) |out| {
+        defer gpa.free(out);
+        g_disp_n = disp.parseWlrRandr(out, &g_disp_outs);
+    }
+    if (g_disp_sel >= g_disp_n) g_disp_sel = 0;
+}
+
+fn dispSelected() ?*disp.Output {
+    if (g_disp_sel >= g_disp_n) return null;
+    return &g_disp_outs[g_disp_sel];
+}
+
+/// The selected output's rule value: its monitor_rule, or one made from its
+/// live state when it has none yet.
+fn dispCurrentValue(o: *const disp.Output, buf: []u8) ?[]const u8 {
+    if (findMonitorRuleLine(o.name())) |li| {
+        const kv = mango.parseKV(doc_monitors.line(li)) orelse return null;
+        if (kv.value.len > buf.len) return null;
+        @memcpy(buf[0..kv.value.len], kv.value);
+        return buf[0..kv.value.len];
+    }
+    return disp.baseRule(o, buf);
+}
+
+fn dispWrite(o: *const disp.Output, value: []const u8) void {
+    var lb: [mango.MAX_LINE]u8 = undefined;
+    const text = std.fmt.bufPrint(&lb, "monitor_rule = {s}", .{value}) catch return;
+    if (findMonitorRuleLine(o.name())) |li| doc_monitors.setLine(li, text) else doc_monitors.appendLine(text);
+    _ = doc_monitors.save();
+    reload();
+    rebuildRuleList(&g_rp_monitors);
+    queueMangoCanvasDraw();
+}
+
+fn dispSet(key: []const u8, value: []const u8) void {
+    const o = dispSelected() orelse return;
+    var cb: [mango.MAX_LINE]u8 = undefined;
+    const cur = dispCurrentValue(o, &cb) orelse return;
+    var nb: [mango.MAX_LINE]u8 = undefined;
+    const nv = disp.setField(cur, key, value, &nb) orelse return;
+    dispWrite(o, nv);
+}
+
+fn dispRuleOf(o: *const disp.Output) []const u8 {
+    const li = findMonitorRuleLine(o.name()) orelse return "";
+    const kv = mango.parseKV(doc_monitors.line(li)) orelse return "";
+    return kv.value;
+}
+
+fn dispEnabled(o: *const disp.Output) bool {
+    const v = dispRuleOf(o);
+    if (findMonitorRuleLine(o.name()) != null) return !std.mem.eql(u8, disp.getField(v, "disable"), "1");
+    return o.enabled;
+}
+
+fn dispIntOr(v: []const u8, key: []const u8, fallback: i32) i32 {
+    const s = disp.getField(v, key);
+    return if (s.len == 0) fallback else std.fmt.parseInt(i32, s, 10) catch fallback;
+}
+
+fn dispFloatOr(v: []const u8, key: []const u8, fallback: f64) f64 {
+    const s = disp.getField(v, key);
+    return if (s.len == 0) fallback else std.fmt.parseFloat(f64, s) catch fallback;
+}
+
+fn dispScheduleRebuild() void {
+    _ = gtk.g_idle_add(&onDispRebuildIdle, null);
+}
+
+fn onDispRebuildIdle(_: ?*anyopaque) callconv(.c) c_int {
+    dispRebuild();
+    return 0;
+}
+
+fn dispComboRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, labels: []const [*:0]const u8, selected: usize, cb: gtk.GCallback) *gtk.AdwComboRow {
+    var arr: [64]?[*:0]const u8 = undefined;
+    const n = @min(labels.len, arr.len - 1);
+    for (labels[0..n], 0..) |l, i| arr[i] = l;
+    arr[n] = null;
+    const row = gtk.adw_combo_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), title);
+    if (subtitle.len != 0) gtk.adw_action_row_set_subtitle(@ptrCast(row), subtitle);
+    gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&arr))));
+    gtk.adw_combo_row_set_selected(row, @intCast(@min(selected, if (n == 0) 0 else n - 1)));
+    _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", cb, null, null, 0);
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+    return row;
+}
+
+fn dispSpinRow(group: *gtk.AdwPreferencesGroup, title: [:0]const u8, subtitle: [:0]const u8, min: f64, max: f64, step: f64, digits: c_uint, initial: f64, cb: gtk.GCallback) *gtk.AdwActionRow {
+    const row = gtk.adw_action_row_new();
+    gtk.adw_preferences_row_set_title(@ptrCast(row), title);
+    if (subtitle.len != 0) gtk.adw_action_row_set_subtitle(row, subtitle);
+    const spin = gtk.gtk_spin_button_new_with_range(min, max, step);
+    gtk_spin_button_set_digits(spin, digits);
+    gtk.gtk_spin_button_set_value(spin, initial);
+    gtk.gtk_widget_set_valign(@ptrCast(spin), gtk.ALIGN_CENTER);
+    _ = gtk.g_signal_connect_data(@ptrCast(spin), "value-changed", cb, @ptrCast(row), null, 0);
+    hp.attachNumber(row, spin);
+    gtk.adw_preferences_group_add(group, @ptrCast(row));
+    return row;
+}
+
+extern "c" fn gtk_spin_button_set_digits(self: *gtk.GtkSpinButton, digits: c_uint) void;
+
+fn dispGroup(parent: *gtk.GtkBox, title: [:0]const u8, desc: [:0]const u8) *gtk.AdwPreferencesGroup {
+    const g = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(g, title);
+    if (desc.len != 0) gtk.adw_preferences_group_set_description(g, desc);
+    gtk.gtk_widget_set_margin_top(@ptrCast(g), 12);
+    gtk.gtk_box_append(parent, @ptrCast(g));
+    return g;
+}
+
+fn onDispChipClicked(_: *gtk.GtkButton, user_data: ?*anyopaque) callconv(.c) void {
+    const idx = @intFromPtr(user_data) -% 1;
+    if (idx >= g_disp_n) return;
+    g_disp_sel = idx;
+    g_disp_note[0] = 0;
+    dispScheduleRebuild();
+}
+
+fn dispRebuildChips() void {
+    const box = g_disp_chips orelse return;
+    while (gtk_widget_get_first_child(@ptrCast(box))) |c| gtk_box_remove(@ptrCast(box), c);
+    for (g_disp_outs[0..g_disp_n], 0..) |*o, i| {
+        var nb: [40]u8 = undefined;
+        const b = gtk.gtk_button_new_with_label(hp.zCopy(o.name(), &nb));
+        gtk.gtk_widget_add_css_class(@ptrCast(b), "pill");
+        if (i == g_disp_sel) gtk.gtk_widget_add_css_class(@ptrCast(b), "suggested-action");
+        _ = gtk.g_signal_connect_data(@ptrCast(b), "clicked", @ptrCast(&onDispChipClicked), @ptrFromInt(i + 1), null, 0);
+        gtk.gtk_box_append(box, @ptrCast(b));
+    }
+}
+
+fn dispRebuild() void {
+    const box = g_disp_detail orelse return;
+    while (gtk_widget_get_first_child(@ptrCast(box))) |c| gtk_box_remove(@ptrCast(box), c);
+    dispRebuildChips();
+    g_disp_cm_row = null;
+    const o = dispSelected() orelse {
+        _ = dispGroup(box, "No monitors found", "wlr-randr reported no outputs. Is this a Mango session?");
+        return;
+    };
+    const v = dispRuleOf(o);
+
+    // Output
+    var tb: [40]u8 = undefined;
+    var db: [128]u8 = undefined;
+    const desc_text: [*:0]const u8 = if (g_disp_note[0] != 0)
+        @ptrCast(&g_disp_note)
+    else if (o.desc().len != 0)
+        hp.zCopy(o.desc(), &db)
+    else
+        "Enable or disable this output.";
+    const g1 = dispGroup(box, std.mem.span(hp.zCopy(o.name(), &tb)), std.mem.span(desc_text));
+    hp.addSwitchRow(g1, "Enabled", "Turn this output on or off.", dispEnabled(o), @ptrCast(&onDispEnabled), null);
+
+    // Mode
+    const g2 = dispGroup(box, "Display", "Mode and timing for the selected output. VRR is under Render.");
+    const cur_w = dispIntOr(v, "width", o.width);
+    const cur_h = dispIntOr(v, "height", o.height);
+    const cur_hz = dispFloatOr(v, "refresh", o.hz);
+    g_disp_res_n = 0;
+    var res_sel: usize = 0;
+    var rb: [24]u8 = undefined;
+    const cur_res = std.fmt.bufPrint(&rb, "{d}x{d}", .{ cur_w, cur_h }) catch "";
+    while (g_disp_res_n < o.caps.n_res and g_disp_res_n < mon.MAX_RES) : (g_disp_res_n += 1) {
+        const s = o.caps.resolution(g_disp_res_n);
+        if (std.mem.eql(u8, s, cur_res)) res_sel = g_disp_res_n;
+        g_disp_res_ptrs[g_disp_res_n] = hp.zCopy(s, &g_disp_res_bufs[g_disp_res_n]);
+    }
+    if (g_disp_res_n == 0) {
+        const row = gtk.adw_action_row_new();
+        gtk.adw_preferences_row_set_title(@ptrCast(row), "Resolution");
+        gtk.adw_action_row_set_subtitle(row, "This monitor reported no modes (wlr-randr).");
+        gtk.adw_preferences_group_add(g2, @ptrCast(row));
+    } else {
+        g_disp_res_shown = res_sel;
+        _ = dispComboRow(g2, "Resolution", "Mode the output drives.", g_disp_res_ptrs[0..g_disp_res_n], res_sel, @ptrCast(&onDispResChanged));
+        const list = o.caps.hzList(res_sel);
+        g_disp_hz_n = 0;
+        var hz_sel: usize = 0;
+        var best: f64 = 1e9;
+        for (list) |hz| {
+            if (g_disp_hz_n >= mon.MAX_HZ) break;
+            var hb: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&hb, "{d:.2} Hz", .{hz}) catch "?";
+            g_disp_hz_ptrs[g_disp_hz_n] = hp.zCopy(s, &g_disp_hz_bufs[g_disp_hz_n]);
+            if (@abs(hz - cur_hz) < best) {
+                best = @abs(hz - cur_hz);
+                hz_sel = g_disp_hz_n;
+            }
+            g_disp_hz_n += 1;
+        }
+        if (g_disp_hz_n > 0) _ = dispComboRow(g2, "Refresh rate", "Timing for the selected resolution.", g_disp_hz_ptrs[0..g_disp_hz_n], hz_sel, @ptrCast(&onDispHzChanged));
+    }
+
+    // Scale & transform
+    const g3 = dispGroup(box, "Scale & transform", "Fractional scaling and rotation for the output.");
+    _ = dispSpinRow(g3, "Scale", "Fractional scaling applied to the output.", 0.5, 3.0, 0.05, 2, dispFloatOr(v, "scale", o.scale), @ptrCast(&onDispScaleChanged));
+    var tl: [disp.transform_labels.len][*:0]const u8 = undefined;
+    for (disp.transform_labels, 0..) |l, i| tl[i] = l.ptr;
+    const rr: usize = @intCast(std.math.clamp(dispIntOr(v, "rr", o.transform), 0, 7));
+    _ = dispComboRow(g3, "Transform", "Rotation and flip applied to the output.", &tl, rr, @ptrCast(&onDispTransformChanged));
+
+    // Colour
+    const g4 = dispGroup(box, "Color", "Bit depth and colour management.");
+    const depth_labels = [_][*:0]const u8{ "10-bit", "8-bit" };
+    const depth_sel: usize = if (doc_monitors.getInt("hdr_depth", 2) == 1) 1 else 0;
+    _ = dispComboRow(g4, "Bit depth", "Used while HDR is on; Mango draws SDR in 8-bit. Applies to every monitor.", &depth_labels, depth_sel, @ptrCast(&onDispDepthChanged));
+    var pl: [disp.preset_names.len][*:0]const u8 = undefined;
+    for (disp.preset_names, 0..) |n, i| pl[i] = n.ptr;
+    const remembered = dispRemembered(o.name());
+    const preset = disp.presetOfRule(v, remembered);
+    const cm_sel: usize = if (preset) |p| @intFromEnum(p) else 0;
+    const cm_sub: [:0]const u8 = if (preset) |p| disp.presetHelp(p) else "A custom ICC profile is set in this monitor's rule; choosing a preset replaces it.";
+    g_disp_cm_row = dispComboRow(g4, "Color management", cm_sub, &pl, cm_sel, @ptrCast(&onDispPresetChanged));
+}
+
+fn onDispEnabled(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const on = gtk.gtk_switch_get_active(sw) != 0;
+    const o = dispSelected() orelse return;
+    if (!on) {
+        var others: usize = 0;
+        for (g_disp_outs[0..g_disp_n], 0..) |*x, i| {
+            if (i != g_disp_sel and dispEnabled(x)) others += 1;
+        }
+        if (others == 0) {
+            dispNote("{s} is the only screen in use, so it stays on.", .{o.name()});
+            dispScheduleRebuild();
+            return;
+        }
+    }
+    g_disp_note[0] = 0;
+    dispSet("disable", if (on) "" else "1");
+}
+
+fn onDispResChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const o = dispSelected() orelse return;
+    const idx: usize = gtk.adw_combo_row_get_selected(row);
+    if (idx >= o.caps.n_res or idx == g_disp_res_shown) return;
+    const res = o.caps.resolution(idx);
+    const x = std.mem.indexOfScalar(u8, res, 'x') orelse return;
+    const list = o.caps.hzList(idx);
+    if (list.len == 0) return;
+    var cb: [mango.MAX_LINE]u8 = undefined;
+    var b1: [mango.MAX_LINE]u8 = undefined;
+    var b2: [mango.MAX_LINE]u8 = undefined;
+    var hzb: [24]u8 = undefined;
+    const cur = dispCurrentValue(o, &cb) orelse return;
+    const v1 = disp.setField(cur, "width", res[0..x], &b1) orelse return;
+    const v2 = disp.setField(v1, "height", res[x + 1 ..], &b2) orelse return;
+    const v3 = disp.setField(v2, "refresh", disp.fmtHz(list[0], &hzb), &b1) orelse return;
+    dispWrite(o, v3);
+    dispScheduleRebuild();
+}
+
+fn onDispHzChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const o = dispSelected() orelse return;
+    const idx: usize = gtk.adw_combo_row_get_selected(row);
+    const list = o.caps.hzList(g_disp_res_shown);
+    if (idx >= list.len) return;
+    var hzb: [24]u8 = undefined;
+    dispSet("refresh", disp.fmtHz(list[idx], &hzb));
+}
+
+fn onDispScaleChanged(spin: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    var sb: [16]u8 = undefined;
+    dispSet("scale", disp.fmtScale(hg.gtk_spin_button_get_value(spin), &sb));
+}
+
+fn onDispTransformChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx > 7) return;
+    var b: [4]u8 = undefined;
+    dispSet("rr", if (idx == 0) "" else std.fmt.bufPrint(&b, "{d}", .{idx}) catch return);
+}
+
+fn onDispDepthChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    // Mango's hdr_depth: 1 = 8-bit, 2 = 10-bit (its default).
+    doc_monitors.setValue("hdr_depth", if (gtk.adw_combo_row_get_selected(row) == 1) "1" else "2");
+    _ = doc_monitors.save();
+    reload();
+}
+
+fn dispRemembered(name: []const u8) ?disp.Preset {
+    var pb: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&pb, "{s}/" ++ DISP_PRESETS_FILE, .{homeZ()}) catch return null;
+    var fb: [2048]u8 = undefined;
+    const text = disp.readFileZ(path.ptr, &fb) orelse return null;
+    return disp.rememberedIn(text, name);
+}
+
+fn dispRemember(name: []const u8, p: disp.Preset) void {
+    var pb: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&pb, "{s}/" ++ DISP_PRESETS_FILE, .{homeZ()}) catch return;
+    var fb: [2048]u8 = undefined;
+    const text = disp.readFileZ(path.ptr, &fb) orelse "";
+    var ob: [2200]u8 = undefined;
+    const next = disp.withRemembered(text, name, p, &ob) orelse return;
+    var db: [512]u8 = undefined;
+    disp.makeDirs(std.fmt.bufPrint(&db, "{s}/.config/perihelionbar", .{homeZ()}) catch return);
+    _ = disp.writeFileZ(path, next);
+}
+
+fn onDispPresetChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    const o = dispSelected() orelse return;
+    const idx = gtk.adw_combo_row_get_selected(row);
+    if (idx >= disp.preset_names.len) return;
+    const p: disp.Preset = @enumFromInt(idx);
+    var edid_buf: [1024]u8 = undefined;
+    const edid: []const u8 = if (p == .edid or p == .hdredid) (disp.readEdid(o.name(), &edid_buf) orelse "") else "";
+
+    var icc_path_buf: [512]u8 = undefined;
+    var icc_path: [:0]const u8 = "";
+    if (disp.presetUsesIcc(p)) {
+        const prim = if (p == .edid) (disp.edidPrimaries(edid) orelse {
+            dispNote("{s} reports no usable colour data in its EDID, so the edid preset can't be used.", .{o.name()});
+            dispScheduleRebuild();
+            return;
+        }) else disp.presetPrimaries(p).?;
+        var dir_buf: [512]u8 = undefined;
+        const dir = std.fmt.bufPrint(&dir_buf, "{s}/" ++ DISP_ICC_DIR, .{homeZ()}) catch return;
+        disp.makeDirs(dir);
+        icc_path = std.fmt.bufPrintZ(&icc_path_buf, "{s}/{s}.{s}.icc", .{ dir, o.name(), disp.preset_names[idx] }) catch return;
+        var desc_buf: [96]u8 = undefined;
+        const desc = std.fmt.bufPrint(&desc_buf, "Perihelion {s} ({s})", .{ disp.preset_names[idx], o.name() }) catch "Perihelion";
+        var icc_buf: [1024]u8 = undefined;
+        const icc = disp.makeIcc(prim, desc, &icc_buf) orelse return;
+        if (!disp.writeFileZ(icc_path, icc)) {
+            dispNote("Could not write the colour profile to {s}.", .{dir});
+            dispScheduleRebuild();
+            return;
+        }
+    }
+    const lum: ?disp.Luminance = if (p == .hdredid) disp.edidLuminance(edid) else null;
+    var cb: [mango.MAX_LINE]u8 = undefined;
+    const cur = dispCurrentValue(o, &cb) orelse return;
+    var nb: [mango.MAX_LINE]u8 = undefined;
+    const nv = disp.applyPreset(cur, p, icc_path, lum, &nb) orelse return;
+    if (p == .hdredid and lum == null) {
+        dispNote("{s} reports no HDR brightness data in its EDID: HDR is on with Mango's defaults.", .{o.name()});
+    } else {
+        g_disp_note[0] = 0;
+    }
+    dispRemember(o.name(), p);
+    dispWrite(o, nv);
+    dispScheduleRebuild();
+}
+
+// --- Night light ---
+
+var g_nl: disp.NightLight = .{};
+
+fn nlPath(buf: []u8) ?[:0]const u8 {
+    return std.fmt.bufPrintZ(buf, "{s}/" ++ NL_FILE, .{homeZ()}) catch null;
+}
+
+fn nlLoad() void {
+    var pb: [512]u8 = undefined;
+    const path = nlPath(&pb) orelse return;
+    var fb: [1024]u8 = undefined;
+    g_nl = if (disp.readFileZ(path.ptr, &fb)) |text| disp.parseNightLight(text) else .{};
+}
+
+/// Saves the settings and restarts the night light, so a change shows at
+/// once; makes sure Mango starts it at login too.
+fn nlApply() void {
+    var pb: [512]u8 = undefined;
+    const path = nlPath(&pb) orelse return;
+    var db: [512]u8 = undefined;
+    disp.makeDirs(std.fmt.bufPrint(&db, "{s}/.config/perihelion", .{homeZ()}) catch return);
+    var tb: [1024]u8 = undefined;
+    const text = disp.formatNightLight(g_nl, &tb) orelse return;
+    if (!disp.writeFileZ(path, text)) return;
+    var have = false;
+    for (doc_autostart.lines.items) |l| {
+        if (std.mem.indexOf(u8, l, "perihelion-nightlight") != null) have = true;
+    }
+    if (!have) {
+        doc_autostart.appendLine("# Night light (Settings → Display; ~/.config/perihelion/nightlight.conf)");
+        doc_autostart.appendLine("exec_once=perihelion-nightlight");
+        _ = doc_autostart.save();
+    }
+    if (hypr.captureOutput(&.{ "perihelion-nightlight", "restart" }, 3000)) |out| gpa.free(out);
+}
+
+fn onNlEnabled(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    g_nl.enabled = gtk.gtk_switch_get_active(sw) != 0;
+    nlApply();
+}
+
+fn onNlSchedule(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    g_nl.schedule = if (gtk.adw_combo_row_get_selected(row) == 1) .always else .manual;
+    nlApply();
+}
+
+fn onNlFollowSun(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
+    g_nl.follow_sun = gtk.gtk_switch_get_active(sw) != 0;
+    nlApply();
+}
+
+fn spinInt(spin: *gtk.GtkSpinButton) i32 {
+    return @intFromFloat(@round(hg.gtk_spin_button_get_value(spin)));
+}
+
+fn onNlDay(spin: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    g_nl.day = spinInt(spin);
+    nlApply();
+}
+
+fn onNlNight(spin: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    g_nl.night = spinInt(spin);
+    nlApply();
+}
+
+fn nlClockSubtitle(row: ?*anyopaque, prefix: []const u8, minutes: i32) void {
+    const r = row orelse return;
+    var cb: [8]u8 = undefined;
+    var sb: [64]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&sb, "{s} {s} (minutes after midnight).", .{ prefix, disp.fmtClock(minutes, &cb) }) catch return;
+    gtk.adw_action_row_set_subtitle(@ptrCast(@alignCast(r)), s.ptr);
+}
+
+fn onNlStart(spin: *gtk.GtkSpinButton, row: ?*anyopaque) callconv(.c) void {
+    g_nl.start = spinInt(spin);
+    nlClockSubtitle(row, "Starts at", g_nl.start);
+    nlApply();
+}
+
+fn onNlEnd(spin: *gtk.GtkSpinButton, row: ?*anyopaque) callconv(.c) void {
+    g_nl.end = spinInt(spin);
+    nlClockSubtitle(row, "Ends at", g_nl.end);
+    nlApply();
+}
+
+fn onNlLat(spin: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    g_nl.lat = hg.gtk_spin_button_get_value(spin);
+    nlApply();
+}
+
+fn onNlLon(spin: *gtk.GtkSpinButton, _: ?*anyopaque) callconv(.c) void {
+    g_nl.lon = hg.gtk_spin_button_get_value(spin);
+    nlApply();
+}
+
+fn buildNightLight(outer: *gtk.GtkBox) void {
+    nlLoad();
+    hp.sectionHeading(outer, "Night light");
+    const g1 = dispGroup(outer, "Night light", "Warms the screen at night (wlsunset).");
+    hp.addSwitchRow(g1, "Enabled", "Warms the display by adjusting gamma at night.", g_nl.enabled, @ptrCast(&onNlEnabled), null);
+    var sl: [disp.schedule_labels.len][*:0]const u8 = undefined;
+    for (disp.schedule_labels, 0..) |l, i| sl[i] = l.ptr;
+    _ = dispComboRow(g1, "Schedule", "Manual uses the window or the sun below; Always on keeps the night temperature.", &sl, @intFromEnum(g_nl.schedule), @ptrCast(&onNlSchedule));
+
+    const g2 = dispGroup(outer, "Temperature", "");
+    _ = dispSpinRow(g2, "Day temperature", "Kelvin used outside the night window (6500 K is neutral).", 3000, 10000, 100, 0, @floatFromInt(g_nl.day), @ptrCast(&onNlDay));
+    _ = dispSpinRow(g2, "Night temperature", "Kelvin used at night.", 1000, 6500, 100, 0, @floatFromInt(g_nl.night), @ptrCast(&onNlNight));
+
+    const g3 = dispGroup(outer, "Scheduled window", "");
+    const rs = dispSpinRow(g3, "Start", "", 0, 1425, 15, 0, @floatFromInt(g_nl.start), @ptrCast(&onNlStart));
+    nlClockSubtitle(rs, "Starts at", g_nl.start);
+    const re = dispSpinRow(g3, "End", "", 0, 1425, 15, 0, @floatFromInt(g_nl.end), @ptrCast(&onNlEnd));
+    nlClockSubtitle(re, "Ends at", g_nl.end);
+
+    const g4 = dispGroup(outer, "Sun position", "");
+    hp.addSwitchRow(g4, "Follow the sun", "Sunset-to-sunrise scheduling at this location; off falls back to the scheduled window.", g_nl.follow_sun, @ptrCast(&onNlFollowSun), null);
+    _ = dispSpinRow(g4, "Latitude", "Degrees north (negative for south).", -90, 90, 0.5, 1, g_nl.lat, @ptrCast(&onNlLat));
+    _ = dispSpinRow(g4, "Longitude", "Degrees east (negative for west).", -180, 180, 1, 0, g_nl.lon, @ptrCast(&onNlLon));
+}
+
+fn buildDisplayPage() *gtk.GtkBox {
     const outer = hp.pageBox();
-    // Update the description to mention the canvas + modes.
-    g_rp_monitors.desc = "One row per monitor_rule. Drag cards on the canvas to arrange; Auto-detect fills name, resolution, refresh and position from the connected displays (extras like scale/rr/vrr/mirror are preserved). Resolution choices come from wlr-randr's full mode list.";
-    addRulePage(outer, &g_rp_monitors);
+    hp.sectionHeading(outer, "Monitors");
+    const ga = dispGroup(outer, "Arrangement", "Drag monitors on the canvas to arrange them; changes apply right away.");
+    _ = ga;
 
     refreshMangoCaps();
+    dispRefreshOutputs();
 
     g_mango_canvas = hg.gtk_drawing_area_new();
     hg.gtk_drawing_area_set_content_width(g_mango_canvas.?, MANGO_CANVAS_W);
@@ -2673,10 +3207,33 @@ fn buildMonitorsPage() *gtk.GtkBox {
     _ = gtk.g_signal_connect_data(@ptrCast(drag), "drag-end", @ptrCast(&onMangoDragEnd), null, null, 0);
     gtk.gtk_widget_add_controller(@ptrCast(g_mango_canvas.?), @ptrCast(drag));
 
-    hp.appendActionButton(outer, "Auto-detect Monitors", @ptrCast(&onMonitorsDetectClicked), null);
-    hp.appendActionButton(outer, "Arrange Side-by-Side", @ptrCast(&onMangoArrangeClicked), null);
-    hp.appendActionButton(outer, "Align Tops", @ptrCast(&onMangoAlignTopsClicked), null);
-    hp.appendActionButton(outer, "Refresh Modes", @ptrCast(&onMangoCapsRefreshClicked), null);
+    const buttons = gtk.gtk_box_new(gtk.ORIENTATION_HORIZONTAL, 8);
+    gtk.gtk_widget_set_margin_top(@ptrCast(buttons), 8);
+    const btns = [_]struct { l: [*:0]const u8, cb: gtk.GCallback }{
+        .{ .l = "Detect monitors", .cb = @ptrCast(&onMonitorsDetectClicked) },
+        .{ .l = "Side by side", .cb = @ptrCast(&onMangoArrangeClicked) },
+        .{ .l = "Align tops", .cb = @ptrCast(&onMangoAlignTopsClicked) },
+        .{ .l = "Refresh", .cb = @ptrCast(&onMangoCapsRefreshClicked) },
+    };
+    for (btns) |bt| {
+        const b = gtk.gtk_button_new_with_label(bt.l);
+        _ = gtk.g_signal_connect_data(@ptrCast(b), "clicked", bt.cb, null, null, 0);
+        gtk.gtk_box_append(buttons, @ptrCast(b));
+    }
+    gtk.gtk_box_append(outer, @ptrCast(buttons));
+
+    g_disp_chips = gtk.gtk_box_new(gtk.ORIENTATION_HORIZONTAL, 6);
+    gtk.gtk_widget_set_margin_top(@ptrCast(g_disp_chips.?), 10);
+    gtk.gtk_box_append(outer, @ptrCast(g_disp_chips.?));
+    g_disp_detail = gtk.gtk_box_new(1, 0); // vertical
+    gtk.gtk_box_append(outer, @ptrCast(g_disp_detail.?));
+    dispRebuild();
+
+    buildNightLight(outer);
+
+    hp.sectionHeading(outer, "Advanced");
+    g_rp_monitors.desc = "The monitor_rule lines in cfg/monitors.conf that the controls above write. Keys: name, width, height, refresh, x, y, scale, rr, vrr, hdr, icc, disable.";
+    addRulePage(outer, &g_rp_monitors);
     return outer;
 }
 
@@ -2727,24 +3284,25 @@ fn rebuildAll() void {
 pub const pages = struct {
     // Event Horizon's settings order first, then the pages that edit lists.
     pub const names = [_][:0]const u8{
-        "General",      "Decoration", "Keyboards",   "Mouse & Touchpad", "Binds",
-        "Layouts",      "Animations", "Misc",        "Render",             "Cursor",
-        "Group",        "XWayland",   "OpenGL",      "Quirks",             "Monitors",
+        "General",      "Display",    "Decoration",  "Keyboards",        "Mouse & Touchpad",
+        "Binds",        "Layouts",    "Animations",  "Misc",             "Render",
+        "Cursor",       "Group",      "XWayland",    "OpenGL",           "Quirks",
         "Window Rules", "Layer Rules", "Autostart",  "Environment",
     };
     pub const icons = [_][:0]const u8{
-        "emblem-system-symbolic",                    "preferences-desktop-appearance-symbolic", "input-keyboard-symbolic",
+        "emblem-system-symbolic",                    "video-display-symbolic",                  "preferences-desktop-appearance-symbolic", "input-keyboard-symbolic",
         "input-mouse-symbolic",                      "preferences-desktop-keyboard-shortcuts-symbolic",
         "view-grid-symbolic",                        "media-playlist-repeat-symbolic",          "preferences-other-symbolic",
         "display-brightness-symbolic",               "input-touchpad-symbolic",                 "tab-new-symbolic",
         "computer-symbolic",                         "applications-graphics-symbolic",          "dialog-warning-symbolic",
-        "video-display-symbolic",                    "preferences-system-windows-symbolic",     "layer-group-symbolic",
+        "preferences-system-windows-symbolic",       "layer-group-symbolic",
         "system-run-symbolic",                       "preferences-system-symbolic",
     };
 
     pub fn widgets() [names.len]*gtk.GtkBox {
         return .{
             buildGeneralPage(),
+            buildDisplayPage(),
             buildDecorationPage(),
             buildKeyboardsPage(),
             buildPointerPage(),
@@ -2758,7 +3316,6 @@ pub const pages = struct {
             buildXWaylandPage(),
             buildOpenGLPage(),
             buildQuirksPage(),
-            buildMonitorsPage(),
             buildWindowRulesPage(),
             buildLayerRulesPage(),
             buildAutostartPage(),

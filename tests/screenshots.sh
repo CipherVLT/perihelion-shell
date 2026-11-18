@@ -73,6 +73,31 @@ esac
 exit 0
 NM
 chmod +x "${work}/fake/nmcli"
+# Two monitors for the Display page, as wlr-randr reports them.
+cat > "${work}/fake/wlr-randr" <<'RANDR'
+#!/bin/sh
+cat <<'OUT'
+DP-1 "Dell Inc. DELL S2721DGF ABC123 (DP-1)"
+  Enabled: yes
+  Modes:
+    2560x1440 px, 239.960007 Hz (preferred, current)
+    2560x1440 px, 143.912003 Hz
+    2560x1440 px, 59.951000 Hz
+    1920x1080 px, 60.000000 Hz
+  Position: 2560,0
+  Transform: normal
+  Scale: 1.000000
+DP-2 "LG Electronics 27GL850 XYZ (DP-2)"
+  Enabled: yes
+  Modes:
+    2560x1440 px, 144.000000 Hz (preferred, current)
+    2560x1440 px, 60.000000 Hz
+  Position: 0,0
+  Transform: normal
+  Scale: 1.000000
+OUT
+RANDR
+chmod +x "${work}/fake/wlr-randr"
 
 font=$(fc-match -f '%{file}' monospace)
 write_bar_config() {  # $1 = dock border true|false
@@ -123,8 +148,8 @@ settings_shot() {  # $1 = sidebar page, $2 = file name
 
 echo "Mango pages"
 i=0
-for page in General Decoration Keyboards "Mouse & Touchpad" Binds Layouts Animations Misc Render Cursor \
-            Group XWayland OpenGL Quirks Monitors "Window Rules" "Layer Rules" Autostart Environment; do
+for page in General Display Decoration Keyboards "Mouse & Touchpad" Binds Layouts Animations Misc Render Cursor \
+            Group XWayland OpenGL Quirks "Window Rules" "Layer Rules" Autostart Environment; do
     i=$((i + 1))
     settings_shot "${page}" "$(printf 'mango-%02d-%s' "${i}" "$(slug "${page}")")"
 done
