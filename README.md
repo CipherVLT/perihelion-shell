@@ -21,10 +21,10 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 ## Desktop widgets
 
-`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, fastfetch, calendar with reminders, analog watch, sticky note.
+`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, network speed, fastfetch, calendar with reminders, analog watch, sticky note.
 
 - Same matugen colors as the bar, translucent cards.
-- Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, calendar reminders, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
+- Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, Network graph and refresh, calendar reminders, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
 - **Ctrl + drag** any card to move it — position saves to `~/.config/perihelionbar/shell.json`.
 - Calendar reminders live in `~/.config/perihelionbar/reminders.txt` (`YYYY-MM-DD HH:MM text`, or `YYYY-MM-DD HH:MM lead text` to be notified `lead` days early). Click a day to add or remove one.
   - The Calendar card can list today's and upcoming reminders under the month, earliest first, under a **Reminders** header like the Notes card's. Today's are in your accent colour, and today's ones whose time has passed are dimmed. Click a row to open that day's reminders. Pick how many rows in Settings, or set `"calendar_reminders"` in `shell.json` to 0 (off, the default) up to 6. The card grows by one header plus the rows, so you may need to drag a card that sits right under it.
@@ -121,6 +121,15 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
   ```
 
   `processes_count` can be 3 to 8. `processes_group: true` adds up programs that run as several processes, such as a browser, and shows how many there are (`firefox ×12`). The card is on by default. You can hide it in Settings like any other card.
+
+- The Network card shows your download and upload speed, added up over your wired, Wi-Fi and mobile-broadband connections. Loopback, VPN tunnels, bridges and container interfaces are left out, so nothing is counted twice. Under the header, a graph shows the last 60 readings (two minutes at the default): download in your accent colour, upload dimmer, scaled to the busiest reading. It reads `/proc/net/dev` itself and never starts a program. It says *offline* when no such connection exists, and it only redraws when a number or the graph changes. Settings in `shell.json`:
+
+  ```json
+  "network_graph": true,
+  "network_interval_seconds": 2
+  ```
+
+  `network_interval_seconds` can be 1 to 10. With `network_graph: false` the card is just the header and the two speeds.
 
 **Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `perihelionbar-shell overview toggle` works from scripts too.
 

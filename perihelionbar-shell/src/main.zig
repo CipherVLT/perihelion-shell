@@ -26,13 +26,14 @@ const weather_service = @import("weather");
 const temps_service = @import("temps");
 const ff_service = @import("fastfetch");
 const procs_service = @import("procs");
+const netrate_service = @import("netrate");
 
 pub const panic = std.debug.FullPanic(logging.panicHandler);
 
 const MAX_OUTPUTS: usize = 8;
 // 6 base widgets + 3 sticky notes = 9 ≤ 12. Only bits tell you a tile is
 // stale, without scanning every widget for changes.
-const MAX_WIDGETS: usize = 10;
+const MAX_WIDGETS: usize = 12;
 const FONT_PIXEL_SIZE: u32 = 13;
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -110,6 +111,9 @@ const JsonConfig = struct {
     processes_group: ?bool = null,
     // Calendar card: reminder rows listed under the month grid.
     calendar_reminders: ?u32 = null,
+    // Network card (netrate.zig).
+    network_graph: ?bool = null,
+    network_interval_seconds: ?u32 = null,
     // Notes card.
     notes_tabs: ?bool = null,
     notes_checklists: ?bool = null,
@@ -190,6 +194,9 @@ const ShellConfig = struct {
     /// Calendar card: today's and upcoming reminders listed under the
     /// month grid, 0-6 rows (0 = no list, the card keeps its old size).
     calendar_reminders: u32 = 0,
+    /// Network card: draw the rate graph, and seconds between samples.
+    network_graph: bool = true,
+    network_interval_seconds: u32 = 2,
     /// Notes card: header with tabs, checklist drawing, base text lines.
     notes: widgets_mod.NotesLayout = .{},
     /// "" = ~/.config/perihelionbar/notes; a leading "~/" means $HOME.
@@ -233,6 +240,9 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // Top processes under the Fastfetch card on the right (≈ 250px wide,
     // ≈ 150px tall at six rows and the 13px font).
     .{ .id = .processes, .x = 1636, .y = 760 },
+    // Network rates under the Processes card, same column width (≈ 110px
+    // tall with the graph at the 13px font).
+    .{ .id = .network, .x = 1636, .y = 930 },
 };
 
 var shell_config_path_buf: [512]u8 = undefined;
@@ -347,7 +357,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
 /// Unknown ids warn and skip rather than failing startup.
 fn disabledMask(allocator: std.mem.Allocator) u16 {
     // The u16 mask (and u4 shifts below) hold at most 16 widgets — today
-    // there are 10. Trip the compiler, not a runtime panic, if a 17th
+    // there are 11. Trip the compiler, not a runtime panic, if a 17th
     // arrives (tile_dirty is a u16 too).
     comptime {
         const n = @typeInfo(widgets_mod.WidgetId).@"enum".fields.len;
@@ -534,6 +544,8 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
     if (parsed.processes_count) |v| cfg.processes_count = @intCast(std.math.clamp(@as(usize, v), procs_service.MIN_SHOWN, procs_service.MAX_SHOWN));
     if (parsed.processes_interval_seconds) |v| cfg.processes_interval_seconds = std.math.clamp(v, 1, 60);
     if (parsed.processes_group) |v| cfg.processes_group = v;
+    if (parsed.network_graph) |v| cfg.network_graph = v;
+    if (parsed.network_interval_seconds) |v| cfg.network_interval_seconds = std.math.clamp(v, netrate_service.MIN_INTERVAL_S, netrate_service.MAX_INTERVAL_S);
     if (parsed.calendar_reminders) |v| cfg.calendar_reminders = @intCast(@min(@as(usize, v), widgets_mod.CAL_REMINDER_ROWS_MAX));
     if (parsed.notes_tabs) |v| cfg.notes.tabs = v;
     if (parsed.notes_checklists) |v| cfg.notes.checklists = v;
@@ -935,6 +947,7 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
     widgets_mod.system_style = cfg.system_style;
     widgets_mod.processes_rows = cfg.processes_count;
     widgets_mod.calendar_reminder_rows = cfg.calendar_reminders;
+    widgets_mod.network_graph = cfg.network_graph;
     widgets_mod.notes_layout = cfg.notes;
     widgets_mod.weather_click = cfg.weather_click;
     for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
@@ -958,6 +971,7 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
             .icons => .{ .icons = .{} },
             .fastfetch => .{ .fastfetch = .{} },
             .processes => .{ .processes = .{} },
+            .network => .{ .network = .{} },
         };
         if (wc.id == .calendar) {
             host.widgets[host.widget_count].calendar.configure(
@@ -984,6 +998,9 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
                 .count = cfg.processes_count,
                 .interval_ms = @as(i64, cfg.processes_interval_seconds) * 1000,
                 .group = cfg.processes_group,
+            }),
+            .network => host.widgets[host.widget_count].network.configure(.{
+                .interval_ms = @as(i64, cfg.network_interval_seconds) * 1000,
             }),
             else => {},
         }
@@ -1133,6 +1150,10 @@ fn saveConfig(host: *Host) void {
         .{ g_shell_cfg.processes_sort.tag(), g_shell_cfg.processes_count, g_shell_cfg.processes_interval_seconds, jsonBool(g_shell_cfg.processes_group) },
     )) return;
     if (!w.appendFmt("  \"calendar_reminders\": {d},\n", .{g_shell_cfg.calendar_reminders})) return;
+    if (!w.appendFmt(
+        "  \"network_graph\": {s},\n  \"network_interval_seconds\": {d},\n",
+        .{ jsonBool(g_shell_cfg.network_graph), g_shell_cfg.network_interval_seconds },
+    )) return;
     const nd_esc = jsonEscape(g_shell_cfg.notes_dir, &esc) orelse return;
     const nl = g_shell_cfg.notes;
     if (!w.appendFmt(

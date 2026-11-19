@@ -93,6 +93,14 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
 
+    // Network-rate service for the Network card (same convention).
+    const netrate_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/netrate.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const widgets_mod = b.createModule(.{
         .root_source_file = b.path("src/widgets.zig"),
         .target = target,
@@ -105,6 +113,7 @@ pub fn build(b: *Build) !void {
     widgets_mod.addImport("fastfetch", fastfetch_mod);
     widgets_mod.addImport("procs", procs_mod);
     widgets_mod.addImport("reminders", reminders_mod);
+    widgets_mod.addImport("netrate", netrate_mod);
     widgets_mod.addImport("logging", logging_mod);
 
     // Album-art decode for the media card: same gdk-pixbuf shim the bar
@@ -169,6 +178,7 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("temps", temps_mod); // shell.json system_* keys (main.zig)
     exe_mod.addImport("fastfetch", fastfetch_mod); // shell.json fastfetch_* keys (main.zig)
     exe_mod.addImport("procs", procs_mod); // shell.json processes_* keys (main.zig)
+    exe_mod.addImport("netrate", netrate_mod); // shell.json network_* keys (main.zig)
     exe_mod.addImport("overview", overview_mod);
     // No EGL/GL stack: everything renders CPU-side into wl_shm ARGB buffers,
     // exactly like the bar.

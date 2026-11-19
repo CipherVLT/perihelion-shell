@@ -30,8 +30,10 @@ const ffsvc = @import("fastfetch");
 const psvc = @import("procs");
 // Reminders file parsing for the Calendar card: ../perihelionbar/src/reminders.zig.
 const rsvc = @import("reminders");
+// Network-rate service for the Network card: ../perihelionbar/src/netrate.zig.
+const nsvc = @import("netrate");
 
-pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes };
+pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes, network };
 
 /// Axis-aligned rect in surface coordinates. The host keeps one per widget
 /// (measured from the font at startup, placed from config).
@@ -194,6 +196,8 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
         .fastfetch => fastfetchCardSize(font),
         // Header line, then one name/value line over a thin bar per row.
         .processes => .{ @intCast(PROC_W), @intCast(2 * CARD_PAD + lh + PROC_HEAD_GAP + @as(i64, @intCast(processes_rows)) * (lh + PROC_ROW_GAP + PROC_BAR_H + 2)) },
+        // Header, optional graph, then the down/up line.
+        .network => .{ @intCast(NET_W), @intCast(2 * CARD_PAD + 2 * lh + NET_GAP + (if (network_graph) NET_GRAPH_H + NET_GAP else 0)) },
     };
 }
 
@@ -296,6 +300,14 @@ const PROC_W: i64 = 250;
 const PROC_HEAD_GAP: i64 = 8;
 const PROC_ROW_GAP: i64 = 3;
 const PROC_BAR_H: i64 = 2;
+
+// --- network card geometry ---------------------------------------------------
+
+/// shell.json network_graph, set by the host before cards are measured.
+pub var network_graph: bool = true;
+const NET_W: i64 = 250; // same column width as the Processes card
+const NET_GAP: i64 = 8;
+const NET_GRAPH_H: i64 = 44;
 
 // Fastfetch-card geometry: logo column (text logo or distro glyph), then
 // the title, a rule, one row per field and a palette row.
@@ -1918,6 +1930,92 @@ pub const ProcessesWidget = struct {
             if (fw > 0) c.fillRect(left, by, @intCast(fw), @intCast(c.zx(PROC_BAR_H)), fill);
             b += row_pitch;
         }
+    }
+};
+
+/// Download/upload rates of the physical interfaces (netrate.zig), with a
+/// graph of the last samples: download in the accent colour, upload in
+/// the dimmed text colour, both scaled to the busiest kept sample.
+pub const NetworkWidget = struct {
+    svc: nsvc.Service = .{},
+
+    /// Due checks only; netrate.zig samples on its own interval.
+    pub const interval_ms: i64 = 1000;
+
+    pub fn configure(self: *NetworkWidget, cfg: nsvc.Config) void {
+        self.svc = nsvc.Service.init(cfg);
+    }
+
+    pub fn tick(self: *NetworkWidget) bool {
+        return self.svc.tick(monoMs());
+    }
+
+    pub fn paint(self: *const NetworkWidget, c: Canvas, r: Rect) void {
+        const s = &self.svc;
+        const lh = lineH(c.font);
+        const pad = c.zx(CARD_PAD);
+        const asc: i64 = c.font.ascentPx();
+        const left: i64 = r.x + pad;
+        const right: i64 = r.x + @as(i64, @intCast(r.w)) - pad;
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+
+        var b = r.y + pad + asc;
+        _ = c.drawText(left, b, "Network", text_col);
+        if (s.ifaces == 0) {
+            drawRight(c, right, b, "offline", dim(text_col, 0x88));
+        }
+        var y = r.y + pad + lh + c.zx(NET_GAP);
+
+        if (network_graph) {
+            const gh = c.zx(NET_GRAPH_H);
+            const gw = right - left;
+            // Faint baseline so an idle link still reads as a graph.
+            c.fillRect(left, y + gh - 1, @intCast(@max(gw, 0)), 1, dim(text_col, 0x22));
+            if (s.hist_len >= 2 and gw > 0) {
+                // Scale: the busiest kept sample, at least 1 KB/s so a
+                // trickle doesn't fill the whole height.
+                const top_rate: f64 = @floatFromInt(@max(s.histMax(), 1024));
+                const step: f64 = @as(f64, @floatFromInt(gw)) / @as(f64, @floatFromInt(nsvc.HISTORY - 1));
+                // Right-aligned: the newest sample sits at the right edge.
+                const x0: f64 = @as(f64, @floatFromInt(right)) - step * @as(f64, @floatFromInt(s.hist_len - 1));
+                const base: f64 = @floatFromInt(y + gh - 1);
+                const h: f64 = @floatFromInt(gh - 2);
+                const lw: f64 = @max(1.0, @as(f64, @floatFromInt(c.zx(2))) * 0.75);
+                inline for (.{ true, false }) |is_tx| {
+                    const col = if (is_tx) dim(text_col, 0x77) else accent;
+                    var i: usize = 1;
+                    while (i < s.hist_len) : (i += 1) {
+                        const v0: f64 = @floatFromInt(s.histAt(i - 1, is_tx));
+                        const v1: f64 = @floatFromInt(s.histAt(i, is_tx));
+                        strokeAA(
+                            c,
+                            x0 + step * @as(f64, @floatFromInt(i - 1)),
+                            base - h * @min(v0 / top_rate, 1.0),
+                            x0 + step * @as(f64, @floatFromInt(i)),
+                            base - h * @min(v1 / top_rate, 1.0),
+                            lw,
+                            col,
+                        );
+                    }
+                }
+            }
+            y += gh + c.zx(NET_GAP);
+        }
+
+        b = y + asc;
+        if (!s.ready()) {
+            _ = c.drawText(left, b, "Measuring\u{2026}", dim(text_col, 0x88));
+            return;
+        }
+        var db: [32]u8 = undefined;
+        var ub: [32]u8 = undefined;
+        var down_buf: [24]u8 = undefined;
+        var up_buf: [24]u8 = undefined;
+        const down = std.fmt.bufPrint(&db, "\u{2193} {s}", .{nsvc.fmtRate(&down_buf, s.rx_rate)}) catch "";
+        const up = std.fmt.bufPrint(&ub, "\u{2191} {s}", .{nsvc.fmtRate(&up_buf, s.tx_rate)}) catch "";
+        _ = c.drawText(left, b, down, accent);
+        drawRight(c, right, b, up, dim(text_col, 0xCC));
     }
 };
 
@@ -6169,6 +6267,7 @@ pub const Widget = union(WidgetId) {
     icons: IconsWidget,
     fastfetch: FastfetchWidget,
     processes: ProcessesWidget,
+    network: NetworkWidget,
 
     // By pointer, not by value: the union is as big as its largest card
     // (the Fastfetch card's rows and logo, ~27 KB), and this runs every tick.
@@ -6188,6 +6287,7 @@ pub const Widget = union(WidgetId) {
             .icons => IconsWidget.interval_ms,
             .fastfetch => FastfetchWidget.interval_ms,
             .processes => ProcessesWidget.interval_ms,
+            .network => NetworkWidget.interval_ms,
         };
     }
 
@@ -6224,6 +6324,8 @@ pub const Widget = union(WidgetId) {
             // Repaints only when a shown row changed.
             .fastfetch => |*f| f.tick(),
             .processes => |*p| p.tick(),
+            // Repaints only when a shown rate or the graph changed.
+            .network => |*n| n.tick(),
             .icons => |*ic| blk: {
                 break :blk ic.tick();
             },
@@ -6276,6 +6378,7 @@ pub const Widget = union(WidgetId) {
             .icons => |*ic| ic.click(r, x, y),
             .fastfetch => {},
             .processes => |*p| p.click(),
+            .network => {},
         }
     }
 
@@ -6293,6 +6396,7 @@ pub const Widget = union(WidgetId) {
             .icons => |*ic| ic.paint(c, r),
             .fastfetch => |*f| f.paint(c, r),
             .processes => |*p| p.paint(c, r),
+            .network => |*n| n.paint(c, r),
         }
     }
 };
