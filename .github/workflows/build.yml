@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     container: registry.fedoraproject.org/fedora:45
     env:
-      ZIG_VERSION: 0.16.0
+      ZIG_VERSION: 0.17.1
       ZIG_PUBKEY: RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
     steps:
       - name: Install build packages
@@ -47,7 +47,7 @@ jobs:
           /opt/zig/zig version
       - name: Build the bar and Perihelion Bar Config
         working-directory: perihelionbar
-        run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
+        run: /opt/zig/zig build -Doptimize=fast -Dcpu=x86_64_v2
       - name: Unit-test the single-copy module
         working-directory: perihelionbar
         run: /opt/zig/zig test src/singleton.zig -lc
@@ -147,7 +147,7 @@ jobs:
           if-no-files-found: warn
       - name: Build perihelionbar-shell
         working-directory: perihelionbar-shell
-        run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
+        run: /opt/zig/zig build -Doptimize=fast -Dcpu=x86_64_v2
       - name: Unit-test the desktop cards (notes editing and pages, layout)
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build test-widgets

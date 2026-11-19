@@ -2,7 +2,7 @@
     .name = .perihelionbar,
     .version = "0.0.1",
     .fingerprint = 0xdbb525e28bffbd62,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
 
     // Run this once, from the project root, with network access:
     //
