@@ -91,6 +91,14 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    // Backlight reader behind the bar's brightness OSD.
+    const backlight_mod = b.createModule(.{
+        .root_source_file = b.path("src/backlight.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("backlight", backlight_mod);
     // Network-rate service behind the shell's Network card (same
     // convention: shared source, tests run from this build).
     const netrate_mod = b.createModule(.{
@@ -196,6 +204,12 @@ pub fn build(b: *Build) !void {
     const userinfo_tests = b.addTest(.{ .root_module = userinfo_mod, .use_llvm = true, .use_lld = true });
     const userinfo_test_step = b.step("test-userinfo", "Run src/userinfo.zig unit tests");
     userinfo_test_step.dependOn(&b.addRunArtifact(userinfo_tests).step);
+
+    // `zig build test-backlight`: src/backlight.zig (percent math, device
+    // choice and change detection on fake class trees under /tmp).
+    const backlight_tests = b.addTest(.{ .root_module = backlight_mod, .use_llvm = true, .use_lld = true });
+    const backlight_test_step = b.step("test-backlight", "Run src/backlight.zig unit tests");
+    backlight_test_step.dependOn(&b.addRunArtifact(backlight_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.

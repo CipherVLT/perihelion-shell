@@ -324,8 +324,11 @@ const JsonConfig = struct {
     bar: JsonBar = .{},
 };
 
-const JsonBar = struct { enabled: bool = true };
+// main.zig's BarSettings: brightness_osd = the brightness OSD (kept so a
+// save from here doesn't drop it; edited by hand in config.json).
+const JsonBar = struct { enabled: bool = true, brightness_osd: bool = true };
 var live_bar_enabled: bool = true;
+var live_brightness_osd: bool = true;
 
 /// Perihelion's dock (config.json "dock"; main.zig's DockSettings).
 const JsonDock = struct {
@@ -1178,6 +1181,7 @@ fn loadConfigFromDisk() void {
     live_launchers.load(parsed.launchers);
     live_dock_enabled = parsed.dock.enabled;
     live_bar_enabled = parsed.bar.enabled;
+    live_brightness_osd = parsed.bar.brightness_osd;
     live_bar_mode = "taskbar"; // Bar Mode is retired
     // A config with both at the bottom: the bar keeps it, the dock is off
     // (written back on the next save; the dock process does the same).
@@ -1431,6 +1435,8 @@ fn buildConfigJson() ![]u8 {
     try appendLaunchers(&list, &live_launchers);
     try list.appendSlice(gpa, ",\"bar\":{\"enabled\":");
     try list.appendSlice(gpa, if (live_bar_enabled) "true" else "false");
+    try list.appendSlice(gpa, ",\"brightness_osd\":");
+    try list.appendSlice(gpa, if (live_brightness_osd) "true" else "false");
     try list.append(gpa, '}');
     try list.appendSlice(gpa, ",\"dock\":{\"enabled\":");
     try list.appendSlice(gpa, if (live_dock_enabled) "true" else "false");
