@@ -199,5 +199,11 @@ pub fn build(b: *Build) !void {
     widgets_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{});
     const widgets_tests = b.addTest(.{ .root_module = widgets_mod, .use_llvm = true, .use_lld = true });
     const widgets_test_step = b.step("test-widgets", "Run src/widgets.zig unit tests");
-    widgets_test_step.dependOn(&b.addRunArtifact(widgets_tests).step);
+    const widgets_test_run = b.addRunArtifact(widgets_tests);
+    widgets_test_step.dependOn(&widgets_test_run.step);
+
+    // `zig build test`: every unit test in this package (today only the
+    // widgets module has any), so both packages answer the same command.
+    const test_step = b.step("test", "Run all perihelionbar-shell unit tests");
+    test_step.dependOn(&widgets_test_run.step);
 }
