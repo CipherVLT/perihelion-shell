@@ -5,7 +5,7 @@
 //
 // File I/O and process control are done via hand-declared libc externs
 // (open/read/write/close/pipe/dup2/poll/access/mkdir/fork) rather than
-// std.fs/std.posix/std.process — this Zig version (0.16) reworked those
+// std.fs/std.posix/std.process — Zig 0.16 reworked those
 // around a new std.Io abstraction that the rest of this codebase (main.zig)
 // doesn't use either; std.c's fork() is private for the same reason
 // main.zig binds it itself. Sticking to raw libc calls keeps this file on
