@@ -272,9 +272,9 @@ pub const State = struct {
 /// The state file: $XDG_STATE_HOME/perihelionbar/notifications, else
 /// ~/.local/state/perihelionbar/notifications.
 pub fn statePath(buf: []u8, xdg_state: []const u8, home: []const u8) ?[:0]const u8 {
-    if (xdg_state.len > 0) return std.fmt.bufPrintZ(buf, "{s}/perihelionbar/notifications", .{xdg_state}) catch null;
+    if (xdg_state.len > 0) return std.fmt.bufPrintSentinel(buf, "{s}/perihelionbar/notifications", .{xdg_state}, 0) catch null;
     if (home.len == 0) return null;
-    return std.fmt.bufPrintZ(buf, "{s}/.local/state/perihelionbar/notifications", .{home}) catch null;
+    return std.fmt.bufPrintSentinel(buf, "{s}/.local/state/perihelionbar/notifications", .{home}, 0) catch null;
 }
 
 pub fn loadState(path: [:0]const u8) State {
@@ -298,7 +298,7 @@ pub fn saveState(path: [:0]const u8, s: State) bool {
         _ = posix.system.mkdir(db[0..i :0].ptr, 0o755);
     }
     var tb: [520]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tb, "{s}.tmp", .{path}) catch return false;
+    const tmp = std.fmt.bufPrintSentinel(&tb, "{s}.tmp", .{path}, 0) catch return false;
     const raw = posix.system.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o600));
     if (raw < 0) return false;
     const fd: posix.fd_t = @intCast(raw);
@@ -330,7 +330,7 @@ const libc = struct {
 /// real use), or 0. One readdir plus a small read per numeric entry.
 pub fn findPid(proc: []const u8, comm: []const u8, uid: ?u32) u32 {
     var pz: [256]u8 = undefined;
-    const pdir = std.fmt.bufPrintZ(&pz, "{s}", .{proc}) catch return 0;
+    const pdir = std.fmt.bufPrintSentinel(&pz, "{s}", .{proc}, 0) catch return 0;
     const d = libc.opendir(pdir.ptr) orelse return 0;
     defer _ = libc.closedir(d);
     const want_uid = uid orelse libc.getuid();
@@ -338,7 +338,7 @@ pub fn findPid(proc: []const u8, comm: []const u8, uid: ?u32) u32 {
         const name = std.mem.sliceTo(&e.d_name, 0);
         const pid = std.fmt.parseInt(u32, name, 10) catch continue;
         var pb: [300]u8 = undefined;
-        const cp = std.fmt.bufPrintZ(&pb, "{s}/{s}/comm", .{ proc, name }) catch continue;
+        const cp = std.fmt.bufPrintSentinel(&pb, "{s}/{s}/comm", .{ proc, name }, 0) catch continue;
         const raw = posix.system.open(cp.ptr, .{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
         if (raw < 0) continue;
         var b: [64]u8 = undefined;
@@ -346,7 +346,7 @@ pub fn findPid(proc: []const u8, comm: []const u8, uid: ?u32) u32 {
         _ = posix.system.close(@intCast(raw));
         if (!std.mem.eql(u8, std.mem.trim(u8, b[0..n], " \n"), comm)) continue;
         // Owner: the "Uid:" line of status (a fake tree may leave it out).
-        const sp = std.fmt.bufPrintZ(&pb, "{s}/{s}/status", .{ proc, name }) catch continue;
+        const sp = std.fmt.bufPrintSentinel(&pb, "{s}/{s}/status", .{ proc, name }, 0) catch continue;
         const sraw = posix.system.open(sp.ptr, .{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
         if (sraw >= 0) {
             var sb: [2048]u8 = undefined;
@@ -543,7 +543,7 @@ test "mako pid from a fake /proc" {
             _ = posix.system.mkdir(dz[0..k :0].ptr, 0o755);
         }
         var z: [200]u8 = undefined;
-        const fz = std.fmt.bufPrintZ(&z, "{s}", .{full}) catch unreachable;
+        const fz = std.fmt.bufPrintSentinel(&z, "{s}", .{full}, 0) catch unreachable;
         const raw = posix.system.open(fz.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
         _ = std.c.write(@intCast(raw), f.body.ptr, f.body.len);
         _ = posix.system.close(@intCast(raw));

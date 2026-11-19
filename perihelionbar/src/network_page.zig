@@ -175,7 +175,7 @@ fn setMessage(text: []const u8) void {
 
 fn readCounter(iface: []const u8, name: []const u8) ?u64 {
     var pb: [128]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pb, "/sys/class/net/{s}/statistics/{s}", .{ iface, name }) catch return null;
+    const path = std.fmt.bufPrintSentinel(&pb, "/sys/class/net/{s}/statistics/{s}", .{ iface, name }, 0) catch return null;
     const fd = open(path.ptr, 0);
     if (fd < 0) return null;
     defer _ = close(fd);
@@ -408,11 +408,11 @@ fn renderSaved() void {
         gtk.adw_preferences_row_set_title(@ptrCast(row), markupZ(c.name.slice(), &tb));
         var sb: [160]u8 = undefined;
         const kind = net.kindLabel(c.kind, "");
-        const sub = std.fmt.bufPrintZ(&sb, "{s} \u{00b7} {s}{s}", .{
+        const sub = std.fmt.bufPrintSentinel(&sb, "{s} \u{00b7} {s}{s}", .{
             kind,
             if (c.active) "Connected" else "Not connected",
             if (c.autoconnect) " \u{00b7} connects automatically" else "",
-        }) catch "VPN";
+        }, 0) catch "VPN";
         gtk.adw_action_row_set_subtitle(row, sub.ptr);
 
         const tag: ?*anyopaque = @ptrFromInt(i + 1);
@@ -492,7 +492,7 @@ fn onActionDone(ok: bool, out: []const u8) void {
 /// `nmcli connection <verb> uuid <uuid>`.
 fn connectionAction(verb: [*:0]const u8, uuid: []const u8) void {
     var ub: [48]u8 = undefined;
-    const uz = std.fmt.bufPrintZ(&ub, "{s}", .{uuid}) catch return;
+    const uz = std.fmt.bufPrintSentinel(&ub, "{s}", .{uuid}, 0) catch return;
     const argv = [_]?[*:0]const u8{ "nmcli", "--wait", "20", "connection", verb, "uuid", uz.ptr, null };
     if (!run(&argv, onActionDone)) setMessage("nmcli could not be started.");
 }
@@ -530,7 +530,7 @@ fn onRowRemove(_: *gtk.GtkButton, user_data: ?*anyopaque) callconv(.c) void {
     const i = rowIndex(user_data) orelse return;
     g_pending_delete = g_row_uuid[i];
     var hb: [200]u8 = undefined;
-    const heading = std.fmt.bufPrintZ(&hb, "Remove \u{201c}{s}\u{201d}?", .{g_row_name[i].slice()}) catch "Remove this VPN?";
+    const heading = std.fmt.bufPrintSentinel(&hb, "Remove \u{201c}{s}\u{201d}?", .{g_row_name[i].slice()}, 0) catch "Remove this VPN?";
     const dialog = adw_alert_dialog_new(heading.ptr, "The saved connection and its keys are deleted from this computer. To use it again you would import its file again.");
     adw_alert_dialog_add_response(dialog, "cancel", "Cancel");
     adw_alert_dialog_add_response(dialog, "remove", "Remove");

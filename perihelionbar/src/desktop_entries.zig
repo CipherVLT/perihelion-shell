@@ -157,7 +157,7 @@ fn scanApplicationsDir(
         if (dup) continue;
 
         var path_buf: [1024]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir_path, name }) catch continue;
+        const path = std.fmt.bufPrintSentinel(&path_buf, "{s}/{s}", .{ dir_path, name }, 0) catch continue;
         const data = readFileAlloc(arena, path) catch continue;
         if (parseDesktop(data, arena)) |entry| {
             var owned = entry;

@@ -88,10 +88,10 @@ pub fn formatHz(v: f64, buf: []u8) []const u8 {
 
 pub const OutputCaps = struct {
     n_res: usize = 0,
-    res: [MAX_RES][16]u8 = [_][16]u8{[_]u8{0} ** 16} ** MAX_RES,
-    res_len: [MAX_RES]u8 = [_]u8{0} ** MAX_RES,
-    hz: [MAX_RES][MAX_HZ]f64 = [_][MAX_HZ]f64{[_]f64{0} ** MAX_HZ} ** MAX_RES,
-    hz_len: [MAX_RES]u8 = [_]u8{0} ** MAX_RES,
+    res: [MAX_RES][16]u8 = @as([MAX_RES][16]u8, @splat(@as([16]u8, @splat(0)))),
+    res_len: [MAX_RES]u8 = @as([MAX_RES]u8, @splat(0)),
+    hz: [MAX_RES][MAX_HZ]f64 = @as([MAX_RES][MAX_HZ]f64, @splat(@as([MAX_HZ]f64, @splat(0)))),
+    hz_len: [MAX_RES]u8 = @as([MAX_RES]u8, @splat(0)),
 
     pub fn resolution(self: *const OutputCaps, i: usize) []const u8 {
         if (i >= self.n_res) return "";

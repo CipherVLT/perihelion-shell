@@ -82,11 +82,11 @@ var g_terminal_spec_path: [:0]const u8 = "";
 
 fn resolvePaths() void {
     const home = std.mem.span(getenv("HOME") orelse "/root");
-    g_hyprland_lua_path = std.fmt.bufPrintZ(&hyprland_lua_buf, "{s}/.config/hypr/hyprland.lua", .{home}) catch "";
-    g_first_run_marker_path = std.fmt.bufPrintZ(&first_run_marker_buf, "{s}/.config/perihelionbar/welcome-shown", .{home}) catch "";
-    g_logo_path = std.fmt.bufPrintZ(&logo_path_buf, "{s}/.local/share/perihelionbar/logo.png", .{home}) catch "";
-    g_perihelionbar_config_dir = std.fmt.bufPrintZ(&perihelionbar_config_dir_buf, "{s}/.config/perihelionbar", .{home}) catch "";
-    g_terminal_spec_path = std.fmt.bufPrintZ(&terminal_spec_buf, "{s}/.config/perihelionbar/terminal", .{home}) catch "";
+    g_hyprland_lua_path = std.fmt.bufPrintSentinel(&hyprland_lua_buf, "{s}/.config/hypr/hyprland.lua", .{home}, 0) catch "";
+    g_first_run_marker_path = std.fmt.bufPrintSentinel(&first_run_marker_buf, "{s}/.config/perihelionbar/welcome-shown", .{home}, 0) catch "";
+    g_logo_path = std.fmt.bufPrintSentinel(&logo_path_buf, "{s}/.local/share/perihelionbar/logo.png", .{home}, 0) catch "";
+    g_perihelionbar_config_dir = std.fmt.bufPrintSentinel(&perihelionbar_config_dir_buf, "{s}/.config/perihelionbar", .{home}, 0) catch "";
+    g_terminal_spec_path = std.fmt.bufPrintSentinel(&terminal_spec_buf, "{s}/.config/perihelionbar/terminal", .{home}, 0) catch "";
 }
 
 // ---------------------------------------------------------------------
@@ -136,7 +136,7 @@ fn commandExists(name: []const u8) bool {
     var dirs = std.mem.splitScalar(u8, std.mem.span(path_env), ':');
     while (dirs.next()) |dir| {
         if (dir.len == 0) continue;
-        const path = std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ dir, name }) catch continue;
+        const path = std.fmt.bufPrintSentinel(&buf, "{s}/{s}", .{ dir, name }, 0) catch continue;
         if (access(path, X_OK) == 0) return true;
     }
     return false;
@@ -828,9 +828,9 @@ fn keychronSetupSubtitle(buf: []u8) [:0]const u8 {
     else
         "Not installed. Grants your user WebHID access to every Keychron keyboard, mouse and receiver, plus the firmware-update bootloader.";
     if (detected) |model| {
-        return std.fmt.bufPrintZ(buf, "{s} Detected: {s}.", .{ state_text, model }) catch state_text;
+        return std.fmt.bufPrintSentinel(buf, "{s} Detected: {s}.", .{ state_text, model }, 0) catch state_text;
     }
-    return std.fmt.bufPrintZ(buf, "{s}", .{state_text}) catch state_text;
+    return std.fmt.bufPrintSentinel(buf, "{s}", .{state_text}, 0) catch state_text;
 }
 
 fn keychronRunScript(buf: []u8, staged_path: [:0]const u8, pkexec_style: bool) ?[:0]const u8 {
@@ -838,17 +838,17 @@ fn keychronRunScript(buf: []u8, staged_path: [:0]const u8, pkexec_style: bool) ?
     // string shape works for the sudo terminal fallback. bufPrintZ() wants
     // a comptime format string, hence one literal per branch.
     if (pkexec_style) {
-        return std.fmt.bufPrintZ(buf, "/usr/bin/install -Dm644 '{s}' /etc/udev/rules.d/70-keychron.rules && " ++
+        return std.fmt.bufPrintSentinel(buf, "/usr/bin/install -Dm644 '{s}' /etc/udev/rules.d/70-keychron.rules && " ++
             "/usr/bin/udevadm control --reload-rules && " ++
             "/usr/bin/udevadm trigger --subsystem-match=hidraw && " ++
             "/usr/bin/udevadm trigger --subsystem-match=usb && " ++
-            "/usr/bin/rm -f '{s}'", .{ staged_path, staged_path }) catch null;
+            "/usr/bin/rm -f '{s}'", .{ staged_path, staged_path }, 0) catch null;
     }
-    return std.fmt.bufPrintZ(buf, "sudo /usr/bin/install -Dm644 '{s}' /etc/udev/rules.d/70-keychron.rules && " ++
+    return std.fmt.bufPrintSentinel(buf, "sudo /usr/bin/install -Dm644 '{s}' /etc/udev/rules.d/70-keychron.rules && " ++
         "sudo /usr/bin/udevadm control --reload-rules && " ++
         "sudo /usr/bin/udevadm trigger --subsystem-match=hidraw && " ++
         "sudo /usr/bin/udevadm trigger --subsystem-match=usb; " ++
-        "rm -f '{s}'; echo; read -p 'Press Enter to close...'", .{ staged_path, staged_path }) catch null;
+        "rm -f '{s}'; echo; read -p 'Press Enter to close...'", .{ staged_path, staged_path }, 0) catch null;
 }
 
 const KeychronPkexecOutcome = union(enum) {
@@ -907,7 +907,7 @@ fn onKeychronSetupClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     // text and no stdin tricks.
     _ = mkdir(g_perihelionbar_config_dir, 0o755);
     var staged_buf: [512]u8 = undefined;
-    const staged = std.fmt.bufPrintZ(&staged_buf, "{s}/keychron-70.rules", .{g_perihelionbar_config_dir}) catch return;
+    const staged = std.fmt.bufPrintSentinel(&staged_buf, "{s}/keychron-70.rules", .{g_perihelionbar_config_dir}, 0) catch return;
     if (!writeFileAll(staged, KEYCHRON_RULES_CONTENT)) {
         logging.warn("keychron: could not stage rules file at {s}", .{staged});
         return;
@@ -1045,7 +1045,7 @@ fn buildKeychronGroup() *gtk.AdwPreferencesGroup {
         gtk.adw_preferences_row_set_title(@ptrCast(row), "Open the Keychron Launcher");
         if (keychronBrowser()) |browser| {
             var buf: [256]u8 = undefined;
-            const sub = std.fmt.bufPrintZ(&buf, "Opens launcher.keychron.com in {s}.", .{browser.label}) catch
+            const sub = std.fmt.bufPrintSentinel(&buf, "Opens launcher.keychron.com in {s}.", .{browser.label}, 0) catch
                 "Opens launcher.keychron.com in a Chromium-based browser.";
             gtk.adw_action_row_set_subtitle(row, sub);
         } else {
@@ -1200,7 +1200,7 @@ fn onGraphicsInstallClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void
     var cmd_buf: [256]u8 = undefined;
     const install_cmd = buildSystemInstallCmd(&cmd_buf, GRAPHICS_PACKAGES[idx]);
     var buf: [400]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&buf, "{s}; echo; read -p 'Press Enter to close...'", .{install_cmd}) catch return;
+    const script = std.fmt.bufPrintSentinel(&buf, "{s}; echo; read -p 'Press Enter to close...'", .{install_cmd}, 0) catch return;
     launchInTerminal(script);
 }
 
@@ -1210,7 +1210,7 @@ fn onVideoPlayerInstallClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) v
     var cmd_buf: [256]u8 = undefined;
     const install_cmd = buildSystemInstallCmd(&cmd_buf, VIDEO_PLAYER_PACKAGES[idx]);
     var buf: [400]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&buf, "{s}; echo; read -p 'Press Enter to close...'", .{install_cmd}) catch return;
+    const script = std.fmt.bufPrintSentinel(&buf, "{s}; echo; read -p 'Press Enter to close...'", .{install_cmd}, 0) catch return;
     launchInTerminal(script);
 }
 
@@ -1220,7 +1220,7 @@ fn onEditorInstallClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     var cmd_buf: [300]u8 = undefined;
     const install_cmd = buildInstallCmd(&cmd_buf, EDITOR_PACKAGES[idx], EDITOR_NEEDS_AUR[idx]);
     var buf: [400]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&buf, "{s}; echo; read -p 'Press Enter to close...'", .{install_cmd}) catch return;
+    const script = std.fmt.bufPrintSentinel(&buf, "{s}; echo; read -p 'Press Enter to close...'", .{install_cmd}, 0) catch return;
     launchInTerminal(script);
 }
 
@@ -1231,7 +1231,7 @@ fn onBrowserPinApplyClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void
     var cmd_buf: [300]u8 = undefined;
     const install_cmd = buildInstallCmd(&cmd_buf, info.pkg, info.needs_aur);
     var buf: [500]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&buf, "{s}; mkdir -p \"$HOME/.config/perihelionbar\" && echo {s} > \"$HOME/.config/perihelionbar/browser-choice\"; echo; read -p 'Press Enter to close...'", .{ install_cmd, info.binary }) catch return;
+    const script = std.fmt.bufPrintSentinel(&buf, "{s}; mkdir -p \"$HOME/.config/perihelionbar\" && echo {s} > \"$HOME/.config/perihelionbar/browser-choice\"; echo; read -p 'Press Enter to close...'", .{ install_cmd, info.binary }, 0) catch return;
     launchInTerminal(script);
 }
 
@@ -1242,7 +1242,7 @@ fn onDiscordPinApplyClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void
     var cmd_buf: [300]u8 = undefined;
     const install_cmd = buildInstallCmd(&cmd_buf, info.pkg, info.needs_aur);
     var buf: [500]u8 = undefined;
-    const script = std.fmt.bufPrintZ(&buf, "{s}; mkdir -p \"$HOME/.config/perihelionbar\" && echo {s} > \"$HOME/.config/perihelionbar/discord-choice\"; echo; read -p 'Press Enter to close...'", .{ install_cmd, info.binary }) catch return;
+    const script = std.fmt.bufPrintSentinel(&buf, "{s}; mkdir -p \"$HOME/.config/perihelionbar\" && echo {s} > \"$HOME/.config/perihelionbar/discord-choice\"; echo; read -p 'Press Enter to close...'", .{ install_cmd, info.binary }, 0) catch return;
     launchInTerminal(script);
 }
 
@@ -1435,7 +1435,7 @@ fn buildKeybindingsPage() *gtk.GtkBox {
     const config_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(config_group, "Editing your config");
     var desc_buf: [128]u8 = undefined;
-    const desc = std.fmt.bufPrintZ(&desc_buf, "Change keybindings or monitor setup with:\nnvim {s}", .{HYPRLAND_CONF}) catch "Change keybindings or monitor setup with nvim.";
+    const desc = std.fmt.bufPrintSentinel(&desc_buf, "Change keybindings or monitor setup with:\nnvim {s}", .{HYPRLAND_CONF}, 0) catch "Change keybindings or monitor setup with nvim.";
     gtk.adw_preferences_group_set_description(config_group, desc);
     gtk.gtk_box_append(box, @ptrCast(config_group));
 
@@ -1579,7 +1579,7 @@ fn onUpdateCheckIdle(data: ?*anyopaque) callconv(.c) c_int {
 
     var status: [:0]const u8 = "Everything is up to date.";
     if (total > 0) {
-        status = std.fmt.bufPrintZ(&g_status_buf, "{d} update(s) available", .{total}) catch "Updates available";
+        status = std.fmt.bufPrintSentinel(&g_status_buf, "{d} update(s) available", .{total}, 0) catch "Updates available";
     }
     setStatusLabel(status);
 
@@ -1819,7 +1819,7 @@ fn pickedAurHelper() ?[:0]const u8 {
 
 fn pkgSearchThreadFn(result: *PkgSearchResult) void {
     logging.step("pkg search thread started (query {s})", .{result.queryZ()});
-    const query_z = gpa.dupeZ(u8, result.queryZ()) catch {
+    const query_z = gpa.dupeSentinel(u8, result.queryZ(), 0) catch {
         logging.warn("pkg search: out of memory", .{});
         gpa.destroy(result);
         return;
@@ -1888,7 +1888,7 @@ fn onPkgRowButtonClicked(_: *gtk.GtkButton, data: ?*anyopaque) callconv(.c) void
         // "pacman -Rns" removes them regardless of where they came from.
         .remove => std.fmt.bufPrint(&cmd_buf, "{s} -Rns --noconfirm {s}", .{ root_pacman, action.nameZ() }) catch return,
     };
-    const script = std.fmt.bufPrintZ(&script_buf, "{s}; echo; read -p 'Press Enter to close...'", .{cmd}) catch return;
+    const script = std.fmt.bufPrintSentinel(&script_buf, "{s}; echo; read -p 'Press Enter to close...'", .{cmd}, 0) catch return;
     launchInTerminal(script);
 }
 
@@ -1918,7 +1918,7 @@ fn onPkgSearchIdle(data: ?*anyopaque) callconv(.c) c_int {
     }
     if (result.count == 0) {
         var buf: [128]u8 = undefined;
-        setPkgMessage(std.fmt.bufPrintZ(&buf, "No packages matched \"{s}\".", .{result.queryZ()}) catch "No packages matched.");
+        setPkgMessage(std.fmt.bufPrintSentinel(&buf, "No packages matched \"{s}\".", .{result.queryZ()}, 0) catch "No packages matched.");
         setPkgStatus("No results");
         gpa.destroy(result);
         return 0;
@@ -1948,7 +1948,7 @@ fn onPkgSearchIdle(data: ?*anyopaque) callconv(.c) c_int {
             }
         }
         var sub_z_buf: [512]u8 = undefined;
-        gtk.adw_action_row_set_subtitle(row, std.fmt.bufPrintZ(&sub_z_buf, "{s}", .{sub}) catch "");
+        gtk.adw_action_row_set_subtitle(row, std.fmt.bufPrintSentinel(&sub_z_buf, "{s}", .{sub}, 0) catch "");
 
         const button = gtk.gtk_button_new_with_label(if (e.installed) "Remove" else "Install");
         gtk.gtk_widget_add_css_class(@ptrCast(button), "flat");
@@ -1974,14 +1974,14 @@ fn onPkgSearchIdle(data: ?*anyopaque) callconv(.c) c_int {
 
     if (g_pkg_rows.group) |group| {
         var title_buf: [128]u8 = undefined;
-        gtk.adw_preferences_group_set_title(group, std.fmt.bufPrintZ(&title_buf, "Results for \"{s}\"", .{result.queryZ()}) catch "Results");
+        gtk.adw_preferences_group_set_title(group, std.fmt.bufPrintSentinel(&title_buf, "Results for \"{s}\"", .{result.queryZ()}, 0) catch "Results");
     }
 
     var status_buf: [96]u8 = undefined;
     if (result.count > shown) {
-        setPkgStatus(std.fmt.bufPrintZ(&status_buf, "First {d} of {d} \u{2014} refine your search to see more", .{ shown, result.count }) catch "");
+        setPkgStatus(std.fmt.bufPrintSentinel(&status_buf, "First {d} of {d} \u{2014} refine your search to see more", .{ shown, result.count }, 0) catch "");
     } else {
-        setPkgStatus(std.fmt.bufPrintZ(&status_buf, "{d} result(s)", .{result.count}) catch "");
+        setPkgStatus(std.fmt.bufPrintSentinel(&status_buf, "{d} result(s)", .{result.count}, 0) catch "");
     }
     gpa.destroy(result);
     return 0; // G_SOURCE_REMOVE
@@ -2058,8 +2058,8 @@ fn buildPackagesPage() *gtk.GtkBox {
     const helper = pickedAurHelper();
     var hint_buf: [256]u8 = undefined;
     const hint = if (helper) |h|
-        std.fmt.bufPrintZ(&hint_buf, "Searches the official Arch repositories and the AUR (via {s}). Repo installs " ++
-            "and removals authorize with a graphical pkexec prompt.", .{h}) catch "Searches the official Arch repositories and the AUR."
+        std.fmt.bufPrintSentinel(&hint_buf, "Searches the official Arch repositories and the AUR (via {s}). Repo installs " ++
+            "and removals authorize with a graphical pkexec prompt.", .{h}, 0) catch "Searches the official Arch repositories and the AUR."
     else
         "Searches the official Arch repositories. Repo installs and removals " ++
             "authorize with a graphical pkexec prompt.";

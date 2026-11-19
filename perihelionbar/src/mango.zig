@@ -137,7 +137,7 @@ pub const Doc = struct {
 
         const dir_end = std.mem.lastIndexOfScalar(u8, self.path, '/') orelse return false;
         var tmp_buf: [MAX_LINE + 64]u8 = undefined;
-        const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}/.perihelionbar-mango-tmp", .{self.path[0..dir_end]}) catch return false;
+        const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}/.perihelionbar-mango-tmp", .{self.path[0..dir_end]}, 0) catch return false;
 
         if (!writeAll(tmp.ptr, buf.items)) {
             _ = unlink(tmp.ptr);

@@ -252,7 +252,7 @@ fn buildPlan() void {
         var text: ?[]const u8 = null;
         for (roots[0..nroots]) |root| {
             var pb: [600]u8 = undefined;
-            const p = std.fmt.bufPrintZ(&pb, "{s}/{s}/index.theme", .{ root, theme }) catch continue;
+            const p = std.fmt.bufPrintSentinel(&pb, "{s}/{s}/index.theme", .{ root, theme }, 0) catch continue;
             if (readSmallFile(p, &index_buf)) |t| {
                 text = t;
                 break;
@@ -281,7 +281,7 @@ fn buildPlan() void {
         std.mem.sort(DirRank, ranks[0..nr], {}, rankLess);
         for (roots[0..nroots]) |root| {
             var pb: [600]u8 = undefined;
-            const tdir = std.fmt.bufPrintZ(&pb, "{s}/{s}", .{ root, theme }) catch continue;
+            const tdir = std.fmt.bufPrintSentinel(&pb, "{s}/{s}", .{ root, theme }, 0) catch continue;
             if (access(tdir.ptr, 0) != 0) continue;
             for (ranks[0..nr]) |r| planAdd(root, theme, dir_store[r.off .. r.off + r.len]);
         }

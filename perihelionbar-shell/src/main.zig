@@ -325,28 +325,28 @@ var g_kb_ready = false;
 fn resolveConfigPaths() void {
     const home = std.mem.span(getenv("HOME") orelse return);
     var dir_buf: [512]u8 = undefined;
-    const dir = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/perihelionbar", .{home}) catch return;
+    const dir = std.fmt.bufPrintSentinel(&dir_buf, "{s}/.config/perihelionbar", .{home}, 0) catch return;
     _ = posix.system.mkdir(dir.ptr, 0o755); // EEXIST on a normal first boot — best-effort
-    shell_config_path = std.fmt.bufPrintZ(&shell_config_path_buf, "{s}/shell.json", .{dir}) catch "";
-    matugen_path = std.fmt.bufPrintZ(&matugen_path_buf, "{s}/matugen.json", .{dir}) catch "";
-    reminders_path = std.fmt.bufPrintZ(&reminders_path_buf, "{s}/reminders.txt", .{dir}) catch "";
-    notes_dir_path = std.fmt.bufPrintZ(&notes_dir_path_buf, "{s}/notes", .{dir}) catch "";
+    shell_config_path = std.fmt.bufPrintSentinel(&shell_config_path_buf, "{s}/shell.json", .{dir}, 0) catch "";
+    matugen_path = std.fmt.bufPrintSentinel(&matugen_path_buf, "{s}/matugen.json", .{dir}, 0) catch "";
+    reminders_path = std.fmt.bufPrintSentinel(&reminders_path_buf, "{s}/reminders.txt", .{dir}, 0) catch "";
+    notes_dir_path = std.fmt.bufPrintSentinel(&notes_dir_path_buf, "{s}/notes", .{dir}, 0) catch "";
     if (notes_dir_path.len > 0) _ = posix.system.mkdir(notes_dir_path.ptr, 0o755); // sticky-note slots
     // The shortcuts folder — the freedesktop ~/Desktop. Never mkdir'd
     // here on purpose: an empty desktop shows no grid, and the app
     // drawer's "Add to desktop" creates it on the first drop.
     const homez = std.mem.span(getenv("HOME") orelse "");
-    desktop_dir_path = std.fmt.bufPrintZ(&desktop_dir_path_buf, "{s}/Desktop", .{homez}) catch "";
+    desktop_dir_path = std.fmt.bufPrintSentinel(&desktop_dir_path_buf, "{s}/Desktop", .{homez}, 0) catch "";
     // Per-widget on/off list (written by perihelionbar-config, one widget id per
     // line): widgets named here are skipped at startup. Missing file means
     // all enabled, so fresh installs behave exactly as before. A separate
     // file rather than flags inside shell.json so the GUI never has to
     // rewrite shell.json (which would risk clobbering drag-persisted widget
     // positions); the GUI owns this file outright.
-    widgets_disabled_path = std.fmt.bufPrintZ(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}) catch "";
+    widgets_disabled_path = std.fmt.bufPrintSentinel(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}, 0) catch "";
     // Pidfile so perihelionbar-config can restart the widgets when a toggle flips
     // (same convention as the bar's perihelionbar.pid).
-    shell_pidfile_path = std.fmt.bufPrintZ(&shell_pidfile_path_buf, "{s}/perihelionbar-shell.pid", .{dir}) catch "";
+    shell_pidfile_path = std.fmt.bufPrintSentinel(&shell_pidfile_path_buf, "{s}/perihelionbar-shell.pid", .{dir}, 0) catch "";
 }
 
 fn readFileAlloc(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
@@ -377,7 +377,7 @@ fn disabledMask(allocator: std.mem.Allocator) u16 {
     // there are 11. Trip the compiler, not a runtime panic, if a 17th
     // arrives (tile_dirty is a u16 too).
     comptime {
-        const n = @typeInfo(widgets_mod.WidgetId).@"enum".fields.len;
+        const n = std.meta.tags(widgets_mod.WidgetId).len;
         if (n > 16) @compileError("disabledMask: u16 mask holds at most 16 widgets");
         if (n > MAX_WIDGETS) @compileError("MAX_WIDGETS must cover every WidgetId");
     }
@@ -799,7 +799,7 @@ const Host = struct {
     widgets: [MAX_WIDGETS]widgets_mod.Widget = undefined,
     widget_rects: [MAX_WIDGETS]widgets_mod.Rect = undefined,
     widget_count: usize = 0,
-    next_tick_ms: [MAX_WIDGETS]i64 = [_]i64{0} ** MAX_WIDGETS,
+    next_tick_ms: [MAX_WIDGETS]i64 = @as([MAX_WIDGETS]i64, @splat(0)),
     needs_repaint: bool = false,
     /// Per-widget ARGB tile cache (allocated in initWidgets, freed in
     /// main): a widget re-renders into its own tile only when its
@@ -807,7 +807,7 @@ const Host = struct {
     /// onto a fresh zero-filled surface. A card that changes then costs
     /// one tile repaint instead of re-rastering every widget on every
     /// output.
-    tiles: [MAX_WIDGETS]?[]u32 = [_]?[]u32{null} ** MAX_WIDGETS,
+    tiles: [MAX_WIDGETS]?[]u32 = @as([MAX_WIDGETS]?[]u32, @splat(null)),
     tile_dirty: u16 = 0xFFFF, // all dirty until first paint; MAX_WIDGETS ≤ 16
     /// Frosted glass behind the cards: the wallpaper, decoded small and
     /// blurred once (glass.zig). Re-read on startup and on each palette
@@ -815,14 +815,14 @@ const Host = struct {
     /// part under it, so a tile that moves (drag) re-renders at its new spot.
     backdrop: glass.Backdrop = .{},
     backdrop_checked: bool = false,
-    tile_origin: [MAX_WIDGETS][2]i32 = [_][2]i32{.{ std.math.minInt(i32), 0 }} ** MAX_WIDGETS,
+    tile_origin: [MAX_WIDGETS][2]i32 = @as([MAX_WIDGETS][2]i32, @splat(.{ std.math.minInt(i32), 0 })),
     /// Per-widget zoomed fonts (corner resize scales content, not just the
     /// card): slot i holds a face at the integer pixel size matching the
     /// widget's current zoom, or null when it renders at base size / the
     /// scaled load failed. Re-created only when the size bucket changes.
     /// Note1 never zooms (it reflows) and always uses the shared font.
-    zoom_fonts: [MAX_WIDGETS]?font_mod.Font = [_]?font_mod.Font{null} ** MAX_WIDGETS,
-    zoom_px: [MAX_WIDGETS]u32 = [_]u32{0} ** MAX_WIDGETS,
+    zoom_fonts: [MAX_WIDGETS]?font_mod.Font = @as([MAX_WIDGETS]?font_mod.Font, @splat(null)),
+    zoom_px: [MAX_WIDGETS]u32 = @as([MAX_WIDGETS]u32, @splat(0)),
     hovered_index: ?usize = null,
     pointer_desktop: ?usize = null,
     pointer_x: i32 = 0,
@@ -877,7 +877,7 @@ const Host = struct {
 fn legacyWeatherLocation(gpa: std.mem.Allocator, out: []u8) []const u8 {
     const home = std.mem.span(getenv("HOME") orelse return "");
     var pbuf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelionbar/weather-location", .{home}) catch return "";
+    const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/perihelionbar/weather-location", .{home}, 0) catch return "";
     const text = readFileAlloc(gpa, path) catch return "";
     defer gpa.free(text);
     const first = if (std.mem.indexOfScalar(u8, text, '\n')) |i| text[0..i] else text;
@@ -962,9 +962,9 @@ fn resolveNotesDir(want: []const u8) []const u8 {
     const d = std.mem.trimEnd(u8, want, "/");
     if (d.len == 0) return notes_dir_path;
     const path = if (std.mem.startsWith(u8, d, "~/"))
-        std.fmt.bufPrintZ(&notes_custom_dir_buf, "{s}{s}", .{ std.mem.span(getenv("HOME") orelse ""), d[1..] })
+        std.fmt.bufPrintSentinel(&notes_custom_dir_buf, "{s}{s}", .{ std.mem.span(getenv("HOME") orelse ""), d[1..] }, 0)
     else
-        std.fmt.bufPrintZ(&notes_custom_dir_buf, "{s}", .{d});
+        std.fmt.bufPrintSentinel(&notes_custom_dir_buf, "{s}", .{d}, 0);
     const z = path catch {
         logging.warn("config: notes_dir is too long — using the default folder", .{});
         return notes_dir_path;
@@ -1250,7 +1250,7 @@ fn saveConfig(host: *Host) void {
     if (!w.append("  ]\n}\n")) return;
 
     var tmp_buf: [532]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.tmp", .{shell_config_path}) catch return;
+    const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}.tmp", .{shell_config_path}, 0) catch return;
     const raw_fd = posix.system.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
     if (raw_fd < 0) {
         logging.warn("config: could not write {s}", .{tmp});
@@ -1281,7 +1281,7 @@ fn saveConfig(host: *Host) void {
 fn currentWallpaper(gpa: std.mem.Allocator, out: []u8) []const u8 {
     const home = std.mem.span(getenv("HOME") orelse return "");
     var pbuf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelion/wallpaper", .{home})) |p| {
+    if (std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/perihelion/wallpaper", .{home}, 0)) |p| {
         if (readFileAlloc(gpa, p)) |text| {
             defer gpa.free(text);
             const line = std.mem.trim(u8, text, " \t\r\n");
@@ -1295,7 +1295,7 @@ fn currentWallpaper(gpa: std.mem.Allocator, out: []u8) []const u8 {
             if (std.mem.startsWith(u8, line, "color ")) return "";
         } else |_| {}
     } else |_| {}
-    if (std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelionbar/wallpaper", .{home})) |p| {
+    if (std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/perihelionbar/wallpaper", .{home}, 0)) |p| {
         if (readFileAlloc(gpa, p)) |text| {
             defer gpa.free(text);
             var lines = std.mem.splitScalar(u8, text, '\n');
@@ -2346,7 +2346,7 @@ const IPC_PATH_LEN = 256;
 
 fn ipcSockPathZ(buf: []u8) ?[:0]const u8 {
     const dir = std.mem.sliceTo(getenv("XDG_RUNTIME_DIR") orelse return null, 0);
-    return std.fmt.bufPrintZ(buf, "{s}/perihelionbar-shell.sock", .{dir}) catch null;
+    return std.fmt.bufPrintSentinel(buf, "{s}/perihelionbar-shell.sock", .{dir}, 0) catch null;
 }
 
 fn ipcUnixAddr(path: []const u8) !std.os.linux.sockaddr.un {
@@ -2784,7 +2784,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var poll_fds = [_]posix.pollfd{
         .{ .fd = display.getFd(), .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = ipc_fd, .events = posix.POLL.IN, .revents = 0 },
-    } ++ [_]posix.pollfd{.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }} ** (MAX_WIDGETS + glance.CARD_COUNT);
+    } ++ @as([MAX_WIDGETS + glance.CARD_COUNT]posix.pollfd, @splat(.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }));
 
     while (true) {
         // Refresh the pipe fds (they change across fetch cycles).

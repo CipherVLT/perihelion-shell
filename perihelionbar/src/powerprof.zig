@@ -17,7 +17,7 @@ pub const MAX_PROFILES: usize = 6;
 
 pub const Profiles = struct {
     names: [MAX_PROFILES][24]u8 = undefined,
-    lens: [MAX_PROFILES]usize = [_]usize{0} ** MAX_PROFILES,
+    lens: [MAX_PROFILES]usize = @as([MAX_PROFILES]usize, @splat(0)),
     count: usize = 0,
     active: ?usize = null,
 

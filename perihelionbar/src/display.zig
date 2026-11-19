@@ -852,7 +852,7 @@ test "ICC files for every gamut preset, for the lcms check in CI" {
         var buf: [1024]u8 = undefined;
         const icc = makeIcc(presetPrimaries(p).?, preset_names[@intFromEnum(p)], &buf).?;
         var pb: [128]u8 = undefined;
-        const path = try std.fmt.bufPrintZ(&pb, "{s}/{s}.icc", .{ dir, preset_names[@intFromEnum(p)] });
+        const path = try std.fmt.bufPrintSentinel(&pb, "{s}/{s}.icc", .{ dir, preset_names[@intFromEnum(p)] }, 0);
         try std.testing.expect(writeFileZ(path, icc));
     }
     var buf: [1024]u8 = undefined;
@@ -862,7 +862,7 @@ test "ICC files for every gamut preset, for the lcms check in CI" {
 }
 
 fn sampleEdid() [256]u8 {
-    var e = [_]u8{0} ** 256;
+    var e = @as([256]u8, @splat(0));
     const hdr = [_]u8{ 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00 };
     @memcpy(e[0..8], &hdr);
     // Chromaticity of a typical wide-gamut panel: R .6806/.3095 G .2617/.6826
@@ -898,7 +898,7 @@ test "EDID: primaries and HDR luminance" {
     try t.expectApproxEqAbs(50.0 * std.math.pow(f64, 2.0, 115.0 / 32.0), l.max, 1e-6);
     try t.expectApproxEqAbs(50.0 * std.math.pow(f64, 2.0, 75.0 / 32.0), l.max_avg, 1e-6);
     try t.expect(l.min > 0 and l.min < 1);
-    var blank = [_]u8{0} ** 128;
+    var blank = @as([128]u8, @splat(0));
     try t.expect(edidPrimaries(&blank) == null);
     try t.expect(edidLuminance(e[0..128]) == null); // no extension block present
 }
@@ -955,7 +955,7 @@ pub fn readFileZ(path: [*:0]const u8, buf: []u8) ?[]u8 {
 /// Writes `data` to `path` through a temporary file and a rename.
 pub fn writeFileZ(path: [:0]const u8, data: []const u8) bool {
     var tb: [600]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tb, "{s}.tmp", .{path}) catch return false;
+    const tmp = std.fmt.bufPrintSentinel(&tb, "{s}.tmp", .{path}, 0) catch return false;
     const fd = open(tmp.ptr, O_WRONLY_CREAT_TRUNC, @as(c_uint, 0o644));
     if (fd < 0) return false;
     var n: usize = 0;
@@ -977,7 +977,7 @@ pub fn makeDirs(path: []const u8) void {
     while (i <= path.len) : (i += 1) {
         if (i == path.len or path[i] == '/') {
             var z: [600]u8 = undefined;
-            const pz = std.fmt.bufPrintZ(&z, "{s}", .{path[0..i]}) catch return;
+            const pz = std.fmt.bufPrintSentinel(&z, "{s}", .{path[0..i]}, 0) catch return;
             _ = mkdir(pz.ptr, 0o755);
         }
     }
@@ -993,7 +993,7 @@ pub fn readEdid(name: []const u8, buf: []u8) ?[]u8 {
         const dash = std.mem.indexOfScalar(u8, en, '-') orelse continue;
         if (!std.mem.eql(u8, en[dash + 1 ..], name)) continue;
         var pb: [256]u8 = undefined;
-        const p = std.fmt.bufPrintZ(&pb, "/sys/class/drm/{s}/edid", .{en}) catch continue;
+        const p = std.fmt.bufPrintSentinel(&pb, "/sys/class/drm/{s}/edid", .{en}, 0) catch continue;
         const got = readFileZ(p.ptr, buf) orelse continue;
         if (got.len >= 128) return got;
     }

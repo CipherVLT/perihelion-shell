@@ -98,8 +98,8 @@ pub const Service = struct {
     tx_rate: u64 = 0,
     ifaces: u32 = 0,
     /// Ring of past rates; `hist_len` valid entries ending at `hist_head`.
-    rx_hist: [HISTORY]u64 = [_]u64{0} ** HISTORY,
-    tx_hist: [HISTORY]u64 = [_]u64{0} ** HISTORY,
+    rx_hist: [HISTORY]u64 = @as([HISTORY]u64, @splat(0)),
+    tx_hist: [HISTORY]u64 = @as([HISTORY]u64, @splat(0)),
     hist_head: usize = 0,
     hist_len: usize = 0,
 

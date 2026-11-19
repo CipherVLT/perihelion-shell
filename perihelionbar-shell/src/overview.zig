@@ -203,7 +203,7 @@ pub const OutputSet = struct {
     pub const Slot = struct { set: *OutputSet, idx: usize };
 
     list: [MAX]*wl.Output = undefined,
-    names: [MAX][64]u8 = [_][64]u8{[_]u8{0} ** 64} ** MAX,
+    names: [MAX][64]u8 = @as([MAX][64]u8, @splat(@as([64]u8, @splat(0)))),
     slots: [MAX]Slot = undefined,
     count: usize = 0,
 
@@ -516,7 +516,7 @@ pub const Overview = struct {
     capture_deadline: i64 = 0,
 
     // Target output + geometry (global logical origin from hyprctl).
-    out_name: [64]u8 = [_]u8{0} ** 64,
+    out_name: [64]u8 = @as([64]u8, @splat(0)),
     out_output: ?*wl.Output = null,
     out_x: i32 = 0,
     out_y: i32 = 0,

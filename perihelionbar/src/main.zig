@@ -153,7 +153,7 @@ var launcher_icon_size: u32 = LAUNCHER_ICON_BAR;
 const LAUNCHER_ICON_TEXT_GAP: i64 = 5;
 
 const LauncherIconCache = struct {
-    pixels: [LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32 = [_]u32{0} ** (LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX),
+    pixels: [LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32 = @as([LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32, @splat(0)),
     has_icon: bool = false,
     resolved: bool = false,
     /// Nerd Font codepoint for the distro logo (0 = not a distro-logo
@@ -494,7 +494,7 @@ fn binaryOnPath(binary: []const u8) bool {
     var cbuf: [256]u8 = undefined;
     while (it.next()) |dir| {
         if (dir.len == 0) continue;
-        const full = std.fmt.bufPrintZ(&cbuf, "{s}/{s}", .{ dir, binary }) catch continue;
+        const full = std.fmt.bufPrintSentinel(&cbuf, "{s}/{s}", .{ dir, binary }, 0) catch continue;
         if (access(full.ptr, 1) == 0) return true; // X_OK
     }
     return false;
@@ -505,7 +505,7 @@ fn binaryOnPath(binary: []const u8) bool {
 fn readChoiceBinary(file: []const u8, buf: []u8) []const u8 {
     const home = getenv("HOME") orelse return "";
     var pbuf: [256]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelionbar/{s}", .{ std.mem.sliceTo(home, 0), file }) catch return "";
+    const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/perihelionbar/{s}", .{ std.mem.sliceTo(home, 0), file }, 0) catch return "";
     const data = readFileAlloc(std.heap.page_allocator, path) catch return "";
     defer std.heap.page_allocator.free(data);
     const trimmed = std.mem.trim(u8, data, " \t\r\n");
@@ -600,11 +600,11 @@ fn decodeIconPathIntoPixels(path_slice: []const u8, dst: []u32) bool {
 /// kept (negative results cached too, so a missing icon doesn't retry
 /// theme lookup on every draw). Sized to the tracker cap; eviction is
 /// first-unused-slot — a full cache just means later arrivals keep labels.
-var tail_icons: [MAX_RUNNING_APPS]TailIconCache = [_]TailIconCache{.{}} ** MAX_RUNNING_APPS;
+var tail_icons: [MAX_RUNNING_APPS]TailIconCache = @as([MAX_RUNNING_APPS]TailIconCache, @splat(.{}));
 const TailIconCache = struct {
     appid_buf: [64]u8 = undefined,
     appid_len: usize = 0,
-    pixels: [LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32 = [_]u32{0} ** (LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX),
+    pixels: [LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32 = @as([LAUNCHER_ICON_MAX * LAUNCHER_ICON_MAX]u32, @splat(0)),
     has_icon: bool = false,
     resolved: bool = false,
 };
@@ -868,7 +868,7 @@ var trash_icon: LauncherIconCache = .{};
 fn trashHasFiles() bool {
     const home = getenv("HOME") orelse return false;
     var buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&buf, "{s}/.local/share/Trash/files", .{std.mem.span(home)}) catch return false;
+    const path = std.fmt.bufPrintSentinel(&buf, "{s}/.local/share/Trash/files", .{std.mem.span(home)}, 0) catch return false;
     const d = libc_dir.opendir(path.ptr) orelse return false;
     defer _ = libc_dir.closedir(d);
     while (libc_dir.readdir(d)) |e| {
@@ -2263,8 +2263,8 @@ fn dropMatchesFile() bool {
 fn spawnMoveLauncher(from: usize, to: usize) bool {
     var from_buf: [8]u8 = undefined;
     var to_buf: [8]u8 = undefined;
-    const from_s = std.fmt.bufPrintZ(&from_buf, "{d}", .{from}) catch return false;
-    const to_s = std.fmt.bufPrintZ(&to_buf, "{d}", .{to}) catch return false;
+    const from_s = std.fmt.bufPrintSentinel(&from_buf, "{d}", .{from}, 0) catch return false;
+    const to_s = std.fmt.bufPrintSentinel(&to_buf, "{d}", .{to}, 0) catch return false;
     // argv[0] is the program name — env-style launches must repeat it
     // (an array starting at the flag makes env parse OUR flag as ITS
     // option and die 125, which is exactly what happened here).
@@ -2391,7 +2391,7 @@ const ClickRegions = struct {
     /// level across rebuilds — except when the list itself changes under a
     /// static pointer (workspace added/removed mid-hover), where the level
     /// briefly belongs to a neighbor. Settles within one fade; accepted.
-    hover: [MAX_CLICK_REGIONS]f32 = [_]f32{0} ** MAX_CLICK_REGIONS,
+    hover: [MAX_CLICK_REGIONS]f32 = @as([MAX_CLICK_REGIONS]f32, @splat(0)),
     /// Index into items of the region under the pointer, maintained by the
     /// pointer handlers. Null when the pointer is off every region.
     hovered: ?usize = null,
@@ -3080,15 +3080,15 @@ var matugen_json_path: [:0]const u8 = "";
 fn resolveConfigPaths() void {
     const home = std.mem.span(getenv("HOME") orelse "/root");
     var dir_buf: [480]u8 = undefined;
-    const dir = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/perihelionbar", .{home}) catch return;
+    const dir = std.fmt.bufPrintSentinel(&dir_buf, "{s}/.config/perihelionbar", .{home}, 0) catch return;
     _ = posix.system.mkdir(dir.ptr, 0o755);
-    config_json_path = std.fmt.bufPrintZ(&config_json_path_buf, "{s}/config.json", .{dir}) catch "";
-    pidfile_path = std.fmt.bufPrintZ(&pidfile_path_buf, "{s}/{s}", .{ dir, if (dock_mode) "dock.pid" else "perihelionbar.pid" }) catch "";
+    config_json_path = std.fmt.bufPrintSentinel(&config_json_path_buf, "{s}/config.json", .{dir}, 0) catch "";
+    pidfile_path = std.fmt.bufPrintSentinel(&pidfile_path_buf, "{s}/{s}", .{ dir, if (dock_mode) "dock.pid" else "perihelionbar.pid" }, 0) catch "";
     // The matugen colors file lives under perihelionbar's own config dir (not
     // matugen's) so this bar only ever reads from under its own roof. The
     // post-hook in the shipped matugen template writes it here; perihelionbar
     // only ever reads it, matugen only ever writes it.
-    matugen_json_path = std.fmt.bufPrintZ(&matugen_path_buf, "{s}/matugen.json", .{dir}) catch "";
+    matugen_json_path = std.fmt.bufPrintSentinel(&matugen_path_buf, "{s}/matugen.json", .{dir}, 0) catch "";
 }
 
 /// True once this process holds its role's lock (singleton.zig): it is
@@ -3569,7 +3569,7 @@ fn readMangoOuterGap() i64 {
     var found: ?i64 = null;
     for ([_][]const u8{ "config.conf", "cfg/appearance.conf", "cfg/misc.conf" }) |name| {
         var pbuf: [512]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/mango/{s}", .{ std.mem.span(home), name }) catch continue;
+        const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/mango/{s}", .{ std.mem.span(home), name }, 0) catch continue;
         var fbuf: [16384]u8 = undefined;
         const text = readSmallFile(path, &fbuf) orelse continue;
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -3652,7 +3652,7 @@ const TrayItem = struct {
     bus_name_len: usize = 0,
     path_buf: [64]u8 = undefined,
     path_len: usize = 0,
-    pixels: [TRAY_ICON_SIZE * TRAY_ICON_SIZE]u32 = [_]u32{0} ** (TRAY_ICON_SIZE * TRAY_ICON_SIZE),
+    pixels: [TRAY_ICON_SIZE * TRAY_ICON_SIZE]u32 = @as([TRAY_ICON_SIZE * TRAY_ICON_SIZE]u32, @splat(0)),
     has_icon: bool = false,
     fail_count: u32 = 0,
 
@@ -3791,7 +3791,7 @@ fn fetchIconPixmap(c: *dbus.Connection, item: *TrayItem) !void {
 const Tray = struct {
     gpa: std.mem.Allocator,
     conn: ?dbus.Connection = null,
-    items: [MAX_TRAY_ITEMS]TrayItem = [_]TrayItem{.{}} ** MAX_TRAY_ITEMS,
+    items: [MAX_TRAY_ITEMS]TrayItem = @as([MAX_TRAY_ITEMS]TrayItem, @splat(.{})),
     item_count: usize = 0,
     refresh_index: usize = 0,
 
@@ -4173,7 +4173,7 @@ const PopupMenu = struct {
     vol_drag_moved: bool = false,
     /// Per-row hover fade level (0..1), eased on the scroll-timer tick like
     /// the bar's own hover anims. Indexed parallel to rows.
-    row_hover: [MAX_POPUP_ROWS]f32 = [_]f32{0} ** MAX_POPUP_ROWS,
+    row_hover: [MAX_POPUP_ROWS]f32 = @as([MAX_POPUP_ROWS]f32, @splat(0)),
     /// Row under the pointer, maintained by the pointer handlers.
     hovered_row: ?usize = null,
     /// Perihelion dock menu (kind == .dock_menu): the actions on offer, in
@@ -4520,12 +4520,12 @@ fn runDockMenuAction(bar: *Bar, pm: *const PopupMenu, a: DockMenuAction) void {
         .unpin => {
             const li = pm.dock_launcher orelse return;
             var buf: [64]u8 = undefined;
-            const c = std.fmt.bufPrintZ(&buf, "perihelion-dock-pin --unpin {d}", .{li}) catch return;
+            const c = std.fmt.bufPrintSentinel(&buf, "perihelion-dock-pin --unpin {d}", .{li}, 0) catch return;
             spawnDetached(c);
         },
         .new_window => {
             var buf: [260]u8 = undefined;
-            const c = std.fmt.bufPrintZ(&buf, "{s}", .{pm.dock_cmd_buf[0..pm.dock_cmd_len]}) catch return;
+            const c = std.fmt.bufPrintSentinel(&buf, "{s}", .{pm.dock_cmd_buf[0..pm.dock_cmd_len]}, 0) catch return;
             spawnDetached(c);
         },
         .close_window => bar.workspaces.closeClient(pm.dock_addr_buf[0..pm.dock_addr_len], pm.dock_ws),
@@ -4597,7 +4597,7 @@ const VolumeEntry = struct {
     }
 };
 
-var vol_entries: [VOL_MAX_ENTRIES]VolumeEntry = [_]VolumeEntry{.{}} ** VOL_MAX_ENTRIES;
+var vol_entries: [VOL_MAX_ENTRIES]VolumeEntry = @as([VOL_MAX_ENTRIES]VolumeEntry, @splat(.{}));
 var vol_count: usize = 0;
 var vol_fetch_fd: posix.fd_t = -1;
 var vol_fetch_buf: [4096]u8 = undefined;
@@ -4932,7 +4932,7 @@ fn startVolumeListFetch() void {
         var sbuf: [160]u8 = undefined;
         const sink = pactlSinkArg(&sbuf) orelse std.c._exit(127);
         var cbuf: [512]u8 = undefined;
-        const cmd = std.fmt.bufPrintZ(&cbuf, "echo '[sink]'; pactl get-sink-volume {s} 2>/dev/null; pactl get-sink-mute {s} 2>/dev/null; echo '[source]'; pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null; pactl get-source-mute @DEFAULT_SOURCE@ 2>/dev/null; pactl list sink-inputs 2>/dev/null", .{ sink, sink }) catch std.c._exit(127);
+        const cmd = std.fmt.bufPrintSentinel(&cbuf, "echo '[sink]'; pactl get-sink-volume {s} 2>/dev/null; pactl get-sink-mute {s} 2>/dev/null; echo '[source]'; pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null; pactl get-source-mute @DEFAULT_SOURCE@ 2>/dev/null; pactl list sink-inputs 2>/dev/null", .{ sink, sink }, 0) catch std.c._exit(127);
         var argv = [_:null]?[*:0]const u8{ "sh", "-c", cmd.ptr, null };
         _ = std.c.execve("/bin/sh", &argv, std.c.environ);
         std.c._exit(127);
@@ -5020,7 +5020,7 @@ fn closeVolumeFetch() void {
 /// unusable: PipeWire/pactl down — callers keep any open popup untouched
 /// rather than blanking it).
 fn finishVolumeFetch() usize {
-    var tmp: [VOL_MAX_ENTRIES]VolumeEntry = [_]VolumeEntry{.{}} ** VOL_MAX_ENTRIES;
+    var tmp: [VOL_MAX_ENTRIES]VolumeEntry = @as([VOL_MAX_ENTRIES]VolumeEntry, @splat(.{}));
     const n = parseVolumeList(vol_fetch_buf[0..vol_fetch_len], &tmp);
     closeVolumeFetch();
     if (n == 0) return 0;
@@ -5074,22 +5074,22 @@ fn spawnVolumeSet(entry_idx: usize, delta_pct: i8) void {
     if (e.id == -1) vol_osd_suppress_left = 100;
     const cmd = if (delta_pct == 0) blk: {
         if (e.id == -1) {
-            break :blk std.fmt.bufPrintZ(&buf, "pactl set-sink-mute {s} toggle", .{sink}) catch return;
+            break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-sink-mute {s} toggle", .{sink}, 0) catch return;
         }
         if (e.id == -2) {
-            break :blk std.fmt.bufPrintZ(&buf, "pactl set-source-mute @DEFAULT_SOURCE@ toggle", .{}) catch return;
+            break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-source-mute @DEFAULT_SOURCE@ toggle", .{}, 0) catch return;
         }
-        break :blk std.fmt.bufPrintZ(&buf, "pactl set-sink-input-mute {d} toggle", .{e.id}) catch return;
+        break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-sink-input-mute {d} toggle", .{e.id}, 0) catch return;
     } else blk: {
         const step: u8 = @intCast(@abs(delta_pct));
         const sign: u8 = if (delta_pct > 0) '+' else '-';
         if (e.id == -1) {
-            break :blk std.fmt.bufPrintZ(&buf, "pactl set-sink-volume {s} {c}{d}%", .{ sink, sign, step }) catch return;
+            break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-sink-volume {s} {c}{d}%", .{ sink, sign, step }, 0) catch return;
         }
         if (e.id == -2) {
-            break :blk std.fmt.bufPrintZ(&buf, "pactl set-source-volume @DEFAULT_SOURCE@ {c}{d}%", .{ sign, step }) catch return;
+            break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-source-volume @DEFAULT_SOURCE@ {c}{d}%", .{ sign, step }, 0) catch return;
         }
-        break :blk std.fmt.bufPrintZ(&buf, "pactl set-sink-input-volume {d} {c}{d}%", .{ e.id, sign, step }) catch return;
+        break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-sink-input-volume {d} {c}{d}%", .{ e.id, sign, step }, 0) catch return;
     };
     spawnDetached(cmd);
 }
@@ -5101,7 +5101,7 @@ fn spawnMasterVolumeAbs(pct: u8) void {
     var sbuf: [160]u8 = undefined;
     const sink = pactlSinkArg(&sbuf) orelse return;
     vol_osd_suppress_left = 100;
-    const cmd = std.fmt.bufPrintZ(&buf, "pactl set-sink-volume {s} {d}%", .{ sink, pct }) catch return;
+    const cmd = std.fmt.bufPrintSentinel(&buf, "pactl set-sink-volume {s} {d}%", .{ sink, pct }, 0) catch return;
     spawnDetached(cmd);
 }
 
@@ -5111,7 +5111,7 @@ fn spawnMasterMute(bar: *Bar) void {
     var sbuf: [160]u8 = undefined;
     const sink = pactlSinkArg(&sbuf) orelse return;
     vol_osd_suppress_left = 100;
-    const cmd = std.fmt.bufPrintZ(&buf, "pactl set-sink-mute {s} toggle", .{sink}) catch return;
+    const cmd = std.fmt.bufPrintSentinel(&buf, "pactl set-sink-mute {s} toggle", .{sink}, 0) catch return;
     spawnDetached(cmd);
     startVolumeFetch(bar.volume);
 }
@@ -5155,11 +5155,11 @@ fn spawnVolumeSetAbs(entry_idx: usize, pct: u8) void {
     // Same panel-echo suppression as the relative variant below.
     if (e.id == -1) vol_osd_suppress_left = 100;
     const cmd = if (e.id == -1) blk: {
-        break :blk std.fmt.bufPrintZ(&buf, "pactl set-sink-volume {s} {d}%", .{ sink, pct }) catch return;
+        break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-sink-volume {s} {d}%", .{ sink, pct }, 0) catch return;
     } else if (e.id == -2) blk: {
-        break :blk std.fmt.bufPrintZ(&buf, "pactl set-source-volume @DEFAULT_SOURCE@ {d}%", .{pct}) catch return;
+        break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-source-volume @DEFAULT_SOURCE@ {d}%", .{pct}, 0) catch return;
     } else blk: {
-        break :blk std.fmt.bufPrintZ(&buf, "pactl set-sink-input-volume {d} {d}%", .{ e.id, pct }) catch return;
+        break :blk std.fmt.bufPrintSentinel(&buf, "pactl set-sink-input-volume {d} {d}%", .{ e.id, pct }, 0) catch return;
     };
     spawnDetached(cmd);
 }
@@ -5189,7 +5189,7 @@ fn adjustMasterVolume(bar: *Bar, steps: i32) void {
     var buf: [128]u8 = undefined;
     var sbuf: [160]u8 = undefined;
     const sink = pactlSinkArg(&sbuf) orelse return;
-    const cmd = std.fmt.bufPrintZ(&buf, "pactl set-sink-volume {s} {c}{d}%", .{ sink, sign, step }) catch return;
+    const cmd = std.fmt.bufPrintSentinel(&buf, "pactl set-sink-volume {s} {c}{d}%", .{ sink, sign, step }, 0) catch return;
     spawnDetached(cmd);
     startVolumeFetch(bar.volume);
     showVolumeOSD(bar);
@@ -6072,7 +6072,7 @@ fn ccStartRead(action: CcAction) void {
         // powerprof.zig's [a-z0-9-] check, so it needs no quoting.
         .profile => std.fmt.bufPrint(sb[1000..], "powerprofilesctl set {s} >/dev/null 2>&1; ", .{g_cc_profile_buf[0..g_cc_profile_len]}) catch return,
     };
-    const script = std.fmt.bufPrintZ(sb[0..1000], "{s}{s}", .{ prefix, CC_STATE_SCRIPT }) catch return;
+    const script = std.fmt.bufPrintSentinel(sb[0..1000], "{s}{s}", .{ prefix, CC_STATE_SCRIPT }, 0) catch return;
     if (g_cc_proc.start(script)) g_cc_last_read_ms = monoNowMs();
 }
 
@@ -6165,7 +6165,7 @@ fn startBrightnessSet(pct: u8) void {
     var sb: [200]u8 = undefined;
     const name = std.fmt.bufPrint(&nb, "{s}", .{g_backlight.name()}) catch return;
     const q = shellQuoteArg(name, &qb) orelse return;
-    const script = std.fmt.bufPrintZ(&sb, "brightnessctl -q -d {s} set {d}% >/dev/null 2>&1", .{ q, @max(pct, 1) }) catch return;
+    const script = std.fmt.bufPrintSentinel(&sb, "brightnessctl -q -d {s} set {d}% >/dev/null 2>&1", .{ q, @max(pct, 1) }, 0) catch return;
     _ = g_bri_proc.start(script);
 }
 
@@ -6522,13 +6522,13 @@ const Bar = struct {
     /// stream head heights in px, scattered on first paint/resize and
     /// advanced on the 60ms tick. ncols == 0 means uninitialized for the
     /// current width.
-    matrix_heads: [512]i16 = [_]i16{0} ** 512,
+    matrix_heads: [512]i16 = @as([512]i16, @splat(0)),
     matrix_ncols: usize = 0,
     /// One-time-resolved rain charset for this bar's font (Nerd Font
     /// linux-distro logos where the font has them, else full blocks — an
     /// unresolved miss every frame would flicker and burn a FreeType load
     /// each time).
-    matrix_chars: [48]u32 = [_]u32{0} ** 48,
+    matrix_chars: [48]u32 = @as([48]u32, @splat(0)),
     matrix_chars_len: usize = 0,
     matrix_charset_done: bool = false,
     /// Drawer island span: min/max x of last frame's drawn in-drawer cells.
@@ -6709,7 +6709,7 @@ fn autohideHide(bar: *Bar) void {
         region.destroy();
     } else |_| {}
     bar.click_regions.hovered = null;
-    bar.click_regions.hover = [_]f32{0} ** MAX_CLICK_REGIONS;
+    bar.click_regions.hover = @as([MAX_CLICK_REGIONS]f32, @splat(0));
     bar.click_regions.clear();
     if (bar.popup != null) closePopup(bar);
     drawAndCommit(bar) catch |err| {
@@ -7152,7 +7152,7 @@ fn realMain() !void {
     startNetSsidFetch(&net_ssid);
 
     initCustomScripts();
-    var custom_script_timer_fds: [MAX_CUSTOM_SCRIPTS]posix.fd_t = [_]posix.fd_t{-1} ** MAX_CUSTOM_SCRIPTS;
+    var custom_script_timer_fds: [MAX_CUSTOM_SCRIPTS]posix.fd_t = @as([MAX_CUSTOM_SCRIPTS]posix.fd_t, @splat(-1));
     for (0..custom_script_count) |i| {
         custom_script_timer_fds[i] = createIntervalTimer(custom_script_intervals[i]) catch -1;
         if (custom_script_timer_fds[i] >= 0) startCustomScriptFetch(&custom_scripts[i], customScriptCommand(i));
@@ -8030,7 +8030,7 @@ const CavaState = struct {
     pending_fd: posix.fd_t = -1,
     read_buf: [512]u8 = undefined,
     read_len: usize = 0,
-    bars: [CAVA_BARS]u32 = [_]u32{0} ** CAVA_BARS,
+    bars: [CAVA_BARS]u32 = @as([CAVA_BARS]u32, @splat(0)),
     bar_count: usize = CAVA_BARS,
     has_data: bool = false,
     dead_since_tick: i64 = std.math.minInt(i64),
@@ -8281,7 +8281,7 @@ fn sampleCpu() void {
     const line = text[0..line_end];
     if (!std.mem.startsWith(u8, line, "cpu ")) return;
 
-    var fields: [10]u64 = [_]u64{0} ** 10;
+    var fields: [10]u64 = @as([10]u64, @splat(0));
     var count: usize = 0;
     var it = std.mem.tokenizeScalar(u8, line[4..], ' ');
     while (it.next()) |tok| {
@@ -8393,7 +8393,7 @@ fn sampleBattery() void {
     if (!battery_state.found) return;
 
     var cap_path_buf: [128]u8 = undefined;
-    const cap_path = std.fmt.bufPrintZ(&cap_path_buf, "{s}/capacity", .{battery_state.path()}) catch return;
+    const cap_path = std.fmt.bufPrintSentinel(&cap_path_buf, "{s}/capacity", .{battery_state.path()}, 0) catch return;
     var cap_text_buf: [16]u8 = undefined;
     if (readSmallFile(cap_path, &cap_text_buf)) |text| {
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
@@ -8401,7 +8401,7 @@ fn sampleBattery() void {
     }
 
     var status_path_buf: [128]u8 = undefined;
-    const status_path = std.fmt.bufPrintZ(&status_path_buf, "{s}/status", .{battery_state.path()}) catch return;
+    const status_path = std.fmt.bufPrintSentinel(&status_path_buf, "{s}/status", .{battery_state.path()}, 0) catch return;
     var status_text_buf: [32]u8 = undefined;
     if (readSmallFile(status_path, &status_text_buf)) |text| {
         const trimmed = std.mem.trim(u8, text, " \t\r\n");
@@ -8454,7 +8454,7 @@ const Statvfs = extern struct {
 fn sampleDisk() void {
     const path = if (findRightEntry(.disk)) |e| (e.path orelse "/") else "/";
     var path_buf: [256]u8 = undefined;
-    const path_z = std.fmt.bufPrintZ(&path_buf, "{s}", .{path}) catch return;
+    const path_z = std.fmt.bufPrintSentinel(&path_buf, "{s}", .{path}, 0) catch return;
     var stat: Statvfs = undefined;
     if (libc_fs.statvfs(path_z.ptr, &stat) != 0) return;
     if (stat.f_blocks == 0) return;
@@ -8586,10 +8586,10 @@ fn parseSsid(raw: []const u8, buf: []u8) []const u8 {
 // every other module. bar_height is the one appearance field that still
 // needs a bar restart (see main()'s comment on that), not this.
 
-var custom_scripts: [MAX_CUSTOM_SCRIPTS]PolledCommand = [_]PolledCommand{.{}} ** MAX_CUSTOM_SCRIPTS;
+var custom_scripts: [MAX_CUSTOM_SCRIPTS]PolledCommand = @as([MAX_CUSTOM_SCRIPTS]PolledCommand, @splat(.{}));
 var custom_script_commands: [MAX_CUSTOM_SCRIPTS][256]u8 = undefined;
-var custom_script_command_lens: [MAX_CUSTOM_SCRIPTS]usize = [_]usize{0} ** MAX_CUSTOM_SCRIPTS;
-var custom_script_intervals: [MAX_CUSTOM_SCRIPTS]i64 = [_]i64{CUSTOM_SCRIPT_DEFAULT_INTERVAL_SECONDS} ** MAX_CUSTOM_SCRIPTS;
+var custom_script_command_lens: [MAX_CUSTOM_SCRIPTS]usize = @as([MAX_CUSTOM_SCRIPTS]usize, @splat(0));
+var custom_script_intervals: [MAX_CUSTOM_SCRIPTS]i64 = @as([MAX_CUSTOM_SCRIPTS]i64, @splat(CUSTOM_SCRIPT_DEFAULT_INTERVAL_SECONDS));
 var custom_script_count: usize = 0;
 
 fn customScriptCommand(index: usize) []const u8 {
@@ -8724,7 +8724,7 @@ fn loadBarWeatherConfig(arena: std.mem.Allocator) ?wsvc.Config {
     const home = std.mem.span(getenv("HOME") orelse "/root");
     var keys: wsvc.ShellJsonKeys = .{};
     var path_buf: [480]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/perihelionbar/shell.json", .{home}) catch return null;
+    const path = std.fmt.bufPrintSentinel(&path_buf, "{s}/.config/perihelionbar/shell.json", .{home}, 0) catch return null;
     if (readFileAlloc(arena, path)) |bytes| {
         keys = std.json.parseFromSliceLeaky(wsvc.ShellJsonKeys, arena, bytes, .{
             .ignore_unknown_fields = true,
@@ -8737,7 +8737,7 @@ fn loadBarWeatherConfig(arena: std.mem.Allocator) ?wsvc.Config {
     }
     var cfg = wsvc.configFromKeys(keys, cache);
     if (cfg.city.len == 0) {
-        if (std.fmt.bufPrintZ(&path_buf, "{s}/.config/perihelionbar/weather-location", .{home})) |legacy_path| {
+        if (std.fmt.bufPrintSentinel(&path_buf, "{s}/.config/perihelionbar/weather-location", .{home}, 0)) |legacy_path| {
             if (readFileAlloc(arena, legacy_path)) |text| {
                 const first = if (std.mem.indexOfScalar(u8, text, '\n')) |i| text[0..i] else text;
                 cfg.city = std.mem.trim(u8, first, " \t\r");
@@ -8765,7 +8765,7 @@ fn applyBarWeatherConfig(w: *BarWeather, first: bool) void {
 /// (pacman-contrib's checkupdates, Arch Linux). Writes into `buf` and
 /// returns a null-terminated view of it.
 fn systemUpdateCountShell(buf: []u8) [:0]const u8 {
-    return std.fmt.bufPrintZ(buf, "checkupdates | wc -l", .{}) catch "checkupdates | wc -l";
+    return std.fmt.bufPrintSentinel(buf, "checkupdates | wc -l", .{}, 0) catch "checkupdates | wc -l";
 }
 
 fn startPacmanFetch(cmd: *PolledCommand) void {
@@ -8789,7 +8789,7 @@ fn startVolumeFetch(cmd: *PolledCommand) void {
     // -m1 alone doesn't suffice: it stops after one matching LINE while -o
     // still prints every % on it (stereo pairs), so head -1 keeps exactly
     // the front-left figure the module shows.
-    const command = std.fmt.bufPrintZ(&cbuf, "pactl get-sink-volume {s} 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'; pactl get-sink-mute {s} 2>/dev/null | grep -q yes && echo MUTED", .{ sink, sink }) catch return;
+    const command = std.fmt.bufPrintSentinel(&cbuf, "pactl get-sink-volume {s} 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'; pactl get-sink-mute {s} 2>/dev/null | grep -q yes && echo MUTED", .{ sink, sink }, 0) catch return;
     var argv = [_:null]?[*:0]const u8{ "sh", "-c", command.ptr, null };
     cmd.startFetch("/bin/sh", &argv);
 }
@@ -13473,7 +13473,7 @@ test "weather fx mapping and render" {
     }
     // Render smoke: rain lights pixels inside its rect and only there; the
     // none kind leaves the buffer untouched.
-    var buf: [40 * 200]u32 = [_]u32{0xFF101010} ** (40 * 200);
+    var buf: [40 * 200]u32 = @as([40 * 200]u32, @splat(0xFF101010));
     drawWeatherFx(&buf, 200, 40, 10, 190, .rain, 7, 0xFF101010, 0xFF4AA8FF);
     var lit: usize = 0;
     var leaked: usize = 0;
@@ -13489,7 +13489,7 @@ test "weather fx mapping and render" {
     }
     try t.expect(lit > 5);
     try t.expectEqual(@as(usize, 0), leaked);
-    var buf2: [40 * 200]u32 = [_]u32{0xFF101010} ** (40 * 200);
+    var buf2: [40 * 200]u32 = @as([40 * 200]u32, @splat(0xFF101010));
     drawWeatherFx(&buf2, 200, 40, 10, 190, .none, 7, 0xFF101010, 0xFF4AA8FF);
     for (buf2) |px| try t.expectEqual(@as(u32, 0xFF101010), px);
 }
@@ -13531,13 +13531,13 @@ test "mpris progress styles" {
     current_config.appearance.module_pills = true;
     current_config.appearance.pill_borders = true;
     // Underline: pixels change only in the bottom dash band.
-    var u: [32 * 200]u32 = [_]u32{0xFF101010} ** (32 * 200);
+    var u: [32 * 200]u32 = @as([32 * 200]u32, @splat(0xFF101010));
     drawMprisProgress(&u, 200, 32, 10, 100, 0.5);
     var u_min: usize = 32;
     var u_max: usize = 0;
     var u_lit: usize = 0;
     // Bar fill: spans vertically through the pill interior, wider total.
-    var b: [32 * 200]u32 = [_]u32{0xFF101010} ** (32 * 200);
+    var b: [32 * 200]u32 = @as([32 * 200]u32, @splat(0xFF101010));
     drawMprisBarFill(&b, 200, 32, 6, 150, 0.5);
     var b_min: usize = 32;
     var b_max: usize = 0;
@@ -13564,9 +13564,9 @@ test "mpris progress styles" {
     try t.expect(b_lit > u_lit * 2);
     try t.expect(b_max - b_min > 12);
     // Null/zero fractions draw nothing in either style.
-    var n1: [32 * 200]u32 = [_]u32{0xFF101010} ** (32 * 200);
+    var n1: [32 * 200]u32 = @as([32 * 200]u32, @splat(0xFF101010));
     drawMprisProgress(&n1, 200, 32, 10, 100, null);
-    var n2: [32 * 200]u32 = [_]u32{0xFF101010} ** (32 * 200);
+    var n2: [32 * 200]u32 = @as([32 * 200]u32, @splat(0xFF101010));
     drawMprisBarFill(&n2, 200, 32, 6, 150, 0.0);
     for (n1) |px| try t.expectEqual(@as(u32, 0xFF101010), px);
     for (n2) |px| try t.expectEqual(@as(u32, 0xFF101010), px);
@@ -13581,7 +13581,7 @@ test "urgent pill lights amber" {
     current_config.appearance.pill_borders = true;
     current_config.appearance.module_border_width = 1;
     // Full strength paints wash + dash; zero strength is a no-op.
-    var lit: [32 * 200]u32 = [_]u32{0xFF101010} ** (32 * 200);
+    var lit: [32 * 200]u32 = @as([32 * 200]u32, @splat(0xFF101010));
     drawUrgentPill(&lit, 200, 32, 50, 110, 1.0);
     var n_lit: usize = 0;
     var amber: usize = 0;
@@ -13596,14 +13596,14 @@ test "urgent pill lights amber" {
     }
     try t.expect(n_lit > 50);
     try t.expect(amber > n_lit / 2);
-    var dark: [32 * 200]u32 = [_]u32{0xFF101010} ** (32 * 200);
+    var dark: [32 * 200]u32 = @as([32 * 200]u32, @splat(0xFF101010));
     drawUrgentPill(&dark, 200, 32, 50, 110, 0.0);
     for (dark) |px| try t.expectEqual(@as(u32, 0xFF101010), px);
 }
 
 test "big icon layout covers ink" {
     const t = std.testing;
-    var pxbuf: [32]u8 = [_]u8{0} ** 32;
+    var pxbuf: [32]u8 = @as([32]u8, @splat(0));
     // Overhanging bitmap (21px ink on a 13px advance, bearing -4): the cell
     // must span the ink [-4, 17), not the advance — advance-only measuring
     // is what clipped the old layout pill's ring through the glyph.
@@ -13638,7 +13638,7 @@ test "volume list parses pactl" {
     current_config.appearance.volume_sink = "we'ird";
     try t.expect(pactlSinkArg(&abuf) == null);
     current_config.appearance.volume_sink = "";
-    var out: [VOL_MAX_ENTRIES]VolumeEntry = [_]VolumeEntry{.{}} ** VOL_MAX_ENTRIES;
+    var out: [VOL_MAX_ENTRIES]VolumeEntry = @as([VOL_MAX_ENTRIES]VolumeEntry, @splat(.{}));
     // Master + muted app + unnamed stream + boosted (>100%) level.
     const sample =
         \\Volume: front-left: 42598 /  65% / -11.22 dB,   front-right: 42598 /  65% / -11.22 dB
@@ -13673,7 +13673,7 @@ test "volume list parses pactl" {
     try t.expectEqual(@as(u8, 100), out[2].vol_pct);
     try t.expectEqual(@as(u8, 122), out[3].vol_pct);
     // Sink + source master pairs land at 0/1 with apps after them.
-    var outm: [VOL_MAX_ENTRIES]VolumeEntry = [_]VolumeEntry{.{}} ** VOL_MAX_ENTRIES;
+    var outm: [VOL_MAX_ENTRIES]VolumeEntry = @as([VOL_MAX_ENTRIES]VolumeEntry, @splat(.{}));
     const samplem =
         \\[sink]
         \\Volume: front-left: 42598 /  65% / -11.22 dB
@@ -13695,7 +13695,7 @@ test "volume list parses pactl" {
     try t.expect(outm[1].muted);
     try t.expectEqualStrings("Firefox", outm[2].name());
     // No sink master volume: unusable, keep the old list.
-    var out2: [VOL_MAX_ENTRIES]VolumeEntry = [_]VolumeEntry{.{}} ** VOL_MAX_ENTRIES;
+    var out2: [VOL_MAX_ENTRIES]VolumeEntry = @as([VOL_MAX_ENTRIES]VolumeEntry, @splat(.{}));
     try t.expectEqual(@as(usize, 0), parseVolumeList("Mute: no\nSink Input #6\n\tMute: no\n", &out2));
     // Garbage: unusable too.
     try t.expectEqual(@as(usize, 0), parseVolumeList("hello\nworld\n", &out2));
@@ -14160,7 +14160,7 @@ test "hyprland workspace entries carry their monitor" {
 test "monitor name copy truncates without leaking capture" {
     const t = std.testing;
     var ws = Workspace{ .id = 1, .active = false };
-    const long = "DP-1" ++ "0123456789" ** 6; // 64 chars > MONITOR_NAME_MAX
+    const long = "DP-1" ++ "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789" ++ "0123456789"; // 64 chars > MONITOR_NAME_MAX
     ws.setMonitor(long);
     try t.expectEqual(@as(usize, MONITOR_NAME_MAX), ws.monitorName().len);
     // Re-set to the same name (already at the cap → same truncated string)

@@ -162,7 +162,7 @@ fn env(name: [*:0]const u8) []const u8 {
 /// Fixed-capacity, always NUL-terminated text (z() feeds argv directly).
 pub fn Text(comptime N: usize) type {
     return struct {
-        buf: [N + 1]u8 = [_]u8{0} ** (N + 1),
+        buf: [N + 1]u8 = @as([N + 1]u8, @splat(0)),
         len: usize = 0,
 
         const Self = @This();
@@ -186,7 +186,7 @@ pub fn Text(comptime N: usize) type {
 }
 
 fn pathZ(buf: []u8, comptime fmt: []const u8, args: anytype) ?[:0]const u8 {
-    return std.fmt.bufPrintZ(buf, fmt, args) catch null;
+    return std.fmt.bufPrintSentinel(buf, fmt, args, 0) catch null;
 }
 
 /// Whole small file into `buf` (truncated at buf.len). Null if unreadable.
@@ -329,15 +329,14 @@ pub const Field = enum {
     }
 
     fn fromKey(key: []const u8) ?Field {
-        inline for (@typeInfo(Field).@"enum".fields) |f| {
-            const v: Field = @enumFromInt(f.value);
+        for (std.meta.tags(Field)) |v| {
             if (std.mem.eql(u8, key, v.label())) return v;
         }
         return null;
     }
 };
 
-pub const FIELD_COUNT = @typeInfo(Field).@"enum".fields.len;
+pub const FIELD_COUNT = std.meta.tags(Field).len;
 pub const DEFAULT_FIELDS = [_]Field{ .os, .host, .kernel, .uptime, .packages, .shell, .wm, .cpu, .gpu, .memory, .disk };
 
 /// shell.json fastfetch_fields → fields, in the order given, without
@@ -1303,12 +1302,12 @@ pub const Service = struct {
     fallback_bin: Text(256) = .{},
     structure: Text(160) = .{},
 
-    values: [FIELD_COUNT]Text(128) = [_]Text(128){.{}} ** FIELD_COUNT,
+    values: [FIELD_COUNT]Text(128) = @as([FIELD_COUNT]Text(128), @splat(.{})),
     /// "user@hostname", fastfetch's title line.
     title: Text(96) = .{},
     distro_id: Text(32) = .{},
 
-    logo: [MAX_LOGO_LINES]Text(256) = [_]Text(256){.{}} ** MAX_LOGO_LINES,
+    logo: [MAX_LOGO_LINES]Text(256) = @as([MAX_LOGO_LINES]Text(256), @splat(.{})),
     logo_count: usize = 0,
     logo_cols: usize = 0,
     logo_off: bool = false,
@@ -1321,7 +1320,7 @@ pub const Service = struct {
     shown_hash: u64 = 0,
 
     layout: Layout = .fields,
-    rows: [MAX_ROWS]CardRow = [_]CardRow{.{}} ** MAX_ROWS,
+    rows: [MAX_ROWS]CardRow = @as([MAX_ROWS]CardRow, @splat(.{})),
     row_count: usize = 0,
     /// The config ends on a "colors" module (fields layout: always).
     palette: bool = true,
@@ -1564,7 +1563,7 @@ pub const Service = struct {
     pub fn runComplete(self: *Service, body: []const u8, now_ms: i64) bool {
         self.in_flight = false;
         if (self.layout == .config) {
-            var seen_rows = [_]bool{false} ** MAX_ROWS;
+            var seen_rows = @as([MAX_ROWS]bool, @splat(false));
             var got_rows: usize = 0;
             var tlines = std.mem.splitScalar(u8, body, '\n');
             while (tlines.next()) |line| {
@@ -1591,7 +1590,7 @@ pub const Service = struct {
             if (got_rows == 0) self.dropSource(now_ms);
             return self.rehash();
         }
-        var seen = [_]bool{false} ** FIELD_COUNT;
+        var seen = @as([FIELD_COUNT]bool, @splat(false));
         var disk_root = false;
         var got: usize = 0;
         var lines = std.mem.splitScalar(u8, body, '\n');
@@ -1858,7 +1857,7 @@ pub const Service = struct {
             if (d.len > 0 and d.len <= desk_buf.len) desk = std.ascii.lowerString(&desk_buf, d);
         }
         const r = self.root.slice();
-        var lists: [5]?[:0]const u8 = .{null} ** 5;
+        var lists: [5]?[:0]const u8 = @splat(null);
         var lb: [5][400]u8 = undefined;
         if (desk.len > 0) lists[0] = pathZ(&lb[0], "{s}/{s}-xdg-terminals.list", .{ cfg, desk });
         lists[1] = pathZ(&lb[1], "{s}/xdg-terminals.list", .{cfg});
@@ -2535,7 +2534,7 @@ fn writeFile(root: []const u8, rel: []const u8, content: []const u8, mode: posix
     const p = std.fmt.bufPrint(&pb, "{s}/{s}", .{ root, rel }) catch return;
     if (std.mem.lastIndexOfScalar(u8, p, '/')) |slash| mkdirP(p[0..slash]);
     var zb: [300]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zb, "{s}", .{p}) catch return;
+    const z = std.fmt.bufPrintSentinel(&zb, "{s}", .{p}, 0) catch return;
     const raw = posix.system.open(z.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, mode);
     if (raw < 0) return;
     const fd: posix.fd_t = @intCast(raw);
@@ -2767,7 +2766,7 @@ test "jsonc, labels and section titles" {
 test "Perihelion's config becomes sectioned rows and a tagged derived config" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    var rows: [MAX_ROWS]CardRow = [_]CardRow{.{}} ** MAX_ROWS;
+    var rows: [MAX_ROWS]CardRow = @as([MAX_ROWS]CardRow, @splat(.{}));
     var derived: [16384]u8 = undefined;
     const plan = buildPlan(arena.allocator(), PERIHELION_CONFIG, &rows, &derived, .{}).?;
     try std.testing.expect(plan.palette);
@@ -3043,7 +3042,7 @@ test "ISO config: desktop rows, no doubled labels, empty rows dropped" {
     // Derived config: the command keeps its text, its format lost the label.
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    var rows2: [MAX_ROWS]CardRow = [_]CardRow{.{}} ** MAX_ROWS;
+    var rows2: [MAX_ROWS]CardRow = @as([MAX_ROWS]CardRow, @splat(.{}));
     var derived: [16384]u8 = undefined;
     const plan = buildPlan(arena.allocator(), ISO_CONFIG, &rows2, &derived, .{ .shell_path = "/usr/bin/bash", .term_path = "/usr/bin/kitty" }).?;
     const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), derived[0..plan.derived_len], .{});

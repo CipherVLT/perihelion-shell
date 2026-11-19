@@ -613,7 +613,7 @@ fn openRuleDialog(parent: *anyopaque, rp: *const RulePage, line: usize) void {
 
     g_dlg = .{ .kind = .pair, .doc = rp.doc, .key = rp.key, .line = line, .spec = rp.spec, .nfields = rp.spec.len };
 
-    var vals = [_][]const u8{""} ** MAX_DFIELDS;
+    var vals = @as([MAX_DFIELDS][]const u8, @splat(""));
     var extras_n: usize = 0;
     var it = std.mem.splitScalar(u8, kv.value, ',');
     while (it.next()) |raw| {
@@ -970,7 +970,7 @@ fn onMangoCanvasDraw(_: *hg.GtkDrawingArea, cr: *hg.CairoT, w: c_int, h: c_int, 
         hg.cairo_set_font_size(cr, 13);
         hg.cairo_move_to(cr, 16, 24);
         var msg: [128:0]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&msg, "No monitor rules — Add one or hit Auto-detect.", .{}) catch "No monitors.";
+        const s = std.fmt.bufPrintSentinel(&msg, "No monitor rules — Add one or hit Auto-detect.", .{}, 0) catch "No monitors.";
         hg.cairo_show_text(cr, s.ptr);
         return;
     }
@@ -1006,7 +1006,7 @@ fn onMangoCanvasDraw(_: *hg.GtkDrawingArea, cr: *hg.CairoT, w: c_int, h: c_int, 
         var nbuf: [64]u8 = undefined;
         const nm = if (live) g_disp_outs[i].name() else mangoRuleName(line_idxs[i], &nbuf);
         var lbuf: [72:0]u8 = undefined;
-        const zs = std.fmt.bufPrintZ(&lbuf, "{s}", .{if (nm.len != 0) nm else "???"}) catch "?";
+        const zs = std.fmt.bufPrintSentinel(&lbuf, "{s}", .{if (nm.len != 0) nm else "???"}, 0) catch "?";
         hg.cairo_show_text(cr, zs.ptr);
     }
 }
@@ -1161,7 +1161,7 @@ fn onMangoDragEnd(_: *hg.GtkGestureDrag, _: f64, _: f64, _: ?*anyopaque) callcon
     const m = mangoMonitorLines(&line_idxs);
     var rects: [8]mon.ArrangeRect = undefined;
     const n = mangoRects(&rects, line_idxs[0..m]);
-    const dis = [_]bool{false} ** 8;
+    const dis = @as([8]bool, @splat(false));
     mon.finalizeDrag(rects[0..n], dis[0..n], moved);
     writeMangoPositions(rects[0..n], line_idxs[0..m]);
     rebuildRuleList(&g_rp_monitors);
@@ -1175,7 +1175,7 @@ fn onMangoArrangeClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     var rects: [8]mon.ArrangeRect = undefined;
     const n = mangoRects(&rects, line_idxs[0..m]);
     if (n == 0) return;
-    const dis = [_]bool{false} ** 8;
+    const dis = @as([8]bool, @splat(false));
     mon.arrangeSideBySide(rects[0..n], dis[0..n]);
     writeMangoPositions(rects[0..n], line_idxs[0..m]);
     rebuildRuleList(&g_rp_monitors);
@@ -1189,7 +1189,7 @@ fn onMangoAlignTopsClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void 
     var rects: [8]mon.ArrangeRect = undefined;
     const n = mangoRects(&rects, line_idxs[0..m]);
     if (n == 0) return;
-    const dis = [_]bool{false} ** 8;
+    const dis = @as([8]bool, @splat(false));
     mon.alignTops(rects[0..n], dis[0..n]);
     var mn_y: i32 = std.math.maxInt(i32);
     for (rects[0..n]) |r| mn_y = @min(mn_y, r.y);
@@ -2692,7 +2692,7 @@ var g_disp_n: usize = 0;
 var g_disp_sel: usize = 0;
 var g_disp_detail: ?*gtk.GtkBox = null;
 var g_disp_chips: ?*gtk.GtkBox = null;
-var g_disp_note: [160:0]u8 = [_:0]u8{0} ** 160;
+var g_disp_note: [160:0]u8 = @as([160:0]u8, @splat(0));
 var g_disp_res_bufs: [mon.MAX_RES][16:0]u8 = undefined;
 var g_disp_res_ptrs: [mon.MAX_RES][*:0]const u8 = undefined;
 var g_disp_res_n: usize = 0;
@@ -2711,7 +2711,7 @@ fn homeZ() []const u8 {
 }
 
 fn dispNote(comptime fmt: []const u8, args: anytype) void {
-    const s = std.fmt.bufPrintZ(&g_disp_note, fmt, args) catch return;
+    const s = std.fmt.bufPrintSentinel(&g_disp_note, fmt, args, 0) catch return;
     _ = s;
 }
 
@@ -3039,7 +3039,7 @@ fn onDispDepthChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque)
 
 fn dispRemembered(name: []const u8) ?disp.Preset {
     var pb: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pb, "{s}/" ++ DISP_PRESETS_FILE, .{homeZ()}) catch return null;
+    const path = std.fmt.bufPrintSentinel(&pb, "{s}/" ++ DISP_PRESETS_FILE, .{homeZ()}, 0) catch return null;
     var fb: [2048]u8 = undefined;
     const text = disp.readFileZ(path.ptr, &fb) orelse return null;
     return disp.rememberedIn(text, name);
@@ -3047,7 +3047,7 @@ fn dispRemembered(name: []const u8) ?disp.Preset {
 
 fn dispRemember(name: []const u8, p: disp.Preset) void {
     var pb: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pb, "{s}/" ++ DISP_PRESETS_FILE, .{homeZ()}) catch return;
+    const path = std.fmt.bufPrintSentinel(&pb, "{s}/" ++ DISP_PRESETS_FILE, .{homeZ()}, 0) catch return;
     var fb: [2048]u8 = undefined;
     const text = disp.readFileZ(path.ptr, &fb) orelse "";
     var ob: [2200]u8 = undefined;
@@ -3076,7 +3076,7 @@ fn onDispPresetChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque
         var dir_buf: [512]u8 = undefined;
         const dir = std.fmt.bufPrint(&dir_buf, "{s}/" ++ DISP_ICC_DIR, .{homeZ()}) catch return;
         disp.makeDirs(dir);
-        icc_path = std.fmt.bufPrintZ(&icc_path_buf, "{s}/{s}.{s}.icc", .{ dir, o.name(), disp.preset_names[idx] }) catch return;
+        icc_path = std.fmt.bufPrintSentinel(&icc_path_buf, "{s}/{s}.{s}.icc", .{ dir, o.name(), disp.preset_names[idx] }, 0) catch return;
         var desc_buf: [96]u8 = undefined;
         const desc = std.fmt.bufPrint(&desc_buf, "Perihelion {s} ({s})", .{ disp.preset_names[idx], o.name() }) catch "Perihelion";
         var icc_buf: [1024]u8 = undefined;
@@ -3107,7 +3107,7 @@ fn onDispPresetChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque
 var g_nl: disp.NightLight = .{};
 
 fn nlPath(buf: []u8) ?[:0]const u8 {
-    return std.fmt.bufPrintZ(buf, "{s}/" ++ NL_FILE, .{homeZ()}) catch null;
+    return std.fmt.bufPrintSentinel(buf, "{s}/" ++ NL_FILE, .{homeZ()}, 0) catch null;
 }
 
 fn nlLoad() void {
@@ -3172,7 +3172,7 @@ fn nlClockSubtitle(row: ?*anyopaque, prefix: []const u8, minutes: i32) void {
     const r = row orelse return;
     var cb: [8]u8 = undefined;
     var sb: [64]u8 = undefined;
-    const s = std.fmt.bufPrintZ(&sb, "{s} {s} (minutes after midnight).", .{ prefix, disp.fmtClock(minutes, &cb) }) catch return;
+    const s = std.fmt.bufPrintSentinel(&sb, "{s} {s} (minutes after midnight).", .{ prefix, disp.fmtClock(minutes, &cb) }, 0) catch return;
     gtk.adw_action_row_set_subtitle(@ptrCast(@alignCast(r)), s.ptr);
 }
 
