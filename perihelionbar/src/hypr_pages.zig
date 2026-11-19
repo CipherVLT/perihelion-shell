@@ -50,7 +50,7 @@ pub fn zCopy(s: []const u8, buf: []u8) [*:0]const u8 {
 
 /// bufPrintZ wrapper returning a zero-terminated pointer ("" on overflow).
 pub fn fmtZ(buf: []u8, comptime fmt: []const u8, args: anytype) [*:0]const u8 {
-    const s = std.fmt.bufPrintZ(buf, fmt, args) catch return "";
+    const s = std.fmt.bufPrintSentinel(buf, fmt, args, 0) catch return "";
     return s.ptr;
 }
 
@@ -190,7 +190,7 @@ fn onLayoutChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, user_data: ?*anyop
 /// std.meta.intToEnum was removed in Zig 0.16; range-checked replacement.
 fn enumFromIntSafe(comptime T: type, v: anytype) ?T {
     const Info = @typeInfo(T).@"enum";
-    const last_name = Info.fields[Info.fields.len - 1].name;
+    const last_name = Info.field_names[Info.field_names.len - 1];
     const max_value: i128 = @intFromEnum(@field(T, last_name));
     const value: i128 = @intCast(v);
     if (value < 0 or value > max_value) return null;
@@ -351,9 +351,9 @@ const Slider = struct {
 fn sliderLabel(s: *Slider, value: f64) void {
     var buf: [32]u8 = undefined;
     const text = if (s.digits == 0)
-        std.fmt.bufPrintZ(&buf, "{d}", .{@as(i64, @intFromFloat(@round(value)))}) catch return
+        std.fmt.bufPrintSentinel(&buf, "{d}", .{@as(i64, @intFromFloat(@round(value)))}, 0) catch return
     else
-        std.fmt.bufPrintZ(&buf, "{d:.2}", .{value}) catch return;
+        std.fmt.bufPrintSentinel(&buf, "{d:.2}", .{value}, 0) catch return;
     gtk.gtk_label_set_text(s.label, text.ptr);
 }
 
@@ -1020,7 +1020,7 @@ fn onMonCanvasDraw(_: *hg.GtkDrawingArea, cr: *hg.CairoT, w: c_int, h: c_int, _:
         hg.cairo_set_font_size(cr, 13);
         hg.cairo_move_to(cr, 16, 24);
         var msg: [128:0]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&msg, "No monitors — Add one or hit Auto-detect.", .{}) catch "No monitors.";
+        const s = std.fmt.bufPrintSentinel(&msg, "No monitors — Add one or hit Auto-detect.", .{}, 0) catch "No monitors.";
         hg.cairo_show_text(cr, s.ptr);
         return;
     }
@@ -1061,7 +1061,7 @@ fn onMonCanvasDraw(_: *hg.GtkDrawingArea, cr: *hg.CairoT, w: c_int, h: c_int, _:
         var lbuf: [72:0]u8 = undefined;
         const m = &hypr.state.monitors[i];
         const lbl = if (m.output.len != 0) m.output.slice() else "???";
-        const zs = std.fmt.bufPrintZ(&lbuf, "{s}", .{lbl}) catch "?";
+        const zs = std.fmt.bufPrintSentinel(&lbuf, "{s}", .{lbl}, 0) catch "?";
         hg.cairo_show_text(cr, zs.ptr);
     }
 }
@@ -1634,9 +1634,9 @@ pub fn buildAnimationsPage() *gtk.GtkBox {
 
 const BIND_ACTION_LABELS = blk: {
     const Info = @typeInfo(hypr.BindAction).@"enum";
-    var arr: [Info.fields.len][*:0]const u8 = undefined;
-    for (Info.fields, 0..) |f, i| {
-        arr[i] = @field(hypr.BindAction, f.name).displayName();
+    var arr: [Info.field_names.len][*:0]const u8 = undefined;
+    for (Info.field_names, 0..) |name, i| {
+        arr[i] = @field(hypr.BindAction, name).displayName();
     }
     break :blk arr;
 };
