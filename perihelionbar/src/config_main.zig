@@ -2638,11 +2638,29 @@ const CardOption = struct {
     default: CardVal,
     /// The bar reads this key too: ask it to reload.
     bar: bool = false,
+    /// Shown in the Glance group instead of the card options.
+    glance: bool = false,
 };
 
 const MAX_CARD_CHOICES = 8;
 
 const CARD_OPTIONS = [_]CardOption{
+    .{
+        .key = "glance_enabled",
+        .title = "Glance dashboard (Super+I)",
+        .subtitle = "Clock, weather, calendar, media and system over your windows; Esc or a click outside closes it",
+        .default = .{ .boolean = true },
+        .glance = true,
+    },
+    .{
+        .key = "glance_start_tab",
+        .title = "Opens on",
+        .subtitle = "The page Super+I shows first",
+        .labels = &.{ "Overview", "Media", "Weather" },
+        .values = &.{ .{ .str = "overview" }, .{ .str = "media" }, .{ .str = "weather" } },
+        .default = .{ .str = "overview" },
+        .glance = true,
+    },
     .{
         .key = "clock_style",
         .title = "Clock face",
@@ -2921,11 +2939,14 @@ fn onCardToggleChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyo
     applyCardOption(opt, .{ .boolean = gtk.gtk_switch_get_active(sw) != 0 });
 }
 
-fn buildCardOptionRows(group: *gtk.AdwPreferencesGroup) void {
+/// The rows of one group: the Glance options (`glance` true) or the
+/// desktop card options.
+fn buildCardOptionRows(group: *gtk.AdwPreferencesGroup, glance: bool) void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const root = loadShellJson(arena_state.allocator());
     for (&CARD_OPTIONS, 0..) |*opt, i| {
+        if (opt.glance != glance) continue;
         const cur: ?std.json.Value = if (root) |r| r.object.get(opt.key) else null;
         const tag: ?*anyopaque = @ptrFromInt(i + 1);
         if (opt.values.len == 0) {
@@ -3595,8 +3616,14 @@ fn buildAppearancePage() *gtk.GtkBox {
     const cards_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(cards_group, "Desktop Card Options");
     gtk.adw_preferences_group_set_description(cards_group, "How the clock, System, Processes, Weather and Notes cards look. Saved in ~/.config/perihelionbar/shell.json; the cards restart to apply a change.");
-    buildCardOptionRows(cards_group);
+    buildCardOptionRows(cards_group, false);
     gtk.gtk_box_append(outer, @ptrCast(cards_group));
+
+    const glance_group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(glance_group, "Glance");
+    gtk.adw_preferences_group_set_description(glance_group, "The dashboard Super+I opens over your windows. Saved in ~/.config/perihelionbar/shell.json; the cards restart to apply a change.");
+    buildCardOptionRows(glance_group, true);
+    gtk.gtk_box_append(outer, @ptrCast(glance_group));
 
     const bar_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(bar_group, "Bar Colors");
