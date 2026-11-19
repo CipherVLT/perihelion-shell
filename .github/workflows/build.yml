@@ -72,6 +72,9 @@ jobs:
       - name: Unit-test the reminders service (Calendar card)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-reminders
+      - name: Unit-test the network-rate service (fake /proc/net/dev)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-netrate
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc

@@ -2543,6 +2543,7 @@ const WIDGET_TABLE = [_]WidgetToggle{
     .{ .id = "icons", .title = "Desktop icons", .subtitle = "~/Desktop shortcuts as a grid of launchable icons" },
     .{ .id = "fastfetch", .title = "Fastfetch", .subtitle = "System info card with your fastfetch logo" },
     .{ .id = "processes", .title = "Processes", .subtitle = "Top processes by CPU or memory (click to switch)" },
+    .{ .id = "network", .title = "Network", .subtitle = "Download and upload speed with a short history graph" },
 };
 
 // One mask bit per row (u16, u4 shifts above): keep the table within it.
@@ -2682,6 +2683,15 @@ const CARD_OPTIONS = [_]CardOption{
         .labels = &.{ "3", "4", "5", "6", "7", "8" },
         .values = &.{ .{ .int = 3 }, .{ .int = 4 }, .{ .int = 5 }, .{ .int = 6 }, .{ .int = 7 }, .{ .int = 8 } },
         .default = .{ .int = 6 },
+    },
+    .{ .key = "network_graph", .title = "Network graph", .subtitle = "The last two minutes of download and upload on the Network card", .default = .{ .boolean = true } },
+    .{
+        .key = "network_interval_seconds",
+        .title = "Network refresh",
+        .subtitle = "Seconds between readings on the Network card",
+        .labels = &.{ "1", "2", "5", "10" },
+        .values = &.{ .{ .int = 1 }, .{ .int = 2 }, .{ .int = 5 }, .{ .int = 10 } },
+        .default = .{ .int = 2 },
     },
     .{
         .key = "calendar_reminders",

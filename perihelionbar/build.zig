@@ -83,6 +83,14 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    // Network-rate service behind the shell's Network card (same
+    // convention: shared source, tests run from this build).
+    const netrate_mod = b.createModule(.{
+        .root_source_file = b.path("src/netrate.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
     // Reminders file parsing behind the shell's Calendar card (same
     // convention: shared source, tests run from this build).
     const reminders_mod = b.createModule(.{
@@ -168,6 +176,12 @@ pub fn build(b: *Build) !void {
     const reminders_tests = b.addTest(.{ .root_module = reminders_mod, .use_llvm = true, .use_lld = true });
     const reminders_test_step = b.step("test-reminders", "Run src/reminders.zig unit tests");
     reminders_test_step.dependOn(&b.addRunArtifact(reminders_tests).step);
+
+    // `zig build test-netrate`: src/netrate.zig (/proc/net/dev parsing,
+    // rate formatting, the sample history, a fake counters file in /tmp).
+    const netrate_tests = b.addTest(.{ .root_module = netrate_mod, .use_llvm = true, .use_lld = true });
+    const netrate_test_step = b.step("test-netrate", "Run src/netrate.zig unit tests");
+    netrate_test_step.dependOn(&b.addRunArtifact(netrate_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.
