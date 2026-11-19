@@ -1828,7 +1828,7 @@ fn buildAutoThemeRow(group: *gtk.AdwPreferencesGroup) void {
     gtk.adw_preferences_group_add(group, @ptrCast(row));
 }
 
-// Perihelion: Catppuccin flavors, like Event Horizon's theme presets. "auto"
+// Perihelion: Catppuccin flavors as theme presets. "auto"
 // lets perihelion-theme pick from the wallpaper's lightness. Values must stay
 // in sync with perihelion-theme; labels are just what the user reads.
 const THEME_STYLE_CHOICES = [_][]const u8{ "catppuccin", "material" };
@@ -1859,7 +1859,7 @@ const MATUGEN_TYPE_CHOICES = [_][]const u8{
     "scheme-vibrant",    "scheme-smart",
 };
 const MATUGEN_TYPE_LABELS = [_][*:0]const u8{
-    "Tonal spot",           "Content (default, like Event Horizon)", "Expressive", "Fidelity",
+    "Tonal spot",           "Content (default)", "Expressive", "Fidelity",
     "Fruit salad",          "Monochrome", "Neutral", "Rainbow",
     "Vibrant",              "Smart",
 };
@@ -1909,7 +1909,7 @@ fn onThemePaletteChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaq
 }
 
 // ---------------------------------------------------------------------
-// Palette files: Event Horizon's colour themes (shipped in
+// Palette files: the shipped colour themes (in
 // /usr/share/perihelion/palettes) and your own (~/.local/share/perihelion/
 // palettes), listed by `perihelion-theme --list-palettes` as
 // "id<TAB>label<TAB>light<TAB>yours" lines. They follow the 14 built-in
@@ -1978,7 +1978,7 @@ fn buildPaletteRow(group: *gtk.AdwPreferencesGroup) void {
     discoverPaletteFiles();
     const row = gtk.adw_combo_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(row), "Palette");
-    gtk.adw_action_row_set_subtitle(@ptrCast(row), "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night (Auto picks a light variant for light wallpapers), then Event Horizon's colour themes and your own palettes from ~/.local/share/perihelion/palettes. Type to search.");
+    gtk.adw_action_row_set_subtitle(@ptrCast(row), "Catppuccin, Gruvbox, Rosé Pine, Nord or Tokyo Night (Auto picks a light variant for light wallpapers), then the shipped colour themes and your own palettes from ~/.local/share/perihelion/palettes. Type to search.");
 
     var buf: [THEME_PALETTE_LABELS.len + MAX_PALETTE_FILES + 1]?[*:0]const u8 = undefined;
     var selected_idx: c_uint = 0;

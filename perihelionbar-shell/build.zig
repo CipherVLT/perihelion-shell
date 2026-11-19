@@ -1,8 +1,8 @@
 const std = @import("std");
 const Build = std.Build;
 
-// perihelionbar-shell — the "desktop widgets" idea from Event-Horizon-Shell,
-// rewritten in Zig on top of the infra the bar (../perihelionbar) already proves:
+// perihelionbar-shell — desktop widgets,
+// written in Zig on top of the infra the bar (../perihelionbar) already proves:
 // the same zig-wayland scanner for layer-shell surfaces, and the bar's
 // font.zig (freetype glyph cache) + logging.zig imported as source modules.
 const Scanner = @import("wayland").Scanner;

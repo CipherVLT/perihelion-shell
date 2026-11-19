@@ -216,7 +216,7 @@ try:
     run(home, img("light.png"), "--force")
     check('"keyColor": "35"' in pt.read(ff_path), "fastfetch: a hand-edited file is kept")
 
-    # kitty carries the colors: Event Horizon's slots
+    # kitty carries the colors: the matugen template's slots
     kc = pt.read(os.path.join(cfg, "kitty", "perihelion-colors.conf"))
     slots = dict(line.split(None, 1) for line in kc.splitlines() if line and not line.startswith("#"))
     check(all(f"color{i}" in slots for i in range(16)), "kitty: all 16 colors")
@@ -351,7 +351,7 @@ try:
     os.makedirs(nm)
     run(nm, img("dark-red.png"), "--force")
     check(not os.path.exists(os.path.join(nm, ".config", "gtk-4.0", "perihelion-glass.css")),
-          "glass: not written without Mango (Niri, Event Horizon)")
+          "glass: not written without Mango (Niri, other desktops)")
 
     # 9. Theme mode Dark: the GTK glass (Perihelion Settings) stays dark even
     #    when the palette is light (Auto on a light wallpaper, or picked).
@@ -371,14 +371,14 @@ try:
 finally:
     shutil.rmtree(tmp)
 
-# Palette files: Event Horizon's imported themes (theme/palettes) and your own.
+# Palette files: the imported themes (theme/palettes) and your own.
 PAL = os.path.join(ROOT, "theme", "palettes")
 with open(os.path.join(PAL, "SOURCE.json")) as f:
     source = json.load(f)
 files = []
 for root_dir, _d, names in os.walk(PAL):
     files += [os.path.join(root_dir, n) for n in names if n.endswith(".json") and n != "SOURCE.json"]
-# 268 in Event Horizon, minus the 10 Monokai ones (no open licence).
+# 268 upstream, minus the 10 Monokai ones (no open licence).
 check(len(files) == source["count"] == 258, f"palettes: {len(files)} files, SOURCE.json says {source['count']}")
 check(not any("monokai" in os.path.basename(p) or "/monokai/" in p for p in files)
       and len(source.get("excluded", {}).get("ids", [])) == 10, "palettes: Monokai left out")
@@ -399,7 +399,7 @@ check(flagged == {x["id"] for x in source["low_contrast"]}, "palettes: SOURCE.js
 with open(os.path.join(PAL, "catppuccin", "mocha.json")) as f:
     mocha = json.load(f)["colors"]
 check(mocha["background"] == "#1e1e2e" and mocha["error"] == "#eb535d",
-      "palettes: Catppuccin Mocha is Event Horizon's own values")
+      "palettes: Catppuccin Mocha keeps the upstream values")
 
 tmp = tempfile.mkdtemp()
 try:

@@ -1,24 +1,24 @@
 #!/usr/bin/python3 -I
-"""Import Event Horizon's built-in colour themes as Perihelion palettes.
+"""Import the upstream built-in colour themes as Perihelion palettes.
 
-Reads the preset table of Event Horizon's settings app
+Reads the preset table of the upstream settings app
 (src/ux/settings2/theme_presets.zig: 268 palettes, each 16 Material-style
 roles as 0..1 floats) and writes one JSON file per palette:
 
   theme/palettes/<family>/<id>.json      e.g. catppuccin/mocha-sky.json
-  theme/palettes/SOURCE.json             the Event Horizon commit, counts, flags
+  theme/palettes/SOURCE.json             the upstream commit, counts, flags
 
-Hex values are converted exactly the way Event Horizon itself does it
+Hex values are converted exactly the way upstream itself does it
 (theme_data.zig rgbToHex: f32 * 255, rounded half away from zero), so a
-palette here is byte-for-byte what Event Horizon writes to its own TOML.
-Nothing is estimated: a role Event Horizon doesn't set takes the Palette
-struct's default, as it does in Event Horizon.
+palette here is byte-for-byte what upstream writes to its own TOML.
+Nothing is estimated: a role upstream doesn't set takes the Palette
+struct's default, as it does upstream.
 
-Usage (one command per Event Horizon release):
+Usage (one command per upstream release):
 
   theme/import-eh-palettes.py [EH_CHECKOUT] [--ref COMMIT] [--out DIR]
 
-EH_CHECKOUT defaults to ~/src/Event-Horizon. The table is read with
+EH_CHECKOUT defaults to the upstream checkout in ~/src (see main()). The table is read with
 `git show COMMIT:path` (default: the checkout's HEAD), so local patches in the
 working tree never leak in. Prints a summary and every palette whose text is
 hard to read on its background (WCAG contrast below 4.5:1).
@@ -35,7 +35,7 @@ import sys
 
 TABLE = "src/ux/settings2/theme_presets.zig"
 
-# Event Horizon role -> Perihelion palette key (one to one, same order).
+# Upstream role -> Perihelion palette key (one to one, same order).
 ROLES = (
     ("surface", "background"), ("on_surface", "foreground"),
     ("surface_variant", "surface"), ("on_surface_variant", "surface_text"),
@@ -47,7 +47,7 @@ ROLES = (
     ("err", "error"), ("on_error", "error_text"),
 )
 
-# Event Horizon's Color Themes page (color_themes_tab.zig isLightVariant):
+# The upstream Color Themes page (color_themes_tab.zig isLightVariant):
 # these variants go under "Light", everything else under "Dark".
 LIGHT_VARIANTS = ("light", "latte", "dawn", "brand-light")
 
@@ -227,9 +227,9 @@ def eh_text(checkout, ref):
 def main(argv=None):
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(prog="import-eh-palettes",
-                                 description="Event Horizon's colour themes -> Perihelion palettes")
+                                 description="upstream colour themes -> Perihelion palettes")
     ap.add_argument("checkout", nargs="?", default=os.path.expanduser("~/src/Event-Horizon"))
-    ap.add_argument("--ref", default="HEAD", help="Event Horizon commit (default: HEAD)")
+    ap.add_argument("--ref", default="HEAD", help="upstream commit (default: HEAD)")
     ap.add_argument("--out", default=os.path.join(here, "palettes"))
     args = ap.parse_args(argv)
 
@@ -262,7 +262,7 @@ def main(argv=None):
         if ratio < MIN_CONTRAST:
             doc["low_contrast"] = True
             low.append((p["id"], ratio))
-        # Event Horizon files it under Light/Dark by name; say so when the
+        # Upstream files it under Light/Dark by name; say so when the
         # background disagrees (a "light" palette on a near-black background).
         if (luminance(colors["background"]) > 0.18) != p["light"]:
             doc["light_mismatch"] = True
@@ -290,7 +290,7 @@ def main(argv=None):
     with open(os.path.join(args.out, "NOTICE.md"), "w", encoding="utf-8") as f:
         f.write(NOTICE.format(file=TABLE, commit=commit))
 
-    print(f"import-eh-palettes: {len(presets)} palettes from Event Horizon {commit[:7]} -> {args.out}"
+    print(f"import-eh-palettes: {len(presets)} palettes from upstream {commit[:7]} -> {args.out}"
           f" ({len(excluded)} Monokai ones left out)")
     for fam, n in families.items():
         print(f"  {fam:12} {n['dark']:3} dark  {n['light']:3} light")
