@@ -195,7 +195,7 @@ Left-side order:
 - Turning the Dock off and on must only show/hide the existing Dock. It must never create additional Dock instances.
 - Both the Bar and Dock must be treated as singletons. Prevent any code path that can spawn duplicates.
 
-  # CLAUDE.md
+# CLAUDE.md
 
 Guidance for Claude / Claude Code when working on Perihelion-shell and the Perihelion Linux ISO.
 
@@ -205,6 +205,18 @@ Guidance for Claude / Claude Code when working on Perihelion-shell and the Perih
 - **Perihelion** (ISO repo) — Fedora-based distro that pins a specific commit of perihelion-shell and ships it as Perihelion Linux (MangoWM-first).
 - This is **not** a simpbar project. simpbar was the historical base. All new work is Perihelion-native.
 - Target compositor: **MangoWM only**. Do not touch Hyprland or Niri paths unless explicitly asked.
+
+## Toolchain
+
+- Zig version: **0.17** (pinned at **0.17.1** in CI and the ISO build).
+- `zig version` must print `0.17.1` for every build and test.
+- Pin exactly 0.17.1 in:
+  - CI workflows
+  - both `build.zig.zon` files (`minimum_zig_version = "0.17.0"` is acceptable)
+  - `install.sh`
+  - the ISO’s `install-perihelionbar.sh`
+- The official 0.17.1 tarball and signature must download and verify with CI’s `ZIG_PUBKEY`.
+- Do not use Zig 0.16.
 
 ## Current State (as of late 2026)
 
@@ -241,8 +253,7 @@ When porting widgets or features from Event Horizon dotfiles:
 
 ## Key Conventions
 
-- Zig version: **0.17.0** (latest stable). Use this version for all local builds and tests. CI must be updated to match.
-- Tests: `zig build` + `zig build test-*` steps must pass.
+- Tests: `zig build` + `zig build test-*` steps must pass under Zig 0.17.1.
 - Config: Prefer extending existing `shell.json` / `config.json` over new files.
 - State: Use `~/.local/state/perihelionbar/` or XDG paths. Never write to the user’s real config during tests.
 - Glass / blur: Respect existing matugen + frosted glass paths.
@@ -261,7 +272,7 @@ When porting widgets or features from Event Horizon dotfiles:
 - Do not break the MangoWM ISO path.
 - Do not start large new systems (full Control Center rewrites, embedded terminal, lock screen) without explicit request.
 - Do not assume Hyprland or Niri behavior.
-- Do not use Zig 0.16.0 — the project is on 0.17.0.
+- Do not use Zig 0.16. The project is on Zig 0.17.1.
 
 ## Useful Paths (local development)
 
