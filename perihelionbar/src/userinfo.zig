@@ -5,7 +5,9 @@
 //! Who: the login name and display name come from the passwd entry of the
 //! process's uid (the display name is the first comma field of GECOS; an
 //! empty one falls back to the login name). The host name comes from
-//! /proc/sys/kernel/hostname. Both are read once, at startup.
+//! /proc/sys/kernel/hostname. Both are read once, at startup, with the
+//! distro's logo icon name and ID from os-release (LOGO=, ID=) for the
+//! card's logo tile.
 //! How long: /proc/uptime, read every 30 s; tick() reports a change only
 //! when the shown minute moves, so the card repaints once a minute.
 //!
@@ -25,6 +27,9 @@ pub const Config = struct {
     passwd_path: [:0]const u8 = "/etc/passwd",
     hostname_path: [:0]const u8 = "/proc/sys/kernel/hostname",
     uptime_path: [:0]const u8 = "/proc/uptime",
+    /// os-release, then the vendor copy it usually links to.
+    os_release_path: [:0]const u8 = "/etc/os-release",
+    os_release_fallback: [:0]const u8 = "/usr/lib/os-release",
     /// null = the process's own uid.
     uid: ?u32 = null,
 };
@@ -34,7 +39,7 @@ fn Text(comptime N: usize) type {
         buf: [N]u8 = undefined,
         len: usize = 0,
         const Self = @This();
-        fn set(self: *Self, s: []const u8) void {
+        pub fn set(self: *Self, s: []const u8) void {
             var n: usize = @min(s.len, N);
             // Never cut a UTF-8 sequence in half.
             while (n > 0 and n < s.len and (s[n] & 0xC0) == 0x80) n -= 1;
@@ -78,6 +83,45 @@ pub fn parseUptime(text: []const u8) ?u64 {
 
 fn plural(n: u64) []const u8 {
     return if (n == 1) "" else "s";
+}
+
+/// Value of `KEY=` in os-release text, quotes stripped ("fedora-logo-icon").
+pub fn osReleaseValue(text: []const u8, key: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len <= key.len or !std.mem.startsWith(u8, line, key) or line[key.len] != '=') continue;
+        const v = std.mem.trim(u8, line[key.len + 1 ..], " \t\"'");
+        return if (v.len > 0) v else null;
+    }
+    return null;
+}
+
+/// The uptime the way fastfetch words it, for the card's "Uptime" line:
+/// "2 hours, 39 mins", "1 day, 5 mins"; under a minute "42 secs". Short:
+/// "2h 39m", "42s".
+pub fn fmtValue(buf: []u8, secs: u64, short: bool) []const u8 {
+    const d = secs / 86400;
+    const h = (secs % 86400) / 3600;
+    const m = (secs % 3600) / 60;
+    if (d == 0 and h == 0 and m == 0) {
+        return (if (short) std.fmt.bufPrint(buf, "{d}s", .{secs}) else std.fmt.bufPrint(buf, "{d} secs", .{secs})) catch "";
+    }
+    const parts = [_]struct { v: u64, one: []const u8, many: []const u8, s: u8 }{
+        .{ .v = d, .one = "day", .many = "days", .s = 'd' },
+        .{ .v = h, .one = "hour", .many = "hours", .s = 'h' },
+        .{ .v = m, .one = "min", .many = "mins", .s = 'm' },
+    };
+    var n: usize = 0;
+    for (parts) |p| {
+        if (p.v == 0) continue;
+        const piece = (if (short)
+            std.fmt.bufPrint(buf[n..], "{s}{d}{c}", .{ if (n > 0) " " else "", p.v, p.s })
+        else
+            std.fmt.bufPrint(buf[n..], "{s}{d} {s}", .{ if (n > 0) ", " else "", p.v, if (p.v == 1) p.one else p.many })) catch return buf[0..n];
+        n += piece.len;
+    }
+    return buf[0..n];
 }
 
 /// "up 2 days, 3 hours, 5 minutes" (zero parts left out); under a minute
@@ -132,6 +176,9 @@ pub const Service = struct {
     login: Text(32) = .{},
     display: Text(64) = .{},
     host: Text(64) = .{},
+    /// os-release LOGO= (an icon name) and ID=, "" when absent.
+    logo: Text(64) = .{},
+    distro_id: Text(32) = .{},
     uptime_s: u64 = 0,
     have_uptime: bool = false,
     loaded: bool = false,
@@ -180,6 +227,13 @@ pub const Service = struct {
         const hn = readAll(self.cfg.hostname_path, &hb);
         const h = std.mem.trim(u8, hb[0..hn], " \t\r\n");
         self.host.set(if (h.len > 0) h else "localhost");
+
+        var ob: [4096]u8 = undefined;
+        var on = readAll(self.cfg.os_release_path, &ob);
+        if (on == 0) on = readAll(self.cfg.os_release_fallback, &ob);
+        const os = ob[0..on];
+        self.logo.set(osReleaseValue(os, "LOGO") orelse "");
+        self.distro_id.set(osReleaseValue(os, "ID") orelse "");
     }
 };
 
@@ -234,6 +288,28 @@ test "fmtLong / fmtShort" {
     try std.testing.expectEqualStrings("up 3d 4h", fmtShort(&b, 3 * 86400 + 4 * 3600 + 30));
 }
 
+test "os-release LOGO and ID; uptime value wording" {
+    const os =
+        \\NAME="Fedora Linux"
+        \\ID=fedora
+        \\LOGO=fedora-logo-icon
+        \\ID_LIKE="rhel centos"
+    ;
+    try std.testing.expectEqualStrings("fedora-logo-icon", osReleaseValue(os, "LOGO").?);
+    try std.testing.expectEqualStrings("fedora", osReleaseValue(os, "ID").?);
+    try std.testing.expectEqualStrings("rhel centos", osReleaseValue(os, "ID_LIKE").?);
+    try std.testing.expect(osReleaseValue(os, "VERSION") == null);
+    try std.testing.expect(osReleaseValue("LOGO=\n", "LOGO") == null);
+    var b: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("2 hours, 39 mins", fmtValue(&b, 2 * 3600 + 39 * 60 + 7, false));
+    try std.testing.expectEqualStrings("1 day, 5 mins", fmtValue(&b, 86400 + 300, false));
+    try std.testing.expectEqualStrings("1 hour, 1 min", fmtValue(&b, 3660, false));
+    try std.testing.expectEqualStrings("42 secs", fmtValue(&b, 42, false));
+    try std.testing.expectEqualStrings("2h 39m", fmtValue(&b, 2 * 3600 + 39 * 60, true));
+    try std.testing.expectEqualStrings("3d 4h", fmtValue(&b, 3 * 86400 + 4 * 3600, true));
+    try std.testing.expectEqualStrings("42s", fmtValue(&b, 42, true));
+}
+
 fn writeFile(path: [:0]const u8, body: []const u8) !void {
     const fd = posix.system.open(path, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o600));
     if (fd < 0) return error.OpenFailed;
@@ -252,8 +328,14 @@ test "Service.tick: identity once, repaint only when the minute moves" {
     defer _ = posix.system.unlink(hn);
     defer _ = posix.system.unlink(up);
 
-    var s = Service.init(.{ .passwd_path = pw, .hostname_path = hn, .uptime_path = up, .uid = 1000 });
+    const osr = "/tmp/perihelion-userinfo-test-os-release";
+    try writeFile(osr, "ID=fedora\nLOGO=\"fedora-logo-icon\"\n");
+    defer _ = posix.system.unlink(osr);
+
+    var s = Service.init(.{ .passwd_path = pw, .hostname_path = hn, .uptime_path = up, .uid = 1000, .os_release_path = osr });
     try std.testing.expect(s.tick(0));
+    try std.testing.expectEqualStrings("fedora-logo-icon", s.logo.slice());
+    try std.testing.expectEqualStrings("fedora", s.distro_id.slice());
     try std.testing.expectEqualStrings("Alex Moreau", s.display.slice());
     try std.testing.expectEqualStrings("alex", s.login.slice());
     try std.testing.expectEqualStrings("deskbox", s.host.slice());

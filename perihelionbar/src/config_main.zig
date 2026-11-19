@@ -2693,8 +2693,9 @@ const CARD_OPTIONS = [_]CardOption{
         .values = &.{ .{ .int = 1 }, .{ .int = 2 }, .{ .int = 5 }, .{ .int = 10 } },
         .default = .{ .int = 2 },
     },
-    .{ .key = "user_host", .title = "User card host", .subtitle = "Show user@host under your name", .default = .{ .boolean = true } },
-    .{ .key = "user_uptime_short", .title = "Short uptime", .subtitle = "up 3h 5m instead of up 3 hours, 5 minutes", .default = .{ .boolean = false } },
+    .{ .key = "user_host", .title = "User card host", .subtitle = "Show user@host as the heading; off shows just your user name", .default = .{ .boolean = true } },
+    .{ .key = "user_uptime_short", .title = "Short uptime", .subtitle = "2h 39m instead of 2 hours, 39 mins", .default = .{ .boolean = false } },
+    .{ .key = "user_show_name", .title = "User card name", .subtitle = "Your full name under the heading", .default = .{ .boolean = false } },
     .{
         .key = "calendar_reminders",
         .title = "Calendar reminders",
