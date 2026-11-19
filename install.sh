@@ -926,7 +926,7 @@ fi
 # perihelionbar's build/runtime deps (Wayland client + layer-shell, FreeType glyph
 # rendering, gdk-pixbuf for tray icon-name decode, and the mpris source it
 # shells out to) — all official-repo, no AUR needed. Zig itself is handled by
-# ensure_zig_016 below, which pins the 0.16 API this tree builds against
+# ensure_zig_017 below, which pins the 0.17 API this tree builds against
 # instead of trusting whatever version the distro currently ships. pacman-contrib
 # (checkupdates) and wireplumber (wpctl) were already here for other
 # reasons but perihelionbar's pacman-update-count and volume widgets need them too.
@@ -1139,15 +1139,14 @@ fi
 run_spinner "Refreshing font cache" fc-cache -f \
     || warn "Could not refresh the font cache — run 'fc-cache -f' manually if icons look missing"
 
-# The source tree targets Zig 0.16 (build.zig.zon's minimum_zig_version).
+# The source tree targets Zig 0.17 (build.zig.zon's minimum_zig_version).
 # Do not trust the distro's current package: it may be a different API level
-# and lack std.fmt.bufPrintZ, which this tree and its wayland scanner still
-# use, while older ones lack other 0.16 APIs. Use a cached/system 0.16.0 when
-# present, otherwise fetch the official 0.16.0 tarball into the user's
-# perihelionbar data dir and put it first on PATH for both build steps. Pin the
-# exact release: a 0.16.0-dev snapshot can predate bufPrintZ being restored.
-ensure_zig_016() {
-    local want="0.16.0"
+# (0.16 and older still have the `**` operator and @cImport, and lack
+# std.mem.printSentinel). Use a cached/system 0.17.1 when present, otherwise
+# fetch the official 0.17.1 tarball into the user's perihelionbar data dir and
+# put it first on PATH for both build steps. Pin the exact release.
+ensure_zig_017() {
+    local want="0.17.1"
     local zigdir="$HOME/.local/share/perihelionbar/zig-$want"
     local parent="$HOME/.local/share/perihelionbar"
     local arch url tarball extracted
@@ -1166,14 +1165,14 @@ ensure_zig_016() {
             | sed -n 's/^[[:space:]]*\.std_dir = "\(.*\)",$/\1/p' \
             | head -n1) || system_std=""
         # Version alone is not enough: a broken/partial install can report
-        # 0.16.0 while its stdlib no longer has the API this tree needs.
+        # 0.17.1 while its stdlib doesn't have the API this tree needs.
         if [ "$system_version" = "$want" ] \
            && [ -n "$system_std" ] \
-           && grep -q 'pub fn bufPrintZ' "$system_std/fmt.zig" 2>/dev/null; then
+           && grep -q 'pub fn printSentinel' "$system_std/mem.zig" 2>/dev/null; then
             ok "Using system Zig $system_version"
             return 0
         fi
-        warn "System Zig is ${system_version:-unknown} without the 0.16 std.fmt API; installing pinned Zig $want for the build"
+        warn "System Zig is ${system_version:-unknown}, not the 0.17 API this tree needs; installing pinned Zig $want for the build"
     fi
 
     case "$(uname -m)" in
@@ -1210,7 +1209,7 @@ ensure_zig_016() {
     ok "Using pinned Zig $("$zigdir/zig" version) from $zigdir"
 }
 
-ensure_zig_016
+ensure_zig_017
 
 # Optional CPU floor for the two builds below. Leave unset for Zig's normal
 # native target, which already uses every instruction the build machine
@@ -1233,12 +1232,12 @@ fi
 
 build_perihelionbar() {
     cd "$HOME/.local/share/perihelionbar/perihelionbar" || return 1
-    zig build -Doptimize=ReleaseFast "${ZIG_CPU_ARGS[@]}"
+    zig build -Doptimize=fast "${ZIG_CPU_ARGS[@]}"
 }
 
 build_perihelionbar_shell() {
     cd "$HOME/.local/share/perihelionbar/perihelionbar-shell" || return 1
-    zig build -Doptimize=ReleaseFast "${ZIG_CPU_ARGS[@]}"
+    zig build -Doptimize=fast "${ZIG_CPU_ARGS[@]}"
 }
 
 # Build perihelionbar (the bar) and perihelionbar-welcome (the GTK4 + libadwaita
@@ -2124,7 +2123,7 @@ run_spinner "Updating the full system (pacman -Syu)" sudo pacman -Syu --noconfir
 # ── Step 9: done ────────────────────────────────────────────────────
 step "Done"
 ok "Full system updated (pacman -Syu)"
-ok "Zig 0.16.0 build tool ready"
+ok "Zig 0.17.1 build tool ready"
 ok "freetype2, gdk-pixbuf2, wayland, wayland-protocols, playerctl, mate-polkit, swaybg, JetBrainsMono Nerd Font, Noto Fonts, Noto Emoji, ${TERMINAL_PKG}, fastfetch, neovim, swaync, rofi, flatpak, bazaar, nwg-look, pavucontrol, cava, pipewire, gnome-disk-utility, nwg-drawer, kdeconnect, brightnessctl, wlr-randr installed (pacman)"
 
 # gnome-keyring auto-unlock at login: two `optional` PAM lines (optional =
