@@ -12,8 +12,8 @@
     // specific commit. Don't hand-write the hash.
     .dependencies = .{
         .wayland = .{
-            .url = "git+https://codeberg.org/ifreund/zig-wayland?ref=main#23839e41161de025d71ce082561ecba1c5331281",
-            .hash = "wayland-0.7.0-dev-lQa1kl38AQC-kQolS5D4jV1GJ2rH2jv1VWHr14YLVnyn",
+            .url = "git+https://codeberg.org/ifreund/zig-wayland?ref=v0.7.0#fc7672f661874aa2015fc19a87ebabce787cf1c7",
+            .hash = "wayland-0.7.0-lQa1kuP8AQD5dW7_o-VKLVD_QbqXe7Zob78r2su7Pyex",
         },
     },
 
