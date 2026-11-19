@@ -24,6 +24,8 @@ pub fn build(b: *Build) !void {
     // wlr-layer-shell is NOT part of upstream wayland-protocols — it's a
     // wlroots extension. Vendor the XML yourself; see protocols/README.md.
     scanner.addCustomProtocol(b.path("protocols/wlr-layer-shell-unstable-v1.xml"));
+    // Keep awake (Control Center): an idle inhibitor on the bar's surface.
+    scanner.addSystemProtocol("unstable/idle-inhibit/idle-inhibit-unstable-v1.xml");
 
     // Generate bindings up to the given protocol version. Bump these if you
     // need newer requests/events.
@@ -33,6 +35,7 @@ pub fn build(b: *Build) !void {
     scanner.generate("wl_output", 4);
     scanner.generate("xdg_wm_base", 3);
     scanner.generate("zwlr_layer_shell_v1", 4);
+    scanner.generate("zwp_idle_inhibit_manager_v1", 1);
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
