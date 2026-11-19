@@ -28,6 +28,7 @@ const logging = @import("logging");
 const widgets = @import("widgets");
 const glass = @import("glass.zig");
 const g = @import("glance.zig");
+const media_view = @import("glance_media_view.zig");
 
 const BTN_LEFT: u32 = 0x110;
 const SETTINGS_CMD: [:0]const u8 = "exec perihelion-settings";
@@ -84,6 +85,8 @@ pub const Glance = struct {
     tab: g.Tab = .overview,
     layout: g.Layout = .{},
     cards: ?*Cards = null,
+    /// The Media tab's live state: only while that tab is the one shown.
+    media: ?*media_view.MediaTab = null,
     next_tick: [g.CARD_COUNT]i64 = @as([g.CARD_COUNT]i64, @splat(0)),
     weather_seen: WeatherSeen = .{},
     panel_px: ?[]u32 = null,
@@ -158,6 +161,30 @@ pub const Glance = struct {
         self.tab = t;
         self.hover = g.hitTest(&self.layout, t, self.px, self.py);
         self.panel_dirty = true;
+        // Back on the Overview: the cards were resting, so refresh them now.
+        if (t == .overview) self.next_tick = @as([g.CARD_COUNT]i64, @splat(0));
+        self.syncMedia();
+    }
+
+    /// The Media tab's state exists only while it is the visible page of an
+    /// open Glance: made on the way in, freed (probe and download pipes
+    /// closed, cover freed) on the way out.
+    fn syncMedia(self: *Glance) void {
+        const want = self.tab == .media and self.surface != null;
+        if (want and self.media == null) {
+            const m = self.gpa.create(media_view.MediaTab) catch |err| {
+                logging.err("glance: no memory for the Media tab: {}", .{err});
+                return;
+            };
+            m.* = .{ .gpa = self.gpa };
+            self.media = m;
+        } else if (!want) {
+            if (self.media) |m| {
+                m.deinit();
+                self.gpa.destroy(m);
+            }
+            self.media = null;
+        }
     }
 
     // --- surface lifecycle --------------------------------------------------
@@ -206,6 +233,7 @@ pub const Glance = struct {
         ls.setKeyboardInteractivity(.exclusive);
         ls.setListener(*Glance, layerListener, self);
         surface.commit();
+        self.syncMedia();
         logging.step("glance: opening on {s}", .{@tagName(self.tab)});
         return true;
     }
@@ -216,6 +244,7 @@ pub const Glance = struct {
         self.layer_surface = null;
         if (self.surface) |s| s.destroy();
         self.surface = null;
+        self.syncMedia(); // no surface: frees the Media tab
         if (self.cards) |cards| {
             for (cards) |*c| c.release();
             self.gpa.destroy(cards);
@@ -275,7 +304,7 @@ pub const Glance = struct {
             sizes[i] = .{ .w = @intCast(s[0]), .h = @intCast(s[1]) };
         }
         var tab_w: [g.TAB_COUNT]i32 = undefined;
-        for (0..g.TAB_COUNT) |i| tab_w[i] = @intCast(self.textWidth(@as(g.Tab, @enumFromInt(i)).label()));
+        for (0..g.TAB_COUNT) |i| tab_w[i] = @intCast(self.textWidth(@as(g.Tab, @fromBackingInt(@intCast(i))).label()));
         self.layout = g.compute(@intCast(self.width), @intCast(self.height), sizes, tab_w);
         if (self.panel_px) |p| self.gpa.free(p);
         self.panel_px = null;
@@ -302,30 +331,49 @@ pub const Glance = struct {
     pub fn deadline(self: *const Glance) ?i64 {
         if (self.surface == null) return null;
         if (self.anim.animating()) return nowMs() + g.FRAME_MS;
-        if (self.cards == null or !self.anim.takesInput()) return null;
-        var d: i64 = std.math.maxInt(i64);
-        for (self.next_tick) |n| d = @min(d, n);
-        return d;
+        if (!self.anim.takesInput()) return null;
+        // Only the page on screen has a schedule.
+        switch (self.tab) {
+            .overview => {
+                if (self.cards == null) return null;
+                var d: i64 = std.math.maxInt(i64);
+                for (self.next_tick) |n| d = @min(d, n);
+                return d;
+            },
+            .media => return if (self.media) |m| m.deadline(nowMs()) else null,
+            .weather => return null,
+        }
     }
 
     /// The cards' fetch pipes for the host's poll set (none while closed).
+    /// Up to this many fds from pollFds: the cards' and the Media tab's.
+    pub const MAX_FDS = g.CARD_COUNT + 2;
+
     pub fn pollFds(self: *const Glance, out: []posix.fd_t) usize {
-        const cards = self.cards orelse return 0;
         var n: usize = 0;
-        for (cards) |*c| {
-            const fd = c.pollFd();
-            if (fd < 0 or n == out.len) continue;
-            out[n] = fd;
-            n += 1;
+        // A card's fetch still in flight after a tab switch is read to its
+        // end, so its pipe closes; no new fetch starts off the Overview.
+        if (self.cards) |cards| {
+            for (cards) |*c| {
+                const fd = c.pollFd();
+                if (fd < 0 or n == out.len) continue;
+                out[n] = fd;
+                n += 1;
+            }
         }
+        if (self.media) |m| n += m.pollFds(out[n..]);
         return n;
     }
 
     /// A poll fd was readable: let the cards read their fetches.
     pub fn onPipes(self: *Glance) void {
-        const cards = self.cards orelse return;
-        for (cards) |*c| {
-            if (c.onPipe()) self.panel_dirty = true;
+        if (self.cards) |cards| {
+            for (cards) |*c| {
+                if (c.onPipe() and self.tab == .overview) self.panel_dirty = true;
+            }
+        }
+        if (self.media) |m| {
+            if (m.onPipes()) self.panel_dirty = true;
         }
     }
 
@@ -339,8 +387,12 @@ pub const Glance = struct {
             }
             self.frame_dirty = true;
         }
+        if (self.media) |m| {
+            if (self.anim.takesInput() and m.tick(now)) self.panel_dirty = true;
+        }
         if (self.cards) |cards| {
-            if (self.anim.takesInput()) {
+            // The cards tick only while the Overview is the page shown.
+            if (self.anim.takesInput() and self.tab == .overview) {
                 for (cards, 0..) |*c, i| {
                     if (now < self.next_tick[i]) continue;
                     if (c.* == .weather) {
@@ -365,7 +417,7 @@ pub const Glance = struct {
             .fetched_s = w.svc.data_fetched_s,
             .available = w.svc.data.available,
             .in_flight = w.svc.in_flight != null,
-            .status = @intFromEnum(w.svc.status()),
+            .status = @backingInt(w.svc.status()),
         };
         const changed = !std.meta.eql(seen, self.weather_seen);
         self.weather_seen = seen;
@@ -378,6 +430,12 @@ pub const Glance = struct {
         self.px = x;
         self.py = y;
         if (!self.anim.takesInput()) return;
+        if (self.media) |m| {
+            // Drags follow the pointer anywhere (also off the panel);
+            // otherwise the tab's own hover highlights.
+            if (m.motion(x - self.layout.panel.x, y - self.layout.panel.y)) self.panel_dirty = true;
+            if (m.drag.active()) return;
+        }
         const h = g.hitTest(&self.layout, self.tab, x, y);
         if (h.eql(self.hover)) return;
         // Only the tab row reacts to hover; cards keep their desktop look.
@@ -388,6 +446,13 @@ pub const Glance = struct {
     pub fn leave(self: *Glance) void {
         if (isChrome(self.hover)) self.panel_dirty = true;
         self.hover = .backdrop;
+        if (self.media) |m| {
+            // The pointer is gone without a release (output unplugged, the
+            // surface closing): drop the drag rather than guess a value.
+            if (m.drag.active()) m.cancelDrag();
+            if (m.leave()) self.panel_dirty = true;
+            self.panel_dirty = true;
+        }
     }
 
     fn isChrome(h: g.Hit) bool {
@@ -397,10 +462,30 @@ pub const Glance = struct {
     /// Press and release on the same thing activates it; a click outside
     /// the panel closes Glance.
     pub fn button(self: *Glance, btn: u32, pressed: bool) void {
-        if (btn != BTN_LEFT or !self.anim.takesInput()) return;
+        if (btn != BTN_LEFT) return;
+        const lx = self.px - self.layout.panel.x;
+        const ly = self.py - self.layout.panel.y;
+        // A release ends a seek/volume drag first, wherever the pointer is
+        // and even if Glance began closing meanwhile: the button came up,
+        // so the value the user let go at is the one that's set.
+        if (!pressed) {
+            if (self.media) |m| {
+                if (m.drag.active()) {
+                    if (m.release(lx, ly)) self.panel_dirty = true;
+                    self.press = null;
+                    return;
+                }
+            }
+        }
+        if (!self.anim.takesInput()) return;
         const h = g.hitTest(&self.layout, self.tab, self.px, self.py);
         if (pressed) {
             self.press = h;
+            if (h == .panel) {
+                if (self.media) |m| {
+                    if (m.press(lx, ly)) self.panel_dirty = true;
+                }
+            }
             return;
         }
         const pr = self.press orelse return;
@@ -408,7 +493,9 @@ pub const Glance = struct {
         if (!pr.eql(h)) return;
         switch (h) {
             .backdrop => _ = self.apply(self.anim.close(nowMs())),
-            .panel => {},
+            .panel => if (self.media) |m| {
+                if (m.release(lx, ly)) self.panel_dirty = true;
+            },
             .tab => |t| self.setTab(t),
             .settings => {
                 widgets.spawnDetached(SETTINGS_CMD);
@@ -420,7 +507,7 @@ pub const Glance = struct {
 
     fn clickCard(self: *Glance, c: g.Card) void {
         const cards = self.cards orelse return;
-        const i = @intFromEnum(c);
+        const i = @backingInt(c);
         const r = self.cardRect(c);
         const lx = self.px - self.layout.panel.x;
         const ly = self.py - self.layout.panel.y;
@@ -491,7 +578,7 @@ pub const Glance = struct {
         const asc: i64 = self.font.ascentPx();
         const desc: i64 = self.font.descentPx();
         for (0..g.TAB_COUNT) |i| {
-            const t: g.Tab = @enumFromInt(i);
+            const t: g.Tab = @fromBackingInt(@intCast(i));
             const r = l.tabs[i];
             const active = t == self.tab;
             const hovered = self.hover == .tab and self.hover.tab == t;
@@ -512,7 +599,7 @@ pub const Glance = struct {
 
         switch (self.tab) {
             .overview => self.renderCards(c),
-            .media => self.renderPlaceholder(c, "Media", "Cover art, seeking, players and volume arrive in the next update."),
+            .media => if (self.media) |m| m.render(c, self.layout.content, self.font),
             .weather => self.renderPlaceholder(c, "Weather", "Details, the 7-day outlook and an hourly strip arrive in a later update."),
         }
         self.panel_dirty = false;
@@ -621,7 +708,7 @@ fn scaleAlpha(color: u32, k: f32) u32 {
 
 /// Antialiased rounded rect: `fill` inside, a ~1 px `border` band along the
 /// edge (0 = none). Straight-alpha colours, blended over the canvas.
-fn fillRounded(c: widgets.Canvas, r: g.Rect, radius: i32, fill: u32, border: u32) void {
+pub fn fillRounded(c: widgets.Canvas, r: g.Rect, radius: i32, fill: u32, border: u32) void {
     const w: f32 = @floatFromInt(r.w);
     const h: f32 = @floatFromInt(r.h);
     const rad: f32 = @min(@as(f32, @floatFromInt(@max(radius, 0))), @min(w, h) / 2.0);

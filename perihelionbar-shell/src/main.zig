@@ -2784,7 +2784,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     var poll_fds = [_]posix.pollfd{
         .{ .fd = display.getFd(), .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = ipc_fd, .events = posix.POLL.IN, .revents = 0 },
-    } ++ @as([MAX_WIDGETS + glance.CARD_COUNT]posix.pollfd, @splat(.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }));
+    } ++ @as([MAX_WIDGETS + glance_view.Glance.MAX_FDS]posix.pollfd, @splat(.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }));
 
     while (true) {
         // Refresh the pipe fds (they change across fetch cycles).
@@ -2800,7 +2800,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
             }
         }
         if (host.glance) |gl| {
-            var gl_fds: [glance.CARD_COUNT]posix.fd_t = undefined;
+            var gl_fds: [glance_view.Glance.MAX_FDS]posix.fd_t = undefined;
             const n = gl.pollFds(&gl_fds);
             for (poll_fds[2 + MAX_WIDGETS ..][0..n], gl_fds[0..n]) |*pf, fd| pf.fd = fd;
         }
