@@ -2,8 +2,9 @@
 //! request/response handling, location resolution and refresh schedule.
 //!
 //! Shared by both binaries: the desktop card (perihelionbar-shell widgets.zig
-//! WeatherWidget) and the top-bar indicator (perihelionbar main.zig
-//! BarWeather). No rendering, no font, no fds of its own: each host owns its
+//! WeatherWidget), Glance's Weather tab (which also reads the hourly series,
+//! sea-level pressure and wind direction) and the top-bar indicator
+//! (perihelionbar main.zig BarWeather). No rendering, no font, no fds of its own: each host owns its
 //! curl child and its drawing; this file decides *what* to fetch and *when*,
 //! and turns the answer into a `Weather` snapshot.
 //!
@@ -67,12 +68,18 @@ pub const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 /// parsed too, so weather_ip_url can point there instead.
 pub const DEFAULT_IP_URL = "https://ipapi.co/json/";
 
+// pressure_msl (sea-level pressure, what forecasts quote) and the wind's
+// direction feed Glance's Weather tab; surface_pressure stays for the card.
 const CURRENT_FIELDS = "temperature_2m,relative_humidity_2m,apparent_temperature,is_day," ++
-    "precipitation,weather_code,surface_pressure,wind_speed_10m";
+    "precipitation,weather_code,surface_pressure,wind_speed_10m,pressure_msl,wind_direction_10m";
 // uv_index_max is requested too (rather than hard-coding uv = 0): same
 // call, a few more bytes, and the uv field is real.
 const DAILY_FIELDS = "sunrise,sunset,temperature_2m_max,temperature_2m_min,weather_code," ++
     "precipitation_probability_max,uv_index_max";
+// Glance's hourly strip. forecast_hours starts the series at the current
+// hour, so HOURLY_HOURS is "now" plus the next 24 (about 1 KB more answer).
+const HOURLY_FIELDS = "temperature_2m,weather_code,precipitation_probability,is_day";
+pub const HOURLY_HOURS: usize = 25;
 
 // --- small fixed-capacity text ---------------------------------------------
 
@@ -167,6 +174,20 @@ pub const ForecastDay = struct {
     }
 };
 
+/// One hour of the hourly series (local time of the place).
+pub const HourlyPoint = struct {
+    /// 0..23.
+    hour: u8 = 0,
+    temp_c: f32 = 0,
+    w_code: u32 = 0,
+    precip_prob: u32 = 0,
+    is_day: bool = true,
+
+    pub fn temp(self: *const HourlyPoint, u: Units) f32 {
+        return if (u == .fahrenheit) cToF(self.temp_c) else self.temp_c;
+    }
+};
+
 pub const SunEvent = struct { sunrise: bool, at: []const u8 };
 
 /// One weather snapshot (snake_case fields; `wind` keeps the API's own
@@ -190,6 +211,10 @@ pub const Weather = struct {
     sunset: Hhmm = .{},
     uv: f32 = 0,
     pressure: f32 = 0,
+    /// Sea-level pressure in hPa (0 when the answer had none).
+    pressure_msl: f32 = 0,
+    /// Where the wind blows from, degrees (null when unknown).
+    wind_dir: ?u16 = null,
     precip_mm: f32 = 0,
     precip_prob: u32 = 0,
     is_day: bool = true,
@@ -199,6 +224,10 @@ pub const Weather = struct {
     timezone: BoundedText(48) = .{},
     forecast: [FORECAST_DAYS]ForecastDay = @as([FORECAST_DAYS]ForecastDay, @splat(.{})),
     forecast_len: usize = 0,
+    /// From the current hour on; empty for an answer without the series
+    /// (never for one this build fetched, but parsing doesn't require it).
+    hourly: [HOURLY_HOURS]HourlyPoint = @as([HOURLY_HOURS]HourlyPoint, @splat(.{})),
+    hourly_len: usize = 0,
 
     pub fn temp(self: *const Weather, u: Units) f32 {
         return if (u == .fahrenheit) self.temp_f else self.temp_c;
@@ -210,6 +239,15 @@ pub const Weather = struct {
 
     pub fn days(self: *const Weather) []const ForecastDay {
         return self.forecast[0..self.forecast_len];
+    }
+
+    pub fn hours(self: *const Weather) []const HourlyPoint {
+        return self.hourly[0..self.hourly_len];
+    }
+
+    /// Sea-level pressure when the answer had it, else surface pressure.
+    pub fn pressureHpa(self: *const Weather) f32 {
+        return if (self.pressure_msl > 0) self.pressure_msl else self.pressure;
     }
 
     /// The next sunset (by day) or sunrise (by night) — tomorrow's sunrise
@@ -351,6 +389,8 @@ const OmCurrent = struct {
     weather_code: ?f64 = null,
     surface_pressure: ?f64 = null,
     wind_speed_10m: ?f64 = null,
+    pressure_msl: ?f64 = null,
+    wind_direction_10m: ?f64 = null,
 };
 
 const OmCurrentUnits = struct {
@@ -368,11 +408,20 @@ const OmDaily = struct {
     uv_index_max: ?[]const ?f64 = null,
 };
 
+const OmHourly = struct {
+    time: ?[]const ?[]const u8 = null,
+    temperature_2m: ?[]const ?f64 = null,
+    weather_code: ?[]const ?f64 = null,
+    precipitation_probability: ?[]const ?f64 = null,
+    is_day: ?[]const ?f64 = null,
+};
+
 const OmResponse = struct {
     timezone: ?[]const u8 = null,
     current: ?OmCurrent = null,
     current_units: ?OmCurrentUnits = null,
     daily: ?OmDaily = null,
+    hourly: ?OmHourly = null,
 };
 
 /// ipapi.co and ip-api.com, merged: whichever keys are present win.
@@ -503,6 +552,10 @@ pub fn parseForecast(body: []const u8, city: []const u8, country: []const u8, ou
     var wind_buf: [24]u8 = undefined;
     w.wind.set(std.fmt.bufPrint(&wind_buf, "{d} {s}", .{ roundi(w.wind_kmh), wind_unit }) catch "");
     w.pressure = @floatCast(cur.surface_pressure orelse 0);
+    w.pressure_msl = @floatCast(@max(cur.pressure_msl orelse 0, 0));
+    if (cur.wind_direction_10m) |deg| {
+        if (!std.math.isNan(deg)) w.wind_dir = @intFromFloat(@mod(@round(std.math.clamp(deg, -720, 720)), 360));
+    }
     w.precip_mm = @floatCast(cur.precipitation orelse 0);
     w.is_day = (cur.is_day orelse 1) != 0;
     w.observed.set(isoHhmm(cur.time));
@@ -537,8 +590,43 @@ pub fn parseForecast(body: []const u8, city: []const u8, country: []const u8, ou
         w.uv = w.forecast[0].uv_max;
         w.precip_prob = w.forecast[0].precip_prob;
     }
+    if (r.hourly) |h| parseHourly(h, cur.time orelse "", &w);
     out.* = w;
     return true;
+}
+
+/// "2026-11-18T14:00" → 14; null for anything else.
+fn isoHour(iso: []const u8) ?u8 {
+    if (iso.len < 13 or iso[10] != 'T') return null;
+    const h = std.fmt.parseInt(u8, iso[11..13], 10) catch return null;
+    return if (h < 24) h else null;
+}
+
+/// The hourly series from the reading's own hour on: hours before it (an
+/// answer that starts at midnight) are skipped, and so is any hour with no
+/// time or no temperature, so a gap never shows as a made-up 0°.
+fn parseHourly(h: OmHourly, now_iso: []const u8, w: *Weather) void {
+    const times = h.time orelse return;
+    // "YYYY-MM-DDTHH" of the reading; empty compares below every hour.
+    const now_key: []const u8 = if (now_iso.len >= 13) now_iso[0..13] else "";
+    var n: usize = 0;
+    for (times, 0..) |t_opt, i| {
+        if (n == HOURLY_HOURS) break;
+        const t = t_opt orelse continue;
+        const hour = isoHour(t) orelse continue;
+        if (now_key.len == 13 and std.mem.order(u8, t[0..13], now_key) == .lt) continue;
+        const temp = at(f64, h.temperature_2m, i) orelse continue;
+        if (std.math.isNan(temp)) continue;
+        w.hourly[n] = .{
+            .hour = hour,
+            .temp_c = @floatCast(temp),
+            .w_code = @intFromFloat(std.math.clamp(at(f64, h.weather_code, i) orelse 0, 0, 99)),
+            .precip_prob = @intFromFloat(std.math.clamp(@round(at(f64, h.precipitation_probability, i) orelse 0), 0, 100)),
+            .is_day = (at(f64, h.is_day, i) orelse 1) != 0,
+        };
+        n += 1;
+    }
+    w.hourly_len = n;
 }
 
 pub const Place = struct {
@@ -768,7 +856,7 @@ pub fn defaultCachePath(buf: []u8) []const u8 {
 // Plain text so it's easy to inspect: a header naming when and for which
 // location source the answer was fetched, then Open-Meteo's JSON as-is.
 //
-//   perihelion-weather 2
+//   perihelion-weather 3
 //   <unix seconds fetched>
 //   <source key: "coords …" / "city … auto=1" / "ip …">
 //   <lat> <lon>
@@ -793,7 +881,10 @@ pub fn defaultCachePath(buf: []u8) []const u8 {
 //     processes share no clock. An entry dated in the future (clock moved
 //     back) is ignored, and the next fetch overwrites it.
 
-const CACHE_MAGIC = "perihelion-weather 2";
+// 3: answers carry the hourly series. A version-2 file (no hourly) is
+// ignored rather than adopted, so Glance's hourly strip is never empty
+// just because the other process fetched with an older build.
+const CACHE_MAGIC = "perihelion-weather 3";
 const CACHE_MAX: usize = 12288;
 /// An expired entry still beats a blank card while the first fetch of a
 /// session is running or failing (offline at login); shown marked stale.
@@ -1251,8 +1342,8 @@ pub const Service = struct {
         return switch (kind) {
             .forecast => std.fmt.bufPrintSentinel(
                 &self.url_buf,
-                "{s}?latitude={d:.4}&longitude={d:.4}&current={s}&daily={s}&timezone=auto&forecast_days={d}",
-                .{ FORECAST_URL, self.lat, self.lon, CURRENT_FIELDS, DAILY_FIELDS, FORECAST_DAYS },
+                "{s}?latitude={d:.4}&longitude={d:.4}&current={s}&daily={s}&hourly={s}&forecast_hours={d}&timezone=auto&forecast_days={d}",
+                .{ FORECAST_URL, self.lat, self.lon, CURRENT_FIELDS, DAILY_FIELDS, HOURLY_FIELDS, HOURLY_HOURS, FORECAST_DAYS },
                 0,
             ) catch null,
             .geocode => blk: {
@@ -1608,4 +1699,104 @@ test "timezone city fallback and units" {
     try std.testing.expectEqual(Units.fahrenheit, Units.parse("F").?);
     try std.testing.expectEqual(Units.celsius, Units.parse("metric").?);
     try std.testing.expectEqual(@as(i32, 0), roundi(-0.4));
+}
+
+// --- hourly series, sea-level pressure, wind direction (Glance's Weather tab)
+
+/// An answer that starts its hourly series at midnight (as one without
+/// forecast_hours would): the hours before the reading's hour are skipped.
+/// Hour 13 has no temperature and hour 15 no time; the arrays are of
+/// different lengths, as a truncated model run can leave them.
+const SAMPLE_HOURLY =
+    \\{"timezone":"America/Chicago",
+    \\"current":{"time":"2026-11-18T12:30","temperature_2m":4.6,"is_day":1,"weather_code":3,
+    \\"surface_pressure":990.1,"pressure_msl":1013.6,"wind_speed_10m":18.7,"wind_direction_10m":-45},
+    \\"daily":{"time":["2026-11-18"],"sunrise":["2026-11-18T06:42"],"sunset":["2026-11-18T16:28"]},
+    \\"hourly":{"time":["2026-11-18T10:00","2026-11-18T11:00","2026-11-18T12:00","2026-11-18T13:00",
+    \\"2026-11-18T14:00",null,"2026-11-18T16:00","garbage"],
+    \\"temperature_2m":[1.0,2.0,4.4,null,6.0,7.0,5.5,9.9],
+    \\"weather_code":[0,1,3,3,61,61,250],
+    \\"precipitation_probability":[0,0,5,10,85,90],
+    \\"is_day":[1,1,1,1,1,1,0,0]}}
+;
+
+test "hourly series: from the reading's hour, gaps skipped, short arrays degrade" {
+    const t = std.testing;
+    var w: Weather = undefined;
+    try t.expect(parseForecast(SAMPLE_HOURLY, "", "", &w));
+    const hs = w.hours();
+    try t.expectEqual(@as(usize, 3), hs.len);
+    try t.expectEqual(@as(u8, 12), hs[0].hour); // 10:00 and 11:00 are past
+    try t.expectEqual(@as(i32, 4), roundi(hs[0].temp_c));
+    try t.expectEqual(@as(i32, 40), roundi(hs[0].temp(.fahrenheit)));
+    try t.expectEqual(@as(u8, 14), hs[1].hour); // 13:00 had no temperature
+    try t.expectEqual(@as(u32, 61), hs[1].w_code);
+    try t.expectEqual(@as(u32, 85), hs[1].precip_prob);
+    try t.expectEqual(@as(u8, 16), hs[2].hour); // the null time is skipped
+    try t.expectEqual(@as(u32, 99), hs[2].w_code); // 250 clamped
+    try t.expectEqual(@as(u32, 0), hs[2].precip_prob); // past the array's end
+    try t.expect(!hs[2].is_day);
+    // Sea-level pressure wins over surface pressure; -45° is a north-west wind.
+    try t.expectApproxEqAbs(@as(f32, 1013.6), w.pressureHpa(), 0.01);
+    try t.expectApproxEqAbs(@as(f32, 990.1), w.pressure, 0.01);
+    try t.expectEqual(@as(?u16, 315), w.wind_dir);
+}
+
+test "hourly series: older answers and odd shapes still parse" {
+    const t = std.testing;
+    var w: Weather = undefined;
+    // No hourly block, no pressure_msl, no wind direction (a version-2
+    // answer): the reading stands, the extras are empty.
+    try t.expect(parseForecast(SAMPLE_FORECAST, "", "", &w));
+    try t.expectEqual(@as(usize, 0), w.hours().len);
+    try t.expectApproxEqAbs(@as(f32, 1002.3), w.pressureHpa(), 0.01);
+    try t.expect(w.wind_dir == null);
+    // An hourly block with no times, or empty arrays.
+    const base = "{\"current\":{\"time\":\"2026-11-18T12:00\",\"temperature_2m\":1},\"daily\":{}";
+    try t.expect(parseForecast(base ++ ",\"hourly\":{}}", "", "", &w));
+    try t.expectEqual(@as(usize, 0), w.hourly_len);
+    try t.expect(parseForecast(base ++ ",\"hourly\":{\"time\":[],\"temperature_2m\":[]}}", "", "", &w));
+    try t.expectEqual(@as(usize, 0), w.hourly_len);
+    // A reading with no time keeps every hour.
+    try t.expect(parseForecast("{\"current\":{\"temperature_2m\":1},\"daily\":{},\"hourly\":{\"time\":[\"2026-11-18T03:00\"],\"temperature_2m\":[2]}}", "", "", &w));
+    try t.expectEqual(@as(usize, 1), w.hourly_len);
+    // Truncated mid-series: rejected as a whole, never half-read.
+    try t.expect(!parseForecast(SAMPLE_HOURLY[0 .. SAMPLE_HOURLY.len - 40], "", "", &w));
+}
+
+test "hourly series: capped at now plus 24 hours" {
+    const t = std.testing;
+    var buf: [4096]u8 = undefined;
+    var n: usize = 0;
+    const head = "{\"current\":{\"time\":\"2026-11-18T00:10\",\"temperature_2m\":1},\"daily\":{},\"hourly\":{\"time\":[";
+    @memcpy(buf[0..head.len], head);
+    n = head.len;
+    for (0..40) |i| {
+        const s = std.fmt.bufPrint(buf[n..], "{s}\"2026-11-{d:0>2}T{d:0>2}:00\"", .{ if (i == 0) "" else ",", 18 + i / 24, i % 24 }) catch unreachable;
+        n += s.len;
+    }
+    const mid = "],\"temperature_2m\":[";
+    @memcpy(buf[n..][0..mid.len], mid);
+    n += mid.len;
+    for (0..40) |i| {
+        const s = std.fmt.bufPrint(buf[n..], "{s}{d}", .{ if (i == 0) "" else ",", i }) catch unreachable;
+        n += s.len;
+    }
+    const tail = "]}}";
+    @memcpy(buf[n..][0..tail.len], tail);
+    n += tail.len;
+    var w: Weather = undefined;
+    try t.expect(parseForecast(buf[0..n], "", "", &w));
+    try t.expectEqual(HOURLY_HOURS, w.hourly_len);
+    try t.expectEqual(@as(u8, 0), w.hourly[0].hour);
+    try t.expectEqual(@as(u8, 0), w.hourly[24].hour); // the next midnight
+    try t.expectEqual(@as(i32, 24), roundi(w.hourly[24].temp_c));
+}
+
+test "forecast URL asks for the hourly series and the extra current fields" {
+    const t = std.testing;
+    var s = Service.init(.{ .latitude = 41.88, .longitude = -87.63 });
+    const url = s.poll(0).?;
+    try t.expect(std.mem.indexOf(u8, url, "&hourly=temperature_2m,weather_code,precipitation_probability,is_day&forecast_hours=25&") != null);
+    try t.expect(std.mem.indexOf(u8, url, "pressure_msl,wind_direction_10m&daily=") != null);
 }
