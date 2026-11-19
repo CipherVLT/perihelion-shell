@@ -222,15 +222,16 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // the 13px font); the rest of the column starts below it.
     .{ .id = .weather, .x = 24, .y = 106 },
     .{ .id = .media, .x = 24, .y = 314 },
-    // Media is a tall card (cover + progress + controls ≈ 156px at the
-    // 13px font); system sits below it with a gap.
+    // Media is a tall card (cover + progress + controls ≈ 158px at the
+    // 13px font); system sits below it with a gap (columns ≈ 138px).
     .{ .id = .system, .x = 24, .y = 484 },
-    // Calendar below the stack (≈ 215px tall); drag anywhere with
-    // Ctrl+left-click once running.
-    .{ .id = .calendar, .x = 24, .y = 612 },
-    // The single sticky note along the middle-left, under the
-    // weather/media/calendar stack (left column) at the 13px default font. Drag it anywhere with Ctrl+left-click.
-    .{ .id = .note1, .x = 24, .y = 846 },
+    // Calendar below the stack (238 x ≈ 262px with no reminder rows);
+    // drag anywhere with Ctrl+left-click once running.
+    .{ .id = .calendar, .x = 24, .y = 634 },
+    // The single sticky note in the second column, under the desktop-icon
+    // grid (which only reaches it past 16 shortcuts). Drag it anywhere
+    // with Ctrl+left-click.
+    .{ .id = .note1, .x = 380, .y = 860 },
     // The desktop-icon grid (~/Desktop shortcuts) floats top-center: both
     // side columns belong to the widget stacks. Its height
     // grows and shrinks with the scanned shortcut count; drag it anywhere

@@ -105,21 +105,33 @@ const MEDIA_TIME_GAP: i64 = 8;
 const MEDIA_TITLE_GAP: i64 = 4;
 const MEDIA_CTRL_GAP: i64 = 10;
 
-// Calendar-card geometry: header row (< month year >), weekday row, a 6x7
-// day grid, and a footer line naming today's/next holiday. cardSizeFor and
-// CalendarWidget share these.
-const CAL_W: i64 = 196;
-const CAL_CELL_W: i64 = 24; // 7 cells: 168 = CAL_W - 2*CARD_PAD
-const CAL_CELL_H: i64 = 20;
+// Calendar-card geometry, after the reference calendar card: a header
+// row (chevrons around "Month YYYY"), a weekday row, a 6x7 day grid that
+// includes the neighbouring months' days, and an event row naming
+// today's/the next holiday (title over a dimmed date, an accent stripe on
+// the left). cardSizeFor and CalendarWidget share these.
+const CAL_CELL_W: i64 = 30; // three-letter weekday names fit
+const CAL_CELL_H: i64 = 24;
+const CAL_W: i64 = 2 * CARD_PAD + 7 * CAL_CELL_W;
 const CAL_ROWS: i64 = 6;
-const CAL_HEAD_GAP: i64 = 6;
+const CAL_HEAD_GAP: i64 = 8;
 const CAL_WD_GAP: i64 = 4;
-const CAL_FOOT_GAP: i64 = 6;
-const CAL_ARROW_ZONE: i64 = 20; // clickable width of the < / > header zones
-// Reminders list under the footer: a gap, a Notes-style header (title over
-// a hairline), then one row per reminder (shell.json calendar_reminders).
+const CAL_FOOT_GAP: i64 = 8;
+const CAL_ARROW_ZONE: i64 = 28; // clickable width of the < / > header zones
+// Event rows (the holiday footer and each listed reminder): an accent
+// stripe, the title, and a dimmed second line, 2px apart.
+const CAL_EV_LINE_GAP: i64 = 2;
+const CAL_EV_STRIPE: i64 = 3;
+const CAL_EV_INDENT: i64 = 10; // stripe → text
+const CAL_EV_SPACING: i64 = 6; // between listed rows
+// Reminders list under the footer: a gap, a small "Reminders" header,
+// then one event row per reminder (shell.json calendar_reminders).
 const CAL_REM_GAP: i64 = 10;
-const CAL_REM_HEAD_GAP: i64 = 8; // same as NOTE_HEADER_GAP
+const CAL_REM_HEAD_GAP: i64 = 6;
+
+fn calEventH(lh: i64) i64 {
+    return 2 * lh + CAL_EV_LINE_GAP;
+}
 
 /// shell.json calendar_reminders: rows listed under the month grid
 /// (0 = no list). Set by the host before cards are measured.
@@ -130,7 +142,8 @@ pub const CAL_REMINDER_ROWS_MAX: usize = rsvc.MAX_ROWS;
 /// Height the reminders list adds to the Calendar card (0 when off).
 fn calRemindersH(lh: i64) i64 {
     if (calendar_reminder_rows == 0) return 0;
-    return CAL_REM_GAP + lh + CAL_REM_HEAD_GAP + @as(i64, @intCast(calendar_reminder_rows)) * lh;
+    const n: i64 = @intCast(calendar_reminder_rows);
+    return CAL_REM_GAP + lh + CAL_REM_HEAD_GAP + n * calEventH(lh) + (n - 1) * CAL_EV_SPACING;
 }
 
 // Weather-card geometry: a four-line header (big temperature across lines
@@ -195,7 +208,7 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
             .rings => .{ @intCast(2 * CARD_PAD + 4 * RING_D + 3 * RING_GAP), @intCast(2 * CARD_PAD + RING_D + RING_LABEL_GAP + lh) },
             .bars => .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP + 3 * BAR_H + 2 * 4) },
         },
-        .calendar => .{ @intCast(CAL_W), @intCast(2 * CARD_PAD + 3 * lh + CAL_HEAD_GAP + CAL_WD_GAP + CAL_ROWS * CAL_CELL_H + CAL_FOOT_GAP + calRemindersH(lh)) },
+        .calendar => .{ @intCast(CAL_W), @intCast(2 * CARD_PAD + 2 * lh + CAL_HEAD_GAP + CAL_WD_GAP + CAL_ROWS * CAL_CELL_H + CAL_FOOT_GAP + calEventH(lh) + calRemindersH(lh)) },
         // Sticky note: a text card, tall enough for six wrapped lines.
         // Header strip (tabs, +, ×) over notes_lines lines of text.
         .note1 => .{ @intCast(NoteWidget.NOTE_W), @intCast(2 * CARD_PAD + noteHeaderH(lh) + notes_layout.lines * lh) },
@@ -553,6 +566,39 @@ pub const Canvas = struct {
                     // Glyph coverage is the glyph's alpha: 0xAARRGGBB src with
                     // A=coverage and RGB=text color (straight alpha).
                     const src = (@as(u32, coverage) << 24) | (color & 0x00FFFFFF);
+                    self.pixels[pyu * self.width + pxu] = blendOver(self.pixels[pyu * self.width + pxu], src);
+                }
+            }
+            pen += g.advance_x;
+        }
+        return pen - x;
+    }
+
+    /// drawText that honours the colour's alpha (coverage x alpha), so a
+    /// dim() colour really is dimmer. drawText itself keeps its old
+    /// behaviour (alpha ignored) for the cards drawn with it.
+    pub fn drawTextA(self: Canvas, x: i64, baseline_y: i64, text: []const u8, color: u32) i64 {
+        const ca: u32 = (color >> 24) & 0xFF;
+        if (ca == 0xFF) return self.drawText(x, baseline_y, text, color);
+        var pen: i64 = x;
+        var i: usize = 0;
+        while (nextUtf8Codepoint(text, &i)) |cp| {
+            const g = self.font.glyph(cp) catch continue;
+            const x0 = pen + g.bitmap_left;
+            const y0 = baseline_y - g.bitmap_top;
+            for (0..g.height) |row_off| {
+                for (0..g.width) |col_off| {
+                    const cov: u32 = g.pixels[row_off * g.width + col_off];
+                    if (cov == 0) continue;
+                    const px = x0 + @as(i64, @intCast(col_off));
+                    const py = y0 + @as(i64, @intCast(row_off));
+                    if (px < 0 or py < 0) continue;
+                    const pxu: usize = @intCast(px);
+                    const pyu: usize = @intCast(py);
+                    if (pxu >= self.width or pyu >= self.height) continue;
+                    const a = cov * ca / 255;
+                    if (a == 0) continue;
+                    const src = (a << 24) | (color & 0x00FFFFFF);
                     self.pixels[pyu * self.width + pxu] = blendOver(self.pixels[pyu * self.width + pxu], src);
                 }
             }
@@ -1142,7 +1188,7 @@ const MONTHS_FULL = [_][]const u8{
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 };
-const WD_ROW = [_][]const u8{ "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
+const WD_ROW = [_][]const u8{ "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
 
 // --- proleptic-Gregorian date math ----------------------------------------
 //
@@ -2989,7 +3035,7 @@ pub const SystemWidget = struct {
         for (&cols, 0..) |*col, i| {
             const cx = left + slot * @as(i64, @intCast(i)) + @divTrunc(slot, 2);
             const tw = c.textWidth(col.text);
-            _ = c.drawText(cx - @divTrunc(tw, 2), top + asc, col.text, if (col.have) col.color else off);
+            _ = c.drawTextA(cx - @divTrunc(tw, 2), top + asc, col.text, if (col.have) col.color else off);
             const bx = cx - @divTrunc(bar_w, 2);
             fillPill(c, bx, bar_top, bar_w, bar_h, track);
             if (col.have) {
@@ -2998,7 +3044,7 @@ pub const SystemWidget = struct {
                 if (fh > 0) fillPill(c, bx, bar_top + bar_h - fh, bar_w, fh, col.color);
             }
             const iw = c.textWidth(col.icon);
-            _ = c.drawText(cx - @divTrunc(iw, 2), icon_base, col.icon, if (col.have) col.color else off);
+            _ = c.drawTextA(cx - @divTrunc(iw, 2), icon_base, col.icon, if (col.have) col.color else off);
         }
     }
 
@@ -3571,12 +3617,15 @@ pub const CalendarWidget = struct {
         padx: i64,
         grid_x: i64,
         grid_y: i64,
+        head_top: i64,
+        head_h: i64,
         b1: i64, // header baseline
         wd_b: i64, // weekday row baseline
-        foot_b: i64, // footer baseline
+        foot_top: i64, // top of the holiday event row
         lh: i64,
         rem_top: i64, // top of the "Reminders" header (list on)
         rows_top: i64, // top of the first reminder row
+        row_pitch: i64, // one reminder row plus the spacing after it
     };
 
     fn calLayout(r: Rect, font: *font_mod.Font, zoom: f32) CalLayout {
@@ -3587,14 +3636,29 @@ pub const CalendarWidget = struct {
         const wd_gap = zf(CAL_WD_GAP, zoom);
         const cell_h = zf(CAL_CELL_H, zoom);
         const foot_gap = zf(CAL_FOOT_GAP, zoom);
+        const ev_h = 2 * lh + zf(CAL_EV_LINE_GAP, zoom);
         const padx = r.x + pad;
-        const b1 = r.y + pad + ascent;
-        const wd_b = r.y + pad + lh + head_gap + ascent;
-        const grid_y = r.y + pad + 2 * lh + head_gap + wd_gap;
-        const foot_b = grid_y + CAL_ROWS * cell_h + foot_gap + ascent;
-        const rem_top = foot_b - ascent + lh + zf(CAL_REM_GAP, zoom);
+        const head_top = r.y + pad;
+        const b1 = head_top + ascent;
+        const wd_b = head_top + lh + head_gap + ascent;
+        const grid_y = head_top + 2 * lh + head_gap + wd_gap;
+        const foot_top = grid_y + CAL_ROWS * cell_h + foot_gap;
+        const rem_top = foot_top + ev_h + zf(CAL_REM_GAP, zoom);
         const rows_top = rem_top + lh + zf(CAL_REM_HEAD_GAP, zoom);
-        return .{ .padx = padx, .grid_x = padx, .grid_y = grid_y, .b1 = b1, .wd_b = wd_b, .foot_b = foot_b, .lh = lh, .rem_top = rem_top, .rows_top = rows_top };
+        return .{
+            .padx = padx,
+            .grid_x = padx,
+            .grid_y = grid_y,
+            .head_top = head_top,
+            .head_h = lh,
+            .b1 = b1,
+            .wd_b = wd_b,
+            .foot_top = foot_top,
+            .lh = lh,
+            .rem_top = rem_top,
+            .rows_top = rows_top,
+            .row_pitch = ev_h + zf(CAL_EV_SPACING, zoom),
+        };
     }
 
     fn navMonth(self: *CalendarWidget, delta: i32) void {
@@ -3621,74 +3685,80 @@ pub const CalendarWidget = struct {
         self.follow = true;
     }
 
+    /// Epoch day of the grid's top-left cell: the Monday on or before the
+    /// 1st of the shown month.
+    fn gridStart(self: *const CalendarWidget) i64 {
+        const first = daysFromCivil(self.view_y, self.view_m, 1);
+        return first - @as(i64, monCol(wdayOf(first)));
+    }
+
     pub fn paint(self: *const CalendarWidget, c: Canvas, r: Rect) void {
         const l = calLayout(r, c.font, c.zoom);
         const ascent: i64 = c.font.ascentPx();
         const cell_w = c.zx(CAL_CELL_W);
         const cell_h = c.zx(CAL_CELL_H);
         const grid_w: i64 = 7 * cell_w;
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
 
-        // Header: < Month YYYY > — chevrons from Font Awesome, title click
-        // jumps back to the real month (see clickAt).
+        // Header: chevrons in the accent colour around "Month YYYY"; the
+        // title click jumps back to the real month (see clickAt).
         if (self.have_view) {
             var title_buf: [32]u8 = undefined;
             const title = std.fmt.bufPrint(&title_buf, "{s} {d}", .{ MONTHS_FULL[self.view_m - 1], self.view_y }) catch "";
+            const zone = c.zx(CAL_ARROW_ZONE);
             const left: []const u8 = "\u{f053}";
             const right: []const u8 = "\u{f054}";
-            _ = c.drawText(l.grid_x, l.b1, left, dim(c.theme.text_color, 0x99));
-            _ = c.drawText(l.grid_x + grid_w - c.textWidth(right), l.b1, right, dim(c.theme.text_color, 0x99));
+            _ = c.drawTextA(l.grid_x + @divTrunc(zone - c.textWidth(left), 2) - c.zx(6), l.b1, left, accent);
+            _ = c.drawTextA(l.grid_x + grid_w - zone + @divTrunc(zone - c.textWidth(right), 2) + c.zx(6), l.b1, right, accent);
             const tw = c.textWidth(title);
-            _ = c.drawText(l.grid_x + @divTrunc(grid_w - tw, 2), l.b1, title, c.theme.text_color);
+            _ = c.drawTextA(l.grid_x + @divTrunc(grid_w - tw, 2), l.b1, title, text_col);
         }
 
-        // Weekday header (Monday first — matches the grid below).
+        // Weekday names (Monday first, matching the grid), 60 % text.
         for (WD_ROW, 0..) |lbl, col| {
             const lw = c.textWidth(lbl);
-            _ = c.drawText(
-                l.grid_x + @as(i64, @intCast(col)) * cell_w + @divTrunc(cell_w - lw, 2),
-                l.wd_b,
-                lbl,
-                dim(c.theme.text_color, 0x88),
-            );
+            _ = c.drawTextA(l.grid_x + @as(i64, @intCast(col)) * cell_w + @divTrunc(cell_w - lw, 2), l.wd_b, lbl, dim(text_col, 0x99));
         }
 
         if (self.have_view) {
-            const first_col: i64 = monCol(wdayOf(daysFromCivil(self.view_y, self.view_m, 1)));
-            const dim_days = daysInMonth(self.view_y, self.view_m);
-            var day: i32 = 1;
-            var pos: i64 = first_col;
-            while (day <= dim_days) : (day += 1) {
-                const col = @mod(pos, 7);
-                const row = @divFloor(pos, 7);
-                pos += 1;
-                const x0 = l.grid_x + col * cell_w;
-                const y0 = l.grid_y + row * cell_h;
-                const is_today = daysFromCivil(self.view_y, self.view_m, @intCast(day)) == self.today_days;
-                const hol = self.holidayFor(self.view_y, self.view_m, @intCast(day));
-                if (is_today) {
-                    // Accent pill behind today's number.
-                    c.card(
-                        .{ .x = @intCast(x0 + 1), .y = @intCast(y0 + 1), .w = @intCast(cell_w - 2), .h = @intCast(cell_h - 3) },
-                        dim(c.theme.border_color, 0x33),
-                        dim(c.theme.border_color, 0x99),
-                    );
-                }
+            const start = self.gridStart();
+            const disc_d = @min(cell_w, cell_h) - c.zx(2);
+            var cell: i64 = 0;
+            while (cell < 7 * CAL_ROWS) : (cell += 1) {
+                const day = start + cell;
+                const dt = civilFromDays(day);
+                const in_month = dt.m == self.view_m;
+                const x0 = l.grid_x + @mod(cell, 7) * cell_w;
+                const y0 = l.grid_y + @divFloor(cell, 7) * cell_h;
+                const cx: f64 = @floatFromInt(x0 + @divTrunc(cell_w, 2));
+                const cy: f64 = @floatFromInt(y0 + @divTrunc(cell_h, 2));
+                const is_today = day == self.today_days;
+                if (is_today) c.fillCircleAA(cx, cy, @as(f64, @floatFromInt(disc_d)) / 2.0, dim(accent, 0x38));
+                const hol = if (in_month) self.holidayFor(dt.y, dt.m, dt.d) else null;
                 var num_buf: [4]u8 = undefined;
-                const num = std.fmt.bufPrint(&num_buf, "{d}", .{day}) catch continue;
-                const num_col: u32 = if (hol) |h|
-                    if (h.global) c.theme.holiday_color else dim(c.theme.holiday_color, 0x99)
-                else if (is_today) c.theme.text_color //
-                else dim(c.theme.text_color, 0xE0);
-                _ = c.drawText(x0 + @divTrunc(cell_w - c.textWidth(num), 2), y0 + 2 + ascent, num, num_col);
-                if (self.hasReminder(self.view_y, self.view_m, @intCast(day))) {
-                    const dot: i64 = @max(2, c.zx(3));
-                    c.fillRect(x0 + @divTrunc(cell_w, 2) - @divTrunc(dot, 2), y0 + cell_h - c.zx(4), @intCast(dot), @intCast(dot), c.theme.text_color);
+                const num = std.fmt.bufPrint(&num_buf, "{d}", .{dt.d}) catch continue;
+                const num_col: u32 = if (is_today)
+                    accent
+                else if (!in_month)
+                    dim(text_col, 0x66)
+                else if (hol) |h|
+                    (if (h.global) c.theme.holiday_color else dim(c.theme.holiday_color, 0xAA))
+                else
+                    text_col;
+                const base = y0 + @divTrunc(cell_h - ascent, 2) + ascent - c.zx(1);
+                _ = c.drawTextA(x0 + @divTrunc(cell_w - c.textWidth(num), 2), base, num, num_col);
+                // A day with a reminder: a short accent bar under the number.
+                if (self.hasReminder(dt.y, dt.m, dt.d)) {
+                    const bw = c.zx(12);
+                    const bh = @max(c.zx(2), 2);
+                    const bar_col = if (in_month) dim(accent, if (is_today) 0xFF else 0xB3) else dim(accent, 0x66);
+                    fillPillH(c, x0 + @divTrunc(cell_w - bw, 2), @min(base + c.zx(3), y0 + cell_h - bh), bw, bh, bar_col);
                 }
             }
         }
 
-        // Footer: today's holiday in the accent color, else the next
-        // upcoming one of the real year.
+        // Event row: today's holiday, else the next one of the real year.
         if (self.holiday_count > 0) {
             var chosen: ?*const Holiday = null;
             var is_today_hol = false;
@@ -3703,14 +3773,23 @@ pub const CalendarWidget = struct {
                 if (hd > self.today_days and chosen == null) chosen = h;
             }
             if (chosen) |h| {
-                var label_buf: [96]u8 = undefined;
-                const label = if (is_today_hol)
-                    std.fmt.bufPrint(&label_buf, "{s}", .{h.name[0..h.name_len]}) catch ""
+                // Second line: when, short enough for the card's width
+                // ("Thu, Nov 26 · in 8 days"; the countdown goes first
+                // when it doesn't fit).
+                var sub_buf: [48]u8 = undefined;
+                const hd = daysFromCivil(self.holiday_year, h.m, h.d);
+                const ahead = hd - self.today_days;
+                var sub: []const u8 = if (is_today_hol)
+                    "Today"
+                else if (ahead == 1)
+                    "Tomorrow"
                 else
-                    std.fmt.bufPrint(&label_buf, "Next: {s} · {d} {s}", .{ h.name[0..h.name_len], h.d, MONTHS[h.m - 1] }) catch "";
-                var clip: [120]u8 = undefined;
-                const col = if (is_today_hol) c.theme.holiday_color else dim(c.theme.text_color, 0x99);
-                _ = c.drawText(l.padx, l.foot_b, fitText(c, label, grid_w, &clip), col);
+                    std.fmt.bufPrint(&sub_buf, "{s}, {s} {d} \u{00B7} in {d} days", .{ DAYS[wdayOf(hd)], MONTHS[h.m - 1], h.d, ahead }) catch "";
+                if (ahead > 1 and c.textWidth(sub) > grid_w - c.zx(CAL_EV_INDENT)) {
+                    sub = std.fmt.bufPrint(&sub_buf, "{s}, {s} {d}", .{ DAYS[wdayOf(hd)], MONTHS[h.m - 1], h.d }) catch "";
+                }
+                const stripe = if (h.global) c.theme.holiday_color else dim(c.theme.holiday_color, 0xAA);
+                paintEventRow(c, l.padx, l.foot_top, grid_w, l.lh, stripe, h.name[0..h.name_len], text_col, sub, dim(text_col, 0xB3));
             }
         }
 
@@ -3724,48 +3803,36 @@ pub const CalendarWidget = struct {
         return rsvc.upcoming(self.reminders[0..self.reminder_count], self.today_days, out[0..rows]);
     }
 
-    /// Reminders list: a Notes-style header (accent title over a hairline),
-    /// then "day  time  text" rows. Today's day label is in the accent; a
-    /// reminder of today whose time already passed is dimmed.
+    /// Reminders list: a small dimmed header, then one event row per
+    /// reminder: the text, and "Today · 09:00" under it. A reminder of
+    /// today whose time already passed is dimmed.
     fn paintReminders(self: *const CalendarWidget, c: Canvas, l: CalLayout, inner_w: i64) void {
         const t = c.theme.text_color;
         const accent = c.theme.border_color;
         const ascent: i64 = c.font.ascentPx();
-        _ = c.drawText(l.padx, l.rem_top + ascent, "Reminders", accent);
-        c.fillRect(l.padx, l.rem_top + l.lh + @divTrunc(c.zx(CAL_REM_HEAD_GAP), 2), @intCast(@max(inner_w, 0)), 1, dim(t, 0x22));
+        _ = c.drawTextA(l.padx, l.rem_top + ascent, "Reminders", dim(t, 0x99));
 
         var idx: [rsvc.MAX_ROWS]usize = undefined;
         const n = self.listedReminders(&idx);
         if (n == 0) {
-            _ = c.drawText(l.padx, l.rows_top + ascent, "Nothing coming up", dim(t, 0x88));
+            _ = c.drawTextA(l.padx, l.rows_top + ascent, "Nothing coming up", dim(t, 0x88));
             return;
         }
-        // Day column as wide as the widest label actually shown.
-        var label_w: i64 = 0;
-        for (idx[0..n]) |ri| {
-            var lb: [16]u8 = undefined;
-            label_w = @max(label_w, c.textWidth(rsvc.dayLabel(&self.reminders[ri], self.today_days, &lb)));
-        }
-        const gap = c.zx(6);
-        const time_x = l.padx + label_w + gap;
-        const text_x = time_x + c.textWidth("00:00") + gap;
         for (idx[0..n], 0..) |ri, row| {
             const r = &self.reminders[ri];
-            const b = l.rows_top + @as(i64, @intCast(row)) * l.lh + ascent;
+            const top = l.rows_top + @as(i64, @intCast(row)) * l.row_pitch;
             const is_today = r.day() == self.today_days;
             const passed = is_today and r.fired;
             var lb: [16]u8 = undefined;
-            _ = c.drawText(l.padx, b, rsvc.dayLabel(r, self.today_days, &lb), if (is_today and !passed) accent else dim(t, 0x99));
-            var tb: [8]u8 = undefined;
-            const tm = std.fmt.bufPrint(&tb, "{d:0>2}:{d:0>2}", .{ r.hh, r.mm }) catch "";
-            _ = c.drawText(time_x, b, tm, dim(t, 0x99));
-            var clip: [200]u8 = undefined;
-            _ = c.drawText(text_x, b, fitText(c, r.text(), l.padx + inner_w - text_x, &clip), if (passed) dim(t, 0x88) else t);
+            var sb: [40]u8 = undefined;
+            const sub = std.fmt.bufPrint(&sb, "{s} \u{00B7} {d:0>2}:{d:0>2}", .{ rsvc.dayLabel(r, self.today_days, &lb), r.hh, r.mm }) catch "";
+            paintEventRow(c, l.padx, top, inner_w, l.lh, if (passed) dim(accent, 0x55) else accent, r.text(), if (passed) dim(t, 0x88) else t, sub, dim(t, if (passed) 0x77 else 0xB3));
         }
     }
 
     /// Left-click: header arrows step months, the month title jumps back to
-    /// today, a day cell opens its rofi reminder menu.
+    /// today, a day cell (this month's or a neighbour's) opens its rofi
+    /// reminder menu, a listed reminder opens its day's menu.
     pub fn clickAt(self: *CalendarWidget, r: Rect, font: *font_mod.Font, zoom: f32, px: i32, py: i32) void {
         if (!self.have_view) return;
         const l = calLayout(r, font, zoom);
@@ -3775,8 +3842,7 @@ pub const CalendarWidget = struct {
         const grid_w: i64 = 7 * cell_w;
         const px64: i64 = px;
         const py64: i64 = py;
-        const head_top: i64 = r.y + zf(CARD_PAD, zoom);
-        if (py64 >= head_top and py64 < head_top + l.lh) {
+        if (py64 >= l.head_top - zf(4, zoom) and py64 < l.head_top + l.head_h + zf(4, zoom)) {
             if (px64 < l.grid_x + arrow_zone) navMonth(self, -1) //
             else if (px64 >= l.grid_x + grid_w - arrow_zone) navMonth(self, 1) //
             else jumpToToday(self);
@@ -3787,16 +3853,13 @@ pub const CalendarWidget = struct {
         {
             const col = @divFloor(px64 - l.grid_x, cell_w);
             const row = @divFloor(py64 - l.grid_y, cell_h);
-            const first_col = @as(i64, monCol(wdayOf(daysFromCivil(self.view_y, self.view_m, 1))));
-            const day = row * 7 + col - first_col + 1;
-            if (day >= 1 and day <= daysInMonth(self.view_y, self.view_m)) {
-                self.openDayMenu(self.view_y, self.view_m, @intCast(day));
-            }
+            const dt = civilFromDays(self.gridStart() + row * 7 + col);
+            self.openDayMenu(dt.y, dt.m, dt.d);
             return;
         }
         // A reminder row opens its day's menu (add another, or remove it).
         if (calendar_reminder_rows > 0 and py64 >= l.rows_top and px64 >= l.padx and px64 < l.padx + grid_w) {
-            const row: usize = @intCast(@divFloor(py64 - l.rows_top, l.lh));
+            const row: usize = @intCast(@divFloor(py64 - l.rows_top, l.row_pitch));
             var idx: [rsvc.MAX_ROWS]usize = undefined;
             const n = self.listedReminders(&idx);
             if (row < n) {
@@ -3806,6 +3869,40 @@ pub const CalendarWidget = struct {
         }
     }
 };
+
+/// A calendar event row, after the reference's event list: a rounded
+/// stripe on the left, the title, and a dimmed second line under it, both
+/// cut with an ellipsis to the row's width.
+fn paintEventRow(c: Canvas, x: i64, top: i64, w: i64, lh: i64, stripe: u32, title: []const u8, title_col: u32, sub: []const u8, sub_col: u32) void {
+    const ascent: i64 = c.font.ascentPx();
+    const h = 2 * lh + c.zx(CAL_EV_LINE_GAP);
+    fillPill(c, x, top + c.zx(2), @max(c.zx(CAL_EV_STRIPE), 2), h - c.zx(4), stripe);
+    const tx = x + c.zx(CAL_EV_INDENT);
+    const tw = x + w - tx;
+    var b1: [200]u8 = undefined;
+    var b2: [80]u8 = undefined;
+    _ = c.drawTextA(tx, top + ascent, fitText(c, title, tw, &b1), title_col);
+    _ = c.drawTextA(tx, top + lh + c.zx(CAL_EV_LINE_GAP) + ascent, fitText(c, sub, tw, &b2), sub_col);
+}
+
+/// A horizontal pill (round-ended bar) — the calendar's event marker.
+fn fillPillH(c: Canvas, x: i64, y: i64, w: i64, h: i64, color: u32) void {
+    if (w <= 0 or h <= 0) return;
+    const rad: f64 = @as(f64, @floatFromInt(@min(w, h))) / 2.0;
+    const cy: f64 = @as(f64, @floatFromInt(y)) + @as(f64, @floatFromInt(h)) / 2.0;
+    const x0: f64 = @as(f64, @floatFromInt(x)) + rad;
+    const x1: f64 = @as(f64, @floatFromInt(x + w)) - rad;
+    var py = y;
+    while (py < y + h) : (py += 1) {
+        const dy = @as(f64, @floatFromInt(py)) + 0.5 - cy;
+        var px = x;
+        while (px < x + w) : (px += 1) {
+            const fx = @as(f64, @floatFromInt(px)) + 0.5;
+            const dx = if (fx < x0) x0 - fx else if (fx > x1) fx - x1 else 0.0;
+            c.blendCov(px, py, color, rad + 0.5 - @sqrt(dx * dx + dy * dy));
+        }
+    }
+}
 
 // --- notes (sticky notes with tabs) -------------------------------------------
 
@@ -6269,6 +6366,17 @@ test "system: style names" {
     try std.testing.expectEqual(SystemStyle.bars, SystemStyle.parse("bars").?);
     try std.testing.expectEqual(SystemStyle.rings, SystemStyle.parse("Rings").?);
     try std.testing.expect(SystemStyle.parse("dial") == null);
+}
+
+// --- calendar tests ----------------------------------------------------------
+
+test "calendar: grid starts on the Monday on or before the 1st" {
+    var cw = CalendarWidget{};
+    cw.view_y = 2026;
+    cw.view_m = 11; // 1 Nov 2026 is a Sunday
+    try std.testing.expectEqual(daysFromCivil(2026, 10, 26), cw.gridStart());
+    cw.view_m = 6; // 1 Jun 2026 is a Monday
+    try std.testing.expectEqual(daysFromCivil(2026, 6, 1), cw.gridStart());
 }
 
 // --- widget id tests -------------------------------------------------------
