@@ -172,6 +172,14 @@ pub fn build(b: *Build) !void {
     overview_mod.addImport("logging", logging_mod);
     overview_mod.addImport("widgets", widgets_mod);
 
+    // The shared volume maths, from the bar's sources like weather.zig: Glance's
+    // Media tab and the bar's Control Center read pactl the same way.
+    const volume_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/volume.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -189,6 +197,8 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("procs", procs_mod); // shell.json processes_* keys (main.zig)
     exe_mod.addImport("netrate", netrate_mod); // shell.json network_* keys (main.zig)
     exe_mod.addImport("overview", overview_mod);
+    exe_mod.addImport("art", art_mod); // Glance's large cover (glance_media_view.zig)
+    exe_mod.addImport("volume", volume_mod); // Glance's Media tab (glance_media.zig)
     // No EGL/GL stack: everything renders CPU-side into wl_shm ARGB buffers,
     // exactly like the bar.
     exe_mod.linkSystemLibrary("wayland-client", .{});
@@ -244,12 +254,6 @@ pub fn build(b: *Build) !void {
 
     // `zig build test-glance-media`: src/glance_media.zig's unit tests — the
     // Media tab's probe parsing, layout, hit-testing, drags and action argv.
-    // The shared volume maths, from the bar's sources like weather.zig.
-    const volume_mod = b.createModule(.{
-        .root_source_file = b.path("../perihelionbar/src/volume.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
     const glance_media_mod = b.createModule(.{
         .root_source_file = b.path("src/glance_media.zig"),
         .target = target,

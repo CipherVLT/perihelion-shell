@@ -1087,6 +1087,25 @@ pub fn spawnDetached(command: [:0]const u8) void {
     _ = std.c.waitpid(pid, &status, 0);
 }
 
+/// spawnDetached without a shell: `argv` goes straight to execve(path), so
+/// no argument (a player name, a URL) is ever parsed as shell text. Glance
+/// runs its actions this way through /usr/bin/env.
+pub fn spawnDetachedArgv(path: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) void {
+    const pid = libc_proc.fork();
+    if (pid < 0) return;
+    if (pid == 0) {
+        const pid2 = libc_proc.fork();
+        if (pid2 == 0) {
+            _ = std.c.setsid();
+            _ = std.c.execve(path, argv, std.c.environ);
+            std.c._exit(127);
+        }
+        std.c._exit(0);
+    }
+    var status: c_int = undefined;
+    _ = std.c.waitpid(pid, &status, 0);
+}
+
 // --- shared data-fetch plumbing ------------------------------------------
 //
 // Spawns a short-lived child (curl, playerctl) and captures its stdout over
@@ -1497,7 +1516,7 @@ fn drawCentered(c: Canvas, center_x: i64, baseline: i64, text: []const u8, color
 /// Non-blocking readiness check for one fetch pipe. The host calls every
 /// widget's onPipe when *any* pipe is ready, and Fetcher.onReadable does a
 /// blocking read — without this a slow curl would stall the whole loop.
-fn fdReadable(fd: posix.fd_t) bool {
+pub fn fdReadable(fd: posix.fd_t) bool {
     if (fd < 0) return false;
     var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
     const n = posix.poll(&pfd, 0) catch return false;
@@ -2496,7 +2515,7 @@ pub const MediaWidget = struct {
 
     /// file:// MPRIS art URL -> filesystem path, %XX-decoded, NUL-terminated
     /// for the decoder. Returns null when the URL isn't usable.
-    fn fileUrlPath(url: []const u8, dst: []u8) ?[:0]u8 {
+    pub fn fileUrlPath(url: []const u8, dst: []u8) ?[:0]u8 {
         const prefix = "file://";
         if (!std.mem.startsWith(u8, url, prefix)) return null;
         var rest = url[prefix.len..];

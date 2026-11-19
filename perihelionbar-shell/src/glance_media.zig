@@ -13,7 +13,7 @@ const g = @import("glance.zig");
 const Rect = g.Rect;
 /// pactl parsing and slider maths shared with the bar's Control Center
 /// (../perihelionbar/src/volume.zig): one implementation for both.
-const volmath = @import("volume");
+pub const volmath = @import("volume");
 
 // --- the state probe ------------------------------------------------------------
 
@@ -234,7 +234,7 @@ pub const VOL_TRACK_W: i32 = 260;
 
 pub const Layout = struct {
     cover: Rect = .{},
-    /// Title, artist and album baselines start here (text column).
+    /// The text column: player and state, title, artist, album.
     text: Rect = .{},
     seek: Rect = .{},
     times_y: i32 = 0,
@@ -256,7 +256,8 @@ pub fn layout(c: Rect, lh: i32, chip_w: []const i32) Layout {
     l.cover = .{ .x = c.x, .y = c.y, .w = s, .h = s };
     const rx = c.x + s + 28;
     const rw = @max(c.x + c.w - rx, 120);
-    l.text = .{ .x = rx, .y = c.y + 6, .w = rw, .h = 3 * lh + 12 };
+    // Four lines: the player and its state, title, artist, album.
+    l.text = .{ .x = rx, .y = c.y + 4, .w = rw, .h = 4 * lh + 14 };
 
     l.seek = .{ .x = rx, .y = l.text.y + l.text.h + 22, .w = rw, .h = TRACK_H };
     l.times_y = l.seek.y + TRACK_H + 8 + lh; // baseline-ish: bottom of the time row
