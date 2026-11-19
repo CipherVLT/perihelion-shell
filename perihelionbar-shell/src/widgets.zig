@@ -187,12 +187,14 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
         .clock => clockCardSize(font),
         .weather => .{ @intCast(WX_W), @intCast(2 * CARD_PAD + WX_HEAD_LINES * lh + (WX_HEAD_LINES - 1) * ROW_GAP + WX_STRIP_GAP + WX_STRIP_LINES * lh + (WX_STRIP_LINES - 1) * WX_STRIP_ROW_GAP) },
         .media => .{ @intCast(MEDIA_W), @intCast(2 * CARD_PAD + MEDIA_COVER + MEDIA_HEAD_GAP + MEDIA_PROG_H + MEDIA_TIME_GAP + lh + MEDIA_CTRL_GAP + lh) },
-        // Bars: CPU, MEM and GPU rows, each a label line over a 4px-gapped
-        // bar. Rings: four gauges in a row with a label under each.
-        .system => if (system_style == .rings)
-            .{ @intCast(2 * CARD_PAD + 4 * RING_D + 3 * RING_GAP), @intCast(2 * CARD_PAD + RING_D + RING_LABEL_GAP + lh) }
-        else
-            .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP + 3 * BAR_H + 2 * 4) },
+        // Columns: value, vertical pill, icon per reading. Bars: CPU, MEM
+        // and GPU rows, each a label line over a 4px-gapped bar. Rings:
+        // four gauges in a row with a label under each.
+        .system => switch (system_style) {
+            .columns => .{ @intCast(SYS_COL_W), @intCast(2 * CARD_PAD + lh + SYS_COL_GAP + SYS_COL_BAR_H + SYS_COL_GAP + lh) },
+            .rings => .{ @intCast(2 * CARD_PAD + 4 * RING_D + 3 * RING_GAP), @intCast(2 * CARD_PAD + RING_D + RING_LABEL_GAP + lh) },
+            .bars => .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP + 3 * BAR_H + 2 * 4) },
+        },
         .calendar => .{ @intCast(CAL_W), @intCast(2 * CARD_PAD + 3 * lh + CAL_HEAD_GAP + CAL_WD_GAP + CAL_ROWS * CAL_CELL_H + CAL_FOOT_GAP + calRemindersH(lh)) },
         // Sticky note: a text card, tall enough for six wrapped lines.
         // Header strip (tabs, +, ×) over notes_lines lines of text.
@@ -286,17 +288,31 @@ fn clockCardSize(font: *const font_mod.Font) [2]u32 {
 // --- system card ring style ------------------------------------------------
 
 pub const SystemStyle = enum {
+    /// Seven readings side by side, each a value over a thin vertical
+    /// pill and an icon: CPU, CPU temperature, memory, GPU temperature,
+    /// GPU busy, download, upload.
+    columns,
     bars,
     rings,
 
     pub fn parse(s: []const u8) ?SystemStyle {
+        if (std.ascii.eqlIgnoreCase(s, "columns") or std.ascii.eqlIgnoreCase(s, "card")) return .columns;
         if (std.ascii.eqlIgnoreCase(s, "bars") or std.ascii.eqlIgnoreCase(s, "rows")) return .bars;
         if (std.ascii.eqlIgnoreCase(s, "rings") or std.ascii.eqlIgnoreCase(s, "gauges")) return .rings;
         return null;
     }
 };
 /// shell.json system_style, set by the host before cards are measured.
-pub var system_style: SystemStyle = .bars;
+pub var system_style: SystemStyle = .columns;
+// Columns style: same width as the Media card above it in the default
+// layout; seven equal slots, a pill 8px wide (radius 4) between the value
+// and the icon.
+const SYS_COL_W: i64 = 340;
+const SYS_COL_BAR_H: i64 = 64;
+const SYS_COL_BAR_W: i64 = 8;
+const SYS_COL_GAP: i64 = 6;
+/// Download/upload pills are full at 10 MB/s.
+const SYS_NET_FULL: f64 = 10.0 * 1024.0 * 1024.0;
 const RING_D: i64 = 58;
 const RING_GAP: i64 = 14;
 const RING_W: i64 = 6;
@@ -2628,12 +2644,25 @@ pub const SystemWidget = struct {
     fetch: Fetcher = .{},
     /// Set by a click that switched GPUs; the host saves system_gpu.
     gpu_changed: bool = false,
+    /// Download/upload for the columns style (netrate.zig; never read in
+    /// the other styles).
+    net: nsvc.Service = .{},
 
     pub const interval_ms: i64 = 2000;
 
     pub fn configure(self: *SystemWidget, cfg: tsvc.Config, units: tsvc.Units) void {
         self.temps = tsvc.Service.init(cfg);
         self.units = units;
+        self.net = nsvc.Service.init(.{});
+    }
+
+    /// The selected GPU when it has something to show (a reading, or
+    /// "asleep"); a GPU with no sensor and no busy counter (a VM's virtual
+    /// card) counts as none.
+    fn shownGpu(self: *const SystemWidget) ?*const tsvc.Gpu {
+        const g = self.temps.selectedGpu() orelse return null;
+        if (g.asleep or g.busy_pct != null or g.temp_mc != null) return g;
+        return null;
     }
 
     fn updateCpu(self: *SystemWidget) void {
@@ -2719,7 +2748,8 @@ pub const SystemWidget = struct {
         const now = monoMs();
         var changed = self.temps.tick(now);
         // The load row only shows when there is no GPU row.
-        if (self.temps.selectedGpu() == null) self.updateLoad();
+        if (system_style == .bars and self.shownGpu() == null) self.updateLoad();
+        if (system_style == .columns and self.net.tick(now)) changed = true;
         self.pumpSmi(now);
         changed = changed or old_cpu != self.cpu_pct or old_mem != self.mem_pct or
             !std.mem.eql(u8, old_load[0..old_load_len], self.load_buf[0..self.load_len]);
@@ -2751,7 +2781,11 @@ pub const SystemWidget = struct {
     }
 
     pub fn paint(self: *const SystemWidget, c: Canvas, r: Rect) void {
-        if (system_style == .rings) return self.paintRings(c, r);
+        switch (system_style) {
+            .columns => return self.paintColumns(c, r),
+            .rings => return self.paintRings(c, r),
+            .bars => {},
+        }
         const pad = c.zx(CARD_PAD);
         const rg = c.zx(ROW_GAP);
         const barh = c.zx(BAR_H);
@@ -2763,7 +2797,9 @@ pub const SystemWidget = struct {
         const ascent: i64 = c.font.ascentPx();
         const text_col = c.theme.text_color;
         const value_col = dim(text_col, 0xCC);
-        const gpu = self.temps.selectedGpu();
+        // No GPU reading (none, or a virtual card without sensors): the
+        // third row is the load average instead of an empty GPU row.
+        const gpu = self.shownGpu();
         // With several GPUs the row names the vendor, so a click that
         // cycles them visibly changes something.
         const gpu_label: []const u8 = if (gpu) |g| (if (self.temps.gpuList().len > 1) g.vendor.label() else "GPU") else "LOAD";
@@ -2798,7 +2834,7 @@ pub const SystemWidget = struct {
             if (g.asleep) {
                 // Runtime-suspended dGPU: not read, so it stays asleep.
                 drawRight(c, right, b3, "asleep", dim(text_col, 0x88));
-            } else {
+            } else if (g.temp_mc != null) {
                 const tint = tsvc.heatTint(g.temp_mc);
                 drawRight(c, right, b3, tsvc.fmtTemp(g.temp_mc, self.units, &temp_buf), if (tint != 0) tint else value_col);
             }
@@ -2848,7 +2884,9 @@ pub const SystemWidget = struct {
         n += 1;
         gauges[n] = .{ .label = "MEM", .frac = @as(f64, @floatFromInt(self.mem_pct)) / 100.0, .text = std.fmt.bufPrint(&bufs[n], "{d}%", .{self.mem_pct}) catch "", .color = level(self.mem_pct, 75, 90, accent, warn, crit) };
         n += 1;
-        if (self.temps.selectedGpu()) |g| {
+        // A reading the machine doesn't have (no GPU sensor, no CPU
+        // sensor in a VM) gets no gauge; the others spread out.
+        if (self.shownGpu()) |g| {
             if (g.asleep) {
                 gauges[n] = .{ .label = "GPU", .frac = 0, .text = "zz", .color = idle };
             } else if (g.busy_pct) |bp| {
@@ -2856,18 +2894,14 @@ pub const SystemWidget = struct {
             } else if (g.temp_mc) |mc| {
                 const tint = tsvc.heatTint(mc);
                 gauges[n] = .{ .label = "GPU", .frac = @as(f64, @floatFromInt(mc)) / 100_000.0, .text = shortTemp(mc, self.units, &bufs[n]), .color = if (tint != 0) tint else accent };
-            } else {
-                gauges[n] = .{ .label = "GPU", .frac = 0, .text = "\u{2014}", .color = idle };
             }
             n += 1;
         }
         if (self.temps.cpuMc()) |mc| {
             const tint = tsvc.heatTint(mc);
             gauges[n] = .{ .label = "TEMP", .frac = @as(f64, @floatFromInt(mc)) / 100_000.0, .text = shortTemp(mc, self.units, &bufs[n]), .color = if (tint != 0) tint else accent };
-        } else {
-            gauges[n] = .{ .label = "TEMP", .frac = 0, .text = "\u{2014}", .color = idle };
+            n += 1;
         }
-        n += 1;
 
         const slot = @divTrunc(inner_w, @as(i64, @intCast(n)));
         const d = @max(@min(c.zx(RING_D), slot - c.zx(6)), c.zx(16));
@@ -2887,6 +2921,99 @@ pub const SystemWidget = struct {
         }
     }
 
+    /// Columns style (the default): CPU, CPU temperature, memory, GPU
+    /// temperature, GPU busy, download and upload side by side. Each is a
+    /// value on top, a thin rounded pill filling from the bottom, and an
+    /// icon under it, all in the accent colour, amber past the warning
+    /// mark and the theme's error colour past the critical one (CPU and
+    /// GPU 60/80 %, memory 75/90 %, temperatures 70/85 °C). A reading the
+    /// machine doesn't have stays in its place, dimmed, with "n/a" and an
+    /// empty pill.
+    fn paintColumns(self: *const SystemWidget, c: Canvas, r: Rect) void {
+        const pad = c.zx(CARD_PAD);
+        const left: i64 = r.x + pad;
+        const top: i64 = r.y + pad;
+        const inner_w: i64 = @as(i64, @intCast(r.w)) - 2 * pad;
+        const inner_h: i64 = @as(i64, @intCast(r.h)) - 2 * pad;
+        const lh = lineH(c.font);
+        const asc: i64 = c.font.ascentPx();
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const warn: u32 = 0xFFFFB340;
+        const crit = c.theme.holiday_color;
+        const off = dim(text_col, 0x55);
+
+        const Col = SysCol;
+        const level = struct {
+            fn of(v: u32, warn_at: u32, crit_at: u32, a: u32, w: u32, cr: u32) u32 {
+                if (v >= crit_at) return cr;
+                if (v >= warn_at) return w;
+                return a;
+            }
+        }.of;
+        const na = Col{ .text = "n/a", .frac = 0, .color = off, .icon = "", .have = false };
+        var bufs: [7][16]u8 = undefined;
+        var cols: [7]Col = undefined;
+
+        cols[0] = .{ .text = std.fmt.bufPrint(&bufs[0], "{d}%", .{self.cpu_pct}) catch "", .frac = @as(f64, @floatFromInt(self.cpu_pct)) / 100.0, .color = level(self.cpu_pct, 60, 80, accent, warn, crit), .icon = "\u{F4BC}", .have = true };
+        cols[1] = na;
+        cols[1].icon = "\u{F2C9}";
+        if (self.temps.cpuMc()) |mc| cols[1] = tempCol(mc, self.units, &bufs[1], "\u{F2C9}", accent, warn, crit);
+        cols[2] = .{ .text = std.fmt.bufPrint(&bufs[2], "{d}%", .{self.mem_pct}) catch "", .frac = @as(f64, @floatFromInt(self.mem_pct)) / 100.0, .color = level(self.mem_pct, 75, 90, accent, warn, crit), .icon = "\u{F035B}", .have = true };
+        cols[3] = na;
+        cols[3].icon = "\u{F08AE}";
+        cols[4] = na;
+        cols[4].icon = "\u{F029A}";
+        if (self.shownGpu()) |g| {
+            if (g.asleep) {
+                // Runtime-suspended dGPU: not read, so it stays asleep.
+                cols[3].text = "zz";
+                cols[4].text = "zz";
+            } else {
+                if (g.temp_mc) |mc| cols[3] = tempCol(mc, self.units, &bufs[3], "\u{F08AE}", accent, warn, crit);
+                if (g.busy_pct) |bp| cols[4] = .{ .text = std.fmt.bufPrint(&bufs[4], "{d}%", .{bp}) catch "", .frac = @as(f64, @floatFromInt(bp)) / 100.0, .color = level(bp, 60, 80, accent, warn, crit), .icon = "\u{F029A}", .have = true };
+            }
+        }
+        const net_ok = self.net.ready() and self.net.ifaces > 0;
+        cols[5] = if (net_ok) .{ .text = fmtRateShort(&bufs[5], self.net.rx_rate), .frac = @as(f64, @floatFromInt(self.net.rx_rate)) / SYS_NET_FULL, .color = accent, .icon = "\u{F01DA}", .have = true } else na;
+        cols[5].icon = "\u{F01DA}";
+        cols[6] = if (net_ok) .{ .text = fmtRateShort(&bufs[6], self.net.tx_rate), .frac = @as(f64, @floatFromInt(self.net.tx_rate)) / SYS_NET_FULL, .color = accent, .icon = "\u{F0552}", .have = true } else na;
+        cols[6].icon = "\u{F0552}";
+
+        const slot = @divTrunc(inner_w, 7);
+        const bar_w = c.zx(SYS_COL_BAR_W);
+        const bar_top = top + lh + c.zx(SYS_COL_GAP);
+        const bar_h = @max(inner_h - 2 * lh - 2 * c.zx(SYS_COL_GAP), bar_w);
+        const icon_base = top + inner_h - lh + asc;
+        const track = dim(text_col, 0x30);
+        for (&cols, 0..) |*col, i| {
+            const cx = left + slot * @as(i64, @intCast(i)) + @divTrunc(slot, 2);
+            const tw = c.textWidth(col.text);
+            _ = c.drawText(cx - @divTrunc(tw, 2), top + asc, col.text, if (col.have) col.color else off);
+            const bx = cx - @divTrunc(bar_w, 2);
+            fillPill(c, bx, bar_top, bar_w, bar_h, track);
+            if (col.have) {
+                const f = std.math.clamp(col.frac, 0.0, 1.0);
+                const fh: i64 = @intFromFloat(@round(@as(f64, @floatFromInt(bar_h)) * f));
+                if (fh > 0) fillPill(c, bx, bar_top + bar_h - fh, bar_w, fh, col.color);
+            }
+            const iw = c.textWidth(col.icon);
+            _ = c.drawText(cx - @divTrunc(iw, 2), icon_base, col.icon, if (col.have) col.color else off);
+        }
+    }
+
+    /// A temperature column: "62°", the pill full at 100 °C.
+    fn tempCol(mc: i32, units: tsvc.Units, buf: []u8, icon: []const u8, accent: u32, warn: u32, crit: u32) SysCol {
+        const color: u32 = if (mc >= 85_000) crit else if (mc >= 70_000) warn else accent;
+        return .{
+            .text = shortTemp(mc, units, buf),
+            .frac = @as(f64, @floatFromInt(@max(mc, 0))) / 100_000.0,
+            .color = color,
+            .icon = icon,
+            .have = true,
+        };
+    }
+
     /// Click: next GPU when there are several (saved as system_gpu).
     pub fn click(self: *SystemWidget) void {
         if (self.temps.cycleGpu()) {
@@ -2895,6 +3022,48 @@ pub const SystemWidget = struct {
         }
     }
 };
+
+/// One reading of the System card's columns style.
+const SysCol = struct { text: []const u8, frac: f64, color: u32, icon: []const u8, have: bool };
+
+/// A vertical pill (capsule) w wide with round ends, AA rims. One blend
+/// per pixel from the distance to its centre line, so a translucent track
+/// has no darker overlap where the caps meet the body.
+fn fillPill(c: Canvas, x: i64, y: i64, w: i64, h: i64, color: u32) void {
+    if (w <= 0 or h <= 0) return;
+    const rad: f64 = @as(f64, @floatFromInt(@min(w, h))) / 2.0;
+    const cx: f64 = @as(f64, @floatFromInt(x)) + @as(f64, @floatFromInt(w)) / 2.0;
+    const y0: f64 = @as(f64, @floatFromInt(y)) + rad;
+    const y1: f64 = @as(f64, @floatFromInt(y + h)) - rad;
+    var py = y;
+    while (py < y + h) : (py += 1) {
+        const fy = @as(f64, @floatFromInt(py)) + 0.5;
+        const dy = if (fy < y0) y0 - fy else if (fy > y1) fy - y1 else 0.0;
+        var px = x;
+        while (px < x + w) : (px += 1) {
+            const dx = @as(f64, @floatFromInt(px)) + 0.5 - cx;
+            c.blendCov(px, py, color, rad + 0.5 - @sqrt(dx * dx + dy * dy));
+        }
+    }
+}
+
+/// Compact rate for a narrow column: "0B", "512B", "12K", "1.2M", "15M".
+pub fn fmtRateShort(buf: []u8, bytes_per_s: u64) []const u8 {
+    const b: f64 = @floatFromInt(bytes_per_s);
+    if (bytes_per_s < 1024) return std.fmt.bufPrint(buf, "{d}B", .{bytes_per_s}) catch "";
+    const units = [_]struct { div: f64, tag: []const u8 }{
+        .{ .div = 1024.0, .tag = "K" },
+        .{ .div = 1024.0 * 1024.0, .tag = "M" },
+        .{ .div = 1024.0 * 1024.0 * 1024.0, .tag = "G" },
+    };
+    for (units, 0..) |u, i| {
+        const v = b / u.div;
+        if (v >= 1024.0 and i + 1 < units.len) continue;
+        if (v < 10.0) return std.fmt.bufPrint(buf, "{d:.1}{s}", .{ v, u.tag }) catch "";
+        return std.fmt.bufPrint(buf, "{d}{s}", .{ @as(u64, @intFromFloat(@round(v))), u.tag }) catch "";
+    }
+    return "";
+}
 
 fn parseKbAfterColon(line: []const u8) u64 {
     const idx = std.mem.indexOfScalar(u8, line, ':') orelse return 0;
@@ -6080,6 +6249,26 @@ pub fn noteSlot(w: *const Widget) ?u8 {
         .note1 => 1,
         else => null,
     };
+}
+
+// --- system card tests -----------------------------------------------------
+
+test "system: compact rates for the columns" {
+    var b: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("0B", fmtRateShort(&b, 0));
+    try std.testing.expectEqualStrings("512B", fmtRateShort(&b, 512));
+    try std.testing.expectEqualStrings("1.5K", fmtRateShort(&b, 1536));
+    try std.testing.expectEqualStrings("120K", fmtRateShort(&b, 120 * 1024));
+    try std.testing.expectEqualStrings("1.0M", fmtRateShort(&b, 1024 * 1024));
+    try std.testing.expectEqualStrings("15M", fmtRateShort(&b, 15 * 1024 * 1024));
+    try std.testing.expectEqualStrings("2.0G", fmtRateShort(&b, 2 * 1024 * 1024 * 1024));
+}
+
+test "system: style names" {
+    try std.testing.expectEqual(SystemStyle.columns, SystemStyle.parse("columns").?);
+    try std.testing.expectEqual(SystemStyle.bars, SystemStyle.parse("bars").?);
+    try std.testing.expectEqual(SystemStyle.rings, SystemStyle.parse("Rings").?);
+    try std.testing.expect(SystemStyle.parse("dial") == null);
 }
 
 // --- widget id tests -------------------------------------------------------

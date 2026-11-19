@@ -2638,10 +2638,10 @@ const CARD_OPTIONS = [_]CardOption{
     .{
         .key = "system_style",
         .title = "System card",
-        .subtitle = "Rows with bars, or ring gauges for CPU, memory, GPU and temperature",
-        .labels = &.{ "Bars", "Rings" },
-        .values = &.{ .{ .str = "bars" }, .{ .str = "rings" } },
-        .default = .{ .str = "bars" },
+        .subtitle = "Columns for CPU, temperatures, memory, GPU and network; rows with bars; or ring gauges",
+        .labels = &.{ "Columns", "Bars", "Rings" },
+        .values = &.{ .{ .str = "columns" }, .{ .str = "bars" }, .{ .str = "rings" } },
+        .default = .{ .str = "columns" },
     },
     .{
         .key = "system_temp_units",

@@ -102,7 +102,7 @@ const JsonConfig = struct {
     clock_24h: ?bool = null,
     clock_seconds: ?bool = null,
     clock_date: ?bool = null,
-    // System card look: "bars" | "rings".
+    // System card look: "columns" | "bars" | "rings".
     system_style: ?[]const u8 = null,
     // Processes card (procs.zig).
     processes_sort: ?[]const u8 = null,
@@ -188,7 +188,7 @@ const ShellConfig = struct {
     fastfetch_config: []const u8 = "",
     /// Clock face: digital | flip | stacked ("macos") | classic.
     clock: widgets_mod.ClockLayout = .{},
-    system_style: widgets_mod.SystemStyle = .bars,
+    system_style: widgets_mod.SystemStyle = .columns,
     /// Processes card: order, rows (3-8), sample interval, group by name.
     processes_sort: procs_service.Sort = .cpu,
     processes_count: u32 = 6,
@@ -541,8 +541,8 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
     if (parsed.clock_date) |v| cfg.clock.date = v;
     if (parsed.system_style) |v| {
         cfg.system_style = widgets_mod.SystemStyle.parse(v) orelse blk: {
-            logging.warn("config: system_style \"{s}\" unknown (bars|rings) — using bars", .{v});
-            break :blk .bars;
+            logging.warn("config: system_style \"{s}\" unknown (columns|bars|rings) — using columns", .{v});
+            break :blk .columns;
         };
     }
     if (parsed.processes_sort) |v| {
