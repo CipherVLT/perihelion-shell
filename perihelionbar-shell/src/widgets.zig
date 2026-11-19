@@ -1492,7 +1492,7 @@ pub const ClockWidget = struct {
 /// Text drawn at an integer multiple of the font size, baseline-aligned —
 /// the big temperature. Each glyph is rasterized uncached (glyphScaled), so
 /// keep it to a few characters.
-fn drawScaledText(c: Canvas, x: i64, baseline: i64, text: []const u8, scale: u32, color: u32) i64 {
+pub fn drawScaledText(c: Canvas, x: i64, baseline: i64, text: []const u8, scale: u32, color: u32) i64 {
     if (scale <= 1) return c.drawText(x, baseline, text, color);
     var pen = x;
     var i: usize = 0;
