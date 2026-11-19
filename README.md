@@ -147,6 +147,19 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 **Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `perihelionbar-shell overview toggle` works from scripts too.
 
+**Glance (`Super + I` on the Perihelion ISO's MangoWM):** a dashboard over your windows: a glass panel in the middle of the screen with the wallpaper dimmed behind it, a row of tabs (**Overview**, **Media**, **Weather**) and a gear that opens Perihelion Settings. The Overview has the desktop cards themselves: Clock and Weather on the left, the Calendar in the middle, User and Media on the right, and System along the bottom. They look and behave like their desktop versions: the calendar's month arrows work, and so do the media buttons. Clicking the Weather card opens the Weather tab, and clicking the Media card anywhere but its buttons opens the Media tab. Those two tabs say "Coming soon" for now. **Esc** or a click outside the panel closes it. You don't need the cards on your desktop to use Glance.
+
+- From a script: `perihelion-shell glance [toggle|open|close] [overview|media|weather]`. The tab picks the page an open shows, and `toggle media` while Glance is up on another page switches to Media instead of closing.
+- Light by design: nothing exists while it's closed (no surface, no buffers, no card copies, no timers, no `playerctl` or `curl` runs). Open, its cards tick on their own schedules, and the panel is drawn again only when something on it changes. After the 220 ms fade-and-grow there is no animation running. Weather comes from the answer the bar and the desktop card already share, so opening Glance doesn't fetch it again.
+- **Perihelion Settings → Appearance → Glance**, or in `shell.json`:
+
+  ```json
+  "glance_enabled": true,
+  "glance_start_tab": "overview"
+  ```
+
+  `glance_enabled: false` makes the command answer that Glance is off. `glance_start_tab` (`overview`, `media` or `weather`) is the page a plain toggle opens on.
+
 ## Bar extras
 
 **Brightness OSD:** when the screen brightness changes (the brightness keys run `brightnessctl`), the bar shows the same panel as the volume OSD: a sun icon, the level bar and the percentage, gone about 2 seconds after the last change. The bar doesn't listen to the keyboard: it keeps the backlight's `actual_brightness` file open and the kernel wakes it on every change (plus one tiny re-read a second for drivers that don't signal). It picks the device brightnessctl would (firmware over platform over raw). Without a backlight (desktops, virtual machines) it does nothing at all. Turn it off with `"bar": { "brightness_osd": false }` in `~/.config/perihelionbar/config.json`.
