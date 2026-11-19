@@ -147,6 +147,10 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 **Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `perihelionbar-shell overview toggle` works from scripts too.
 
+## Bar extras
+
+**Brightness OSD:** when the screen brightness changes (the brightness keys run `brightnessctl`), the bar shows the same panel as the volume OSD: a sun icon, the level bar and the percentage, gone about 2 seconds after the last change. The bar doesn't listen to the keyboard: it keeps the backlight's `actual_brightness` file open and the kernel wakes it on every change (plus one tiny re-read a second for drivers that don't signal). It picks the device brightnessctl would (firmware over platform over raw). Without a backlight (desktops, virtual machines) it does nothing at all. Turn it off with `"bar": { "brightness_osd": false }` in `~/.config/perihelionbar/config.json`.
+
 ## Welcome & Config
 
 **Perihelion Bar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.

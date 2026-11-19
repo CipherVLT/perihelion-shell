@@ -940,6 +940,8 @@ extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 const wsvc = @import("weather");
 // CPU/GPU temperature service shared with the desktop System card.
 const tsvc = @import("temps");
+// Backlight reader for the brightness OSD: src/backlight.zig.
+const blsvc = @import("backlight");
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
@@ -2842,6 +2844,10 @@ const DockSettings = struct {
 /// Appearance) — config.json "bar"."enabled".
 const BarSettings = struct {
     enabled: bool = true,
+    /// Brightness OSD: shown when the backlight changes (the compositor's
+    /// brightness keys run brightnessctl themselves). Off = never reads
+    /// the backlight at all.
+    brightness_osd: bool = true,
 };
 
 // Today's exact hardcoded layout/order — see the header comment above.
@@ -4047,7 +4053,7 @@ const PopupMenu = struct {
     /// when kind == .volume — like `menu` is dbusmenu-only.
     vol_count: usize = 0,
     /// 60ms-tick frame the volume OSD was (re)armed on; the tick dismisses
-    /// it past VOL_OSD_ALIVE_TICKS. Only meaningful for .volume_osd.
+    /// it past VOL_OSD_ALIVE_TICKS. Only meaningful for the OSDs (isOsd).
     osd_since: u32 = 0,
     /// Mixer slider drag: entry being dragged (or null), its live value,
     /// the press origin, and whether the pointer moved past click threshold.
@@ -4100,7 +4106,12 @@ const PopupMenu = struct {
 
 /// What a PopupMenu's rows are sourced from; selects the draw and click
 /// paths in drawPopup / the pointer-button handler.
-const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu };
+const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu, brightness_osd };
+
+/// The timed, click-through feedback popups (volume and brightness).
+fn isOsd(kind: PopupKind) bool {
+    return kind == .volume_osd or kind == .brightness_osd;
+}
 
 /// Creates the xdg_popup surface a popup menu draws on, anchored to a thin
 /// rect at the clicked x position and spanning the bar's full height — the
@@ -5046,8 +5057,9 @@ fn showVolumeOSD(bar: *Bar) void {
     if (!parseVolumePoll(bar.volume.text(), &pbuf).ok) return;
     if (bar.popup) |pm| {
         if (pm.kind == .volume) return;
-        if (pm.kind != .volume_osd) closePopup(bar);
+        if (!isOsd(pm.kind)) closePopup(bar);
     }
+    if (bar.popup) |*pm| pm.kind = .volume_osd; // a brightness OSD turns into this one
     if (bar.popup == null) {
         const ps = createPopupSurface(bar, VOL_OSD_WIDTH, VOL_OSD_HEIGHT, true) orelse return;
         bar.popup = PopupMenu{
@@ -5067,22 +5079,37 @@ fn showVolumeOSD(bar: *Bar) void {
 }
 
 fn drawVolumeOSD(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
-    const text_color = current_config.appearance.text_color;
     var pbuf: [16]u8 = undefined;
     const vol = parseVolumePoll(bar.volume.text(), &pbuf);
     if (!vol.ok) return;
     // Muted reads dimmed throughout; the bar
     // underneath still shows where it will land on unmute.
-    const col = if (vol.muted) current_config.appearance.popup_disabled_color else text_color;
-    const pct = vol.pct;
+    const col = if (vol.muted) current_config.appearance.popup_disabled_color else current_config.appearance.text_color;
     var vbuf: [8]u8 = undefined;
-    const shown = if (vol.muted) "muted" else std.fmt.bufPrint(&vbuf, "{d}%", .{pct}) catch "?";
+    const shown = if (vol.muted) "muted" else std.fmt.bufPrint(&vbuf, "{d}%", .{vol.pct}) catch "?";
+    const fill_col = if (vol.muted) current_config.appearance.popup_disabled_color else current_config.appearance.workspace_active_color;
+    drawOsdBody(bar, pm, pixels, volumeIconFor(vol.pct), shown, vol.pct, col, fill_col);
+}
+
+/// Brightness OSD: the same panel as the volume OSD, a sun icon that grows
+/// with the level, the percentage and the level bar.
+fn drawBrightnessOSD(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
+    const pct = g_bright_pct;
+    var vbuf: [8]u8 = undefined;
+    const shown = std.fmt.bufPrint(&vbuf, "{d}%", .{pct}) catch "?";
+    const icon: []const u8 = if (pct < 34) "\u{F00DE}" else if (pct < 67) "\u{F00DF}" else "\u{F00E0}";
+    drawOsdBody(bar, pm, pixels, icon, shown, pct, current_config.appearance.text_color, current_config.appearance.workspace_active_color);
+}
+
+/// The OSD panel's content: icon (2x, like the bar's module glyphs) on the
+/// left, `shown` right-aligned, and a level bar filling `pct` between them.
+fn drawOsdBody(bar: *Bar, pm: *PopupMenu, pixels: [*]u32, icon: []const u8, shown: []const u8, pct: u8, col: u32, fill_col: u32) void {
     const mid: i64 = @divTrunc(@as(i64, VOL_OSD_HEIGHT), 2);
     const baseline = mid + @divTrunc(@as(i64, bar.font.ascentPx()) - @as(i64, bar.font.descentPx()), 2);
-    // Speaker icon, oversized like the bar's module glyphs, vertically
-    // centered. Falls back to 1x on raster failure.
+    // Icon, oversized like the bar's module glyphs, vertically centered.
+    // Falls back to 1x on raster failure.
     var ii: usize = 0;
-    const icp = nextUtf8Codepoint(volumeIconFor(pct), &ii) orelse 0;
+    const icp = nextUtf8Codepoint(icon, &ii) orelse 0;
     const big = if (ii > 0) bar.font.glyphScaled(icp, 2) catch null else null;
     defer if (big) |b| bar.font.gpa.free(b.pixels);
     var x0: i64 = VOL_OSD_PAD;
@@ -5092,7 +5119,6 @@ fn drawVolumeOSD(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
         x0 += @as(i64, b.advance_x);
     } else {
         var gi: usize = 0;
-        const icon = volumeIconFor(pct);
         while (nextUtf8Codepoint(icon, &gi)) |cp| {
             x0 += drawGlyphAt(pixels, pm.width, pm.height, bar.font, x0, baseline, cp, col, 0, pm.width);
         }
@@ -5111,13 +5137,72 @@ fn drawVolumeOSD(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
     if (sx1 > sx0) {
         const sy = mid - @divTrunc(VOL_OSD_BAR_H, 2);
         const track_col = current_config.appearance.popup_separator_color;
-        const fill_col = if (vol.muted) current_config.appearance.popup_disabled_color else current_config.appearance.workspace_active_color;
         fillRoundedRect(pixels, pm.width, pm.height, sx0, sy, sx1, sy + VOL_OSD_BAR_H, 4, track_col);
-        const fw: i64 = @divTrunc((sx1 - sx0) * @as(i64, pct), 100);
+        const fw: i64 = @divTrunc((sx1 - sx0) * @as(i64, @min(pct, 100)), 100);
         if (fw > 0) {
             fillRoundedRect(pixels, pm.width, pm.height, sx0, sy, sx0 + fw, sy + VOL_OSD_BAR_H, 4, fill_col);
         }
     }
+}
+
+// --- brightness OSD ---------------------------------------------------------
+//
+// The compositor's brightness keys run `brightnessctl set ±5%` themselves;
+// the bar only watches the backlight (backlight.zig) and shows the same
+// panel as the volume OSD when the value moves. No device: nothing is
+// opened, polled or drawn. The bar never sets brightness, so there is no
+// echo to suppress.
+
+var g_backlight: blsvc.Backlight = .{};
+var g_bright_pct: u8 = 0;
+
+/// Opens the backlight once at start (bar process only, and only with the
+/// OSD on). Logs one line either way.
+fn initBacklight() void {
+    if (dock_mode or !current_config.bar.brightness_osd) return;
+    g_backlight = blsvc.Backlight.init(blsvc.classDir());
+    if (!g_backlight.present()) {
+        logging.step("brightness OSD: no backlight device, off", .{});
+        return;
+    }
+    _ = g_backlight.sample(); // first read: records the level, no OSD
+    g_bright_pct = g_backlight.pct();
+    logging.step("brightness OSD: watching {s} ({d}%)", .{ g_backlight.name(), g_bright_pct });
+}
+
+/// Re-reads the backlight (POLLPRI wake or the 1 s fallback); a change shows
+/// the OSD on every bar.
+fn checkBacklight(bars_slice: []Bar) void {
+    if (!current_config.bar.brightness_osd) return;
+    const pct = g_backlight.sample() orelse return;
+    g_bright_pct = pct;
+    for (bars_slice) |*b| showBrightnessOSD(b);
+}
+
+/// Shows (or refreshes + re-arms) the brightness OSD. Never over the mixer
+/// or another panel the user opened; an open volume OSD turns into it.
+fn showBrightnessOSD(bar: *Bar) void {
+    if (bar.popup) |pm| {
+        if (pm.kind == .volume) return;
+        if (!isOsd(pm.kind)) closePopup(bar);
+    }
+    if (bar.popup) |*pm| {
+        pm.kind = .brightness_osd;
+        pm.osd_since = hover_frame;
+        drawPopup(bar) catch |err| {
+            logging.err("popup draw failed: {}", .{err});
+        };
+        return;
+    }
+    const ps = createPopupSurface(bar, VOL_OSD_WIDTH, VOL_OSD_HEIGHT, true) orelse return;
+    bar.popup = PopupMenu{
+        .surface = ps.surface,
+        .xdg_surface = ps.xdg_surface,
+        .popup = ps.popup,
+        .kind = .brightness_osd,
+        .osd_since = hover_frame,
+    };
+    wirePopup(bar, ps, false);
 }
 
 fn drawPopup(bar: *Bar) !void {
@@ -5143,6 +5228,7 @@ fn drawPopup(bar: *Bar) !void {
         .layout_picker => drawLayoutPickerRows(bar, pm, pixels),
         .volume => drawVolumeRows(bar, pm, pixels),
         .volume_osd => drawVolumeOSD(bar, pm, pixels),
+        .brightness_osd => drawBrightnessOSD(bar, pm, pixels),
         .dock_menu => drawDockMenuRows(bar, pm, pixels),
     }
 
@@ -6056,6 +6142,7 @@ fn realMain() !void {
         if (cava_state.pending_fd >= 0) _ = posix.system.close(cava_state.pending_fd);
     }
     if (cavaWanted()) startCavaFetch();
+    initBacklight();
 
     // Main event loop: multiplex the Wayland display fd (compositor events),
     // a 1s timerfd (clock ticks), and the compositor's workspace-event socket
@@ -6096,6 +6183,8 @@ fn realMain() !void {
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [29] cava visualizer pipe, refreshed below
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [30] vol_fetch_fd, refreshed below
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [31] vol_sub_fd (pactl subscribe), refreshed below
+        // [32] backlight value file: sysfs signals a change with POLLPRI.
+        .{ .fd = g_backlight.pollFd(), .events = posix.POLL.PRI, .revents = 0 },
     };
     comptime {
         if (MAX_CUSTOM_SCRIPTS != 4) @compileError("poll_fds' custom-script slots [21..28] are hand-unrolled for MAX_CUSTOM_SCRIPTS == 4; update both if that changes");
@@ -6120,8 +6209,13 @@ fn realMain() !void {
         poll_fds[29].fd = cava_state.pending_fd;
         poll_fds[30].fd = vol_fetch_fd;
         poll_fds[31].fd = vol_sub_fd;
+        poll_fds[32].fd = g_backlight.pollFd();
 
         _ = try posix.poll(&poll_fds, -1);
+
+        if (poll_fds[32].revents & (posix.POLL.PRI | posix.POLL.ERR) != 0) {
+            checkBacklight(bars[0..bar_count]);
+        }
 
         if (poll_fds[0].revents & posix.POLL.IN != 0) {
             if (display.dispatch() != .SUCCESS) return error.DispatchFailed;
@@ -6136,6 +6230,9 @@ fn realMain() !void {
             // reaping exactly at EOF, so it's retried until it succeeds.
             reapChildren();
             second_count += 1;
+            // Fallback for backlight drivers that don't signal POLLPRI: one
+            // tiny pread a second, only when a device was found.
+            if (g_backlight.present()) checkBacklight(bars[0..bar_count]);
             // Weather refetches (or adopts the desktop card's fresh answer
             // from the shared cache) whenever weather.zig says one is due.
             if (!dock_mode) weather.pump();
@@ -6406,7 +6503,7 @@ fn realMain() !void {
                 if (b.popup) |*pm| {
                     // The volume OSD is timed, not hovered: dismiss ~2s
                     // after its last change.
-                    if (pm.kind == .volume_osd and hover_frame -% pm.osd_since > VOL_OSD_ALIVE_TICKS) {
+                    if (isOsd(pm.kind) and hover_frame -% pm.osd_since > VOL_OSD_ALIVE_TICKS) {
                         closePopup(b);
                     }
                     var popup_redraw = false;
@@ -11195,8 +11292,8 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
             if (bar.pointer_over_popup) {
                 if (e.button != BTN_LEFT) return;
                 const pm = &(bar.popup orelse return);
-                // The OSD is pure feedback: any click dismisses it.
-                if (pm.kind == .volume_osd) {
+                // The OSDs are pure feedback: any click dismisses them.
+                if (isOsd(pm.kind)) {
                     closePopup(bar);
                     return;
                 }
@@ -11260,7 +11357,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                             startVolumeListFetch();
                             return;
                         },
-                        .volume_osd => {}, // dismissed before hit-test above; unreachable here
+                        .volume_osd, .brightness_osd => {}, // dismissed before hit-test above; unreachable here
                         .dock_menu => {
                             if (id < 0) return;
                             const i: usize = @intCast(id);
