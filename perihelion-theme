@@ -1345,6 +1345,11 @@ def mako_config(t):
         f"border-color={c['red']}",
         "default-timeout=0",
         "",
+        "# Do not disturb (the bar's notifications panel runs",
+        "# makoctl mode -a/-r do-not-disturb): no pop-ups, history still kept.",
+        "[mode=do-not-disturb]",
+        "invisible=1",
+        "",
     ])
 
 

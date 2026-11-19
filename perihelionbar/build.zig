@@ -99,6 +99,14 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     exe_mod.addImport("backlight", backlight_mod);
+    // Notification-center data behind the bar's notifications panel.
+    const notifs_mod = b.createModule(.{
+        .root_source_file = b.path("src/notifs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("notifs", notifs_mod);
     // Network-rate service behind the shell's Network card (same
     // convention: shared source, tests run from this build).
     const netrate_mod = b.createModule(.{
@@ -210,6 +218,12 @@ pub fn build(b: *Build) !void {
     const backlight_tests = b.addTest(.{ .root_module = backlight_mod, .use_llvm = true, .use_lld = true });
     const backlight_test_step = b.step("test-backlight", "Run src/backlight.zig unit tests");
     backlight_test_step.dependOn(&b.addRunArtifact(backlight_tests).step);
+
+    // `zig build test-notifs`: src/notifs.zig (makoctl output samples,
+    // garbage and huge inputs, the state file, a fake /proc under /tmp).
+    const notifs_tests = b.addTest(.{ .root_module = notifs_mod, .use_llvm = true, .use_lld = true });
+    const notifs_test_step = b.step("test-notifs", "Run src/notifs.zig unit tests");
+    notifs_test_step.dependOn(&b.addRunArtifact(notifs_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.

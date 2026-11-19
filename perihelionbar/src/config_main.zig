@@ -99,6 +99,9 @@ const ModuleKind = enum {
     layout,
     /// Perihelion: the distro-logo app launcher at the far left.
     distro,
+    /// Notification center bell (main.zig's ModuleKind.notifications). On
+    /// unless config.json sets it "enabled": false.
+    notifications,
 };
 
 // Every ModuleKind valid in the "right" group per main.zig's drawRightGroup
@@ -115,6 +118,7 @@ const RIGHT_MODULE_KINDS = [_]ModuleKind{
     .battery, .custom_script, .cava, .layout,
     // Perihelion: the clock can sit on the right too (superdock style).
     .clock,
+    .notifications,
 };
 
 // The kind set shared by the Left and Center groups. main.zig now draws
@@ -174,6 +178,7 @@ const DEFAULT_RIGHT = [_]ModuleEntry{
     .{ .kind = .volume, .enabled = true, .in_drawer = true },
     .{ .kind = .pacman, .enabled = true, .in_drawer = true },
     .{ .kind = .tray, .enabled = true, .in_drawer = true },
+    .{ .kind = .notifications, .enabled = true },
     .{ .kind = .weather, .enabled = true },
 };
 const CENTER_LAUNCHERS = [_]LauncherButton{
@@ -842,7 +847,9 @@ const ModuleGroup = struct {
                 }
             }
             if (found or self.len >= self.rows.len) continue;
-            self.rows[self.len] = .{ .entry = .{ .kind = kind, .enabled = false } };
+            // The bell is on unless config.json says otherwise (the bar
+            // adds it the same way), so a missing entry shows enabled.
+            self.rows[self.len] = .{ .entry = .{ .kind = kind, .enabled = kind == .notifications } };
             self.len += 1;
         }
     }
@@ -4180,6 +4187,7 @@ fn moduleKindDisplayName(kind: ModuleKind) [:0]const u8 {
         .cava => "Audio Visualizer",
         .layout => "Mango Layout",
         .distro => "App Launcher (distro logo)",
+        .notifications => "Notifications",
     };
 }
 

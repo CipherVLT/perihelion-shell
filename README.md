@@ -151,6 +151,13 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 **Brightness OSD:** when the screen brightness changes (the brightness keys run `brightnessctl`), the bar shows the same panel as the volume OSD: a sun icon, the level bar and the percentage, gone about 2 seconds after the last change. The bar doesn't listen to the keyboard: it keeps the backlight's `actual_brightness` file open and the kernel wakes it on every change (plus one tiny re-read a second for drivers that don't signal). It picks the device brightnessctl would (firmware over platform over raw). Without a backlight (desktops, virtual machines) it does nothing at all. Turn it off with `"bar": { "brightness_osd": false }` in `~/.config/perihelionbar/config.json`.
 
+**Notifications:** mako still shows the pop-ups; the bar adds a bell (module `notifications`, on unless `config.json` gives it `"enabled": false`). Clicking it opens a panel with mako's recent notifications, newest first (up to 20 kept, 10 shown with a "+N older" line): the app, the title and the first line of the text. mako's history has no times, so there is no age. Underneath:
+
+- **Do not disturb** turns mako's `do-not-disturb` mode on or off (`makoctl mode -a` / `-r`): no pop-ups, while the history still fills. The bell is crossed out while it's on. mako forgets modes when it restarts, so the bar saves the choice in `~/.local/state/perihelionbar/notifications` and puts it back when mako starts again. The mode comes from the `[mode=do-not-disturb]` / `invisible=1` section `perihelion-theme` writes into `~/.config/mako/config` (a mako config you wrote yourself needs those two lines).
+- **Clear all** dismisses the pop-ups (`makoctl dismiss --all`) and empties the panel. mako can't delete its history, so the bar remembers the newest notification it cleared (in the same state file) and hides everything up to it, until mako restarts.
+
+makoctl runs only when you open the panel or press one of the two buttons, never on a timer, and is stopped if it doesn't answer within 3 seconds. Without mako running, the bell is dimmed and the panel says so. The bell shows no unread count: that would mean asking mako every few seconds.
+
 ## Welcome & Config
 
 **Perihelion Bar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.

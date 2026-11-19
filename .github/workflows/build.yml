@@ -81,6 +81,9 @@ jobs:
       - name: Unit-test the backlight reader (fake class trees)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-backlight
+      - name: Unit-test the notification-center data (makoctl samples, state file)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-notifs
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc

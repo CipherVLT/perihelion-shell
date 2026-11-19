@@ -942,6 +942,8 @@ const wsvc = @import("weather");
 const tsvc = @import("temps");
 // Backlight reader for the brightness OSD: src/backlight.zig.
 const blsvc = @import("backlight");
+// Notification-center data (makoctl history parsing, state file): src/notifs.zig.
+const nsvc = @import("notifs");
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
@@ -2345,6 +2347,8 @@ const Action = union(enum) {
     /// Opens the volume mixer popup (the volume module's click). Toggles:
     /// clicking again while open closes it.
     open_volume_mixer,
+    /// Opens/closes the notifications panel (the bell's click).
+    toggle_notifications,
 };
 
 /// What a vertical scroll wheel does over a ClickRegion. Separate from Action
@@ -2596,6 +2600,10 @@ const ModuleKind = enum {
     /// Perihelion: the distro-logo app launcher (GNOME's Activities / Arc
     /// Menu spot). Always drawn first in the left group; opens the app drawer.
     distro,
+    /// Notification center: a bell (crossed out in Do not disturb, dimmed
+    /// without mako) opening the mako history panel. On unless a config
+    /// sets it "enabled": false (see withNotifications).
+    notifications,
 };
 
 /// One entry in a left/center/right module list. Flat + all-optional
@@ -2865,6 +2873,7 @@ const DEFAULT_RIGHT = [_]ModuleEntry{
     .{ .kind = .drawer_toggle, .enabled = true },
     .{ .kind = .volume, .enabled = true, .in_drawer = true },
     .{ .kind = .tray, .enabled = true, .in_drawer = true },
+    .{ .kind = .notifications, .enabled = true },
     .{ .kind = .weather, .enabled = true },
 };
 
@@ -3415,7 +3424,7 @@ fn loadConfigFromFile() ?Config {
         .modules = .{
             .left = parsed.modules.left,
             .center = parsed.modules.center,
-            .right = parsed.modules.right,
+            .right = withNotifications(allocator, parsed.modules.right),
         },
         .launchers = parsed.launchers,
         .dock = parsed.dock,
@@ -4106,7 +4115,7 @@ const PopupMenu = struct {
 
 /// What a PopupMenu's rows are sourced from; selects the draw and click
 /// paths in drawPopup / the pointer-button handler.
-const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu, brightness_osd };
+const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu, brightness_osd, notifications };
 
 /// The timed, click-through feedback popups (volume and brightness).
 fn isOsd(kind: PopupKind) bool {
@@ -5056,7 +5065,7 @@ fn showVolumeOSD(bar: *Bar) void {
     var pbuf: [16]u8 = undefined;
     if (!parseVolumePoll(bar.volume.text(), &pbuf).ok) return;
     if (bar.popup) |pm| {
-        if (pm.kind == .volume) return;
+        if (pm.kind == .volume or pm.kind == .notifications) return;
         if (!isOsd(pm.kind)) closePopup(bar);
     }
     if (bar.popup) |*pm| pm.kind = .volume_osd; // a brightness OSD turns into this one
@@ -5183,7 +5192,7 @@ fn checkBacklight(bars_slice: []Bar) void {
 /// or another panel the user opened; an open volume OSD turns into it.
 fn showBrightnessOSD(bar: *Bar) void {
     if (bar.popup) |pm| {
-        if (pm.kind == .volume) return;
+        if (pm.kind == .volume or pm.kind == .notifications) return;
         if (!isOsd(pm.kind)) closePopup(bar);
     }
     if (bar.popup) |*pm| {
@@ -5203,6 +5212,389 @@ fn showBrightnessOSD(bar: *Bar) void {
         .osd_since = hover_frame,
     };
     wirePopup(bar, ps, false);
+}
+
+// --- notification center -----------------------------------------------------
+//
+// mako keeps showing the pop-ups; the bell module opens a panel listing its
+// history (`makoctl history -j`, parsed by notifs.zig) with Do not disturb
+// and Clear all. makoctl runs as one nonblocking child only when the panel
+// opens or after one of those two buttons, never on a redraw or a timer, and
+// is killed if it hangs past NOTIF_TIMEOUT_MS. Without mako running there is
+// no spawn at all: the bell is dimmed and the panel says so. The only
+// periodic work is a /proc scan every NOTIF_PID_SCAN_S seconds to notice mako
+// (re)starting, which re-applies a saved Do-not-disturb (mako forgets modes).
+
+const NOTIF_TIMEOUT_MS: i64 = 3000;
+const NOTIF_PID_SCAN_S: i64 = 30;
+const NOTIF_W: i32 = 360;
+const NOTIF_HEAD_H: i32 = 32;
+const NOTIF_ITEM_H: i32 = 42;
+const NOTIF_MSG_H: i32 = 34;
+const NOTIF_MORE_H: i32 = 24;
+const NOTIF_ACTION_H: i32 = 28;
+const NOTIF_MAX_SHOWN: usize = 10;
+const NOTIF_PAD_X: i64 = 14;
+const NOTIF_ICON_BELL = "\u{F009A}";
+const NOTIF_ICON_BELL_OFF = "\u{F009B}";
+
+const NotifJob = enum { refresh, clear, dnd_on, dnd_off };
+
+var g_notif_hist: nsvc.History = .{};
+var g_notif_state: nsvc.State = .{};
+var g_notif_state_path_buf: [512]u8 = undefined;
+var g_notif_state_path: ?[:0]const u8 = null;
+var g_mako_pid: u32 = 0;
+/// The last makoctl run failed (mako gone, makoctl missing) or hung.
+var g_makoctl_failed: bool = false;
+var g_makoctl_timed_out: bool = false;
+var g_notif_fd: posix.fd_t = -1;
+var g_notif_child: c_int = -1;
+var g_notif_started_ms: i64 = 0;
+var g_notif_job: NotifJob = .refresh;
+var g_notif_buf: [nsvc.MAX_READ]u8 = undefined;
+var g_notif_len: usize = 0;
+/// The bar whose bell asked for the panel; it opens once makoctl answers.
+var g_notif_open_bar: ?*Bar = null;
+var g_notif_last_scan: i64 = 0;
+
+/// The bell module is on: an enabled `notifications` entry in the right
+/// group (loadConfig adds one when a config doesn't name the kind).
+fn notifModuleOn() bool {
+    if (dock_mode) return false;
+    for (current_config.modules.right) |e| {
+        if (e.kind == .notifications) return e.enabled;
+    }
+    return false;
+}
+
+/// Startup: the state file, mako's PID, and a saved Do-not-disturb put
+/// back into mako.
+fn initNotifications() void {
+    if (!notifModuleOn()) return;
+    const xdg_state = std.mem.span(std.c.getenv("XDG_STATE_HOME") orelse @as([*:0]const u8, ""));
+    const home = std.mem.span(std.c.getenv("HOME") orelse @as([*:0]const u8, ""));
+    g_notif_state_path = nsvc.statePath(&g_notif_state_path_buf, xdg_state, home);
+    if (g_notif_state_path) |p| g_notif_state = nsvc.loadState(p);
+    _ = scanMako(true);
+}
+
+/// Looks for mako (startup, a bell click, every NOTIF_PID_SCAN_S). A new
+/// PID gets the saved Do-not-disturb. True when running-ness changed.
+fn scanMako(force_apply: bool) bool {
+    const pid = nsvc.findPid("/proc", "mako", null);
+    const changed = (pid == 0) != (g_mako_pid == 0);
+    const new_pid = pid != 0 and pid != g_mako_pid;
+    g_mako_pid = pid;
+    if (pid != 0 and (new_pid or force_apply) and g_notif_state.dnd) {
+        spawnDetached("makoctl mode -a " ++ nsvc.DND_MODE ++ " >/dev/null 2>&1");
+    }
+    if (pid != 0 and changed) g_makoctl_failed = false;
+    return changed;
+}
+
+fn saveNotifState() void {
+    const p = g_notif_state_path orelse return;
+    if (!nsvc.saveState(p, g_notif_state)) logging.warn("notifications: could not write {s}", .{p});
+}
+
+/// Starts one makoctl script (no-op while one is running). Its output is
+/// capped by `head -c` and again by the read buffer.
+fn startMakoctl(job: NotifJob) void {
+    if (g_notif_fd >= 0) return;
+    const history = "{ makoctl history -j 2>/dev/null || echo '" ++ nsvc.FAIL_MARK ++ "'; } | head -c 65536";
+    const script: [:0]const u8 = switch (job) {
+        .refresh => history,
+        .clear => "makoctl dismiss --all >/dev/null 2>&1; " ++ history,
+        .dnd_on => "makoctl mode -a " ++ nsvc.DND_MODE ++ " >/dev/null 2>&1; " ++ history,
+        .dnd_off => "makoctl mode -r " ++ nsvc.DND_MODE ++ " >/dev/null 2>&1; " ++ history,
+    };
+    var pipe_fds: [2]posix.fd_t = undefined;
+    if (std.c.pipe(&pipe_fds) != 0) return;
+    setCloexec(pipe_fds[0]);
+    _ = std.c.fcntl(pipe_fds[0], posix.F.SETFL, @as(c_int, 0o4000)); // O_NONBLOCK
+    const pid = libc_proc.fork();
+    if (pid < 0) {
+        _ = posix.system.close(pipe_fds[0]);
+        _ = posix.system.close(pipe_fds[1]);
+        return;
+    }
+    if (pid == 0) {
+        _ = std.c.dup2(pipe_fds[1], 1);
+        _ = posix.system.close(pipe_fds[1]);
+        _ = posix.system.close(pipe_fds[0]);
+        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", script.ptr, null };
+        _ = std.c.execve("/bin/sh", &argv, std.c.environ);
+        std.c._exit(127);
+    }
+    _ = posix.system.close(pipe_fds[1]);
+    g_notif_fd = pipe_fds[0];
+    g_notif_child = pid;
+    g_notif_started_ms = monoNowMs();
+    g_notif_job = job;
+    g_notif_len = 0;
+    g_makoctl_timed_out = false;
+}
+
+/// The makoctl pipe is readable: collect, and finish at EOF.
+fn onMakoctlReadable(bars_slice: []Bar) void {
+    while (true) {
+        var chunk: [4096]u8 = undefined;
+        const n = posix.read(g_notif_fd, &chunk) catch |err| {
+            if (err == error.WouldBlock) return;
+            break;
+        };
+        if (n == 0) break;
+        const room = g_notif_buf.len - g_notif_len;
+        const take = @min(n, room);
+        @memcpy(g_notif_buf[g_notif_len .. g_notif_len + take], chunk[0..take]);
+        g_notif_len += take;
+    }
+    finishMakoctl(bars_slice, false);
+}
+
+/// The 1 s tick: a makoctl past NOTIF_TIMEOUT_MS is killed and reported;
+/// every NOTIF_PID_SCAN_S, look for mako.
+fn notifTick(bars_slice: []Bar) void {
+    if (g_notif_fd >= 0 and monoNowMs() - g_notif_started_ms > NOTIF_TIMEOUT_MS) {
+        if (g_notif_child > 0) _ = std.c.kill(g_notif_child, std.c.SIG.KILL);
+        logging.warn("notifications: makoctl did not answer in {d} ms, killed", .{NOTIF_TIMEOUT_MS});
+        finishMakoctl(bars_slice, true);
+        return;
+    }
+    const now_s = @divTrunc(monoNowMs(), 1000);
+    if (now_s - g_notif_last_scan >= NOTIF_PID_SCAN_S) {
+        g_notif_last_scan = now_s;
+        if (scanMako(false)) drawAllBars(bars_slice);
+    }
+}
+
+fn finishMakoctl(bars_slice: []Bar, timed_out: bool) void {
+    _ = posix.system.close(g_notif_fd);
+    g_notif_fd = -1;
+    g_notif_child = -1; // reaped by reapChildren on the 1 s tick
+    g_makoctl_timed_out = timed_out;
+    const out = nsvc.splitFail(g_notif_buf[0..g_notif_len]);
+    g_makoctl_failed = timed_out or out.failed;
+    if (g_makoctl_failed) {
+        g_notif_hist = .{};
+    } else {
+        g_notif_hist = nsvc.parseHistory(out.text);
+        if (g_notif_job == .clear) {
+            // mako can't empty its history: remember the newest id it
+            // holds now (the pop-ups just dismissed included) and hide up
+            // to it, for this mako only.
+            g_notif_state.cleared = g_notif_hist.max_id;
+            g_notif_state.pid = g_mako_pid;
+            saveNotifState();
+        }
+        g_notif_hist.hideUpTo(g_notif_state.clearedFor(g_mako_pid));
+    }
+    if (g_notif_open_bar) |b| {
+        g_notif_open_bar = null;
+        if (b.popup == null) openNotifPanel(b);
+    } else {
+        for (bars_slice) |*b| {
+            const pm = &(b.popup orelse continue);
+            if (pm.kind != .notifications) continue;
+            if (pm.vol_count != @as(usize, @intCast(notifPanelHeight()))) {
+                closePopup(b);
+                openNotifPanel(b);
+            } else {
+                drawPopup(b) catch |err| logging.err("popup draw failed: {}", .{err});
+            }
+        }
+    }
+    drawAllBars(bars_slice);
+}
+
+/// The bell's click: close an open panel, else ask makoctl and open the
+/// panel when it answers (at once, with a message, when mako isn't there).
+fn toggleNotifPanel(bar: *Bar) void {
+    if (bar.popup) |pm| {
+        if (pm.kind == .notifications) closePopup(bar);
+        if (!isOsd(pm.kind)) return;
+        closePopup(bar);
+    }
+    _ = scanMako(false);
+    if (g_mako_pid == 0) {
+        g_makoctl_failed = true;
+        g_notif_hist = .{};
+        openNotifPanel(bar);
+        return;
+    }
+    g_notif_open_bar = bar;
+    startMakoctl(.refresh);
+}
+
+/// What the panel body shows instead of rows, if anything.
+fn notifMessage() ?[]const u8 {
+    if (g_mako_pid == 0) return "mako isn't running";
+    if (g_makoctl_timed_out) return "mako didn't answer";
+    if (g_makoctl_failed) return "mako isn't running";
+    if (g_notif_hist.shape == .raw) return g_notif_hist.raw.slice();
+    if (g_notif_hist.count == 0) return "No notifications";
+    return null;
+}
+
+fn notifPanelHeight() i32 {
+    var h: i32 = NOTIF_HEAD_H + POPUP_SEPARATOR_HEIGHT;
+    if (notifMessage() != null) {
+        h += NOTIF_MSG_H;
+    } else {
+        const shown = @min(g_notif_hist.count, NOTIF_MAX_SHOWN);
+        h += @as(i32, @intCast(shown)) * NOTIF_ITEM_H;
+        if (g_notif_hist.count > shown) h += NOTIF_MORE_H;
+    }
+    return h + POPUP_SEPARATOR_HEIGHT + 2 * NOTIF_ACTION_H + 4;
+}
+
+fn openNotifPanel(bar: *Bar) void {
+    if (bar.popup != null) return;
+    const h = notifPanelHeight();
+    const ps = createPopupSurface(bar, NOTIF_W, h, false) orelse return;
+    bar.popup = PopupMenu{
+        .surface = ps.surface,
+        .xdg_surface = ps.xdg_surface,
+        .popup = ps.popup,
+        .kind = .notifications,
+        // Height the surface was made for: a refresh that changes it
+        // rebuilds the panel (same idea as the mixer's vol_count).
+        .vol_count = @intCast(h),
+    };
+    wirePopup(bar, ps, true);
+}
+
+/// Text cut with an ellipsis to `max_w` pixels, drawn at (x, baseline).
+fn drawTextFit(pixels: [*]u32, pm: *PopupMenu, font: *font_mod.Font, x: i64, baseline: i64, text: []const u8, max_w: i64, color: u32) i64 {
+    const ell = "\u{2026}";
+    const full = textPixelWidth(font, text) <= max_w;
+    const ell_w = textPixelWidth(font, ell);
+    var pen = x;
+    var i: usize = 0;
+    while (true) {
+        const before = i;
+        const cp = nextUtf8Codepoint(text, &i) orelse break;
+        const adv: i64 = if (font.glyph(cp)) |g| g.advance_x else |_| 0;
+        if (!full and pen + adv + ell_w > x + max_w) {
+            i = before;
+            var ei: usize = 0;
+            while (nextUtf8Codepoint(ell, &ei)) |ec| pen += drawGlyphAt(pixels, pm.width, pm.height, font, pen, baseline, ec, color, 0, pm.width);
+            break;
+        }
+        pen += drawGlyphAt(pixels, pm.width, pm.height, font, pen, baseline, cp, color, 0, pm.width);
+    }
+    return pen - x;
+}
+
+fn drawNotifSeparator(pixels: [*]u32, pm: *PopupMenu, y: i32) void {
+    const line_y = y + @divTrunc(POPUP_SEPARATOR_HEIGHT, 2);
+    if (line_y < 0 or line_y >= pm.height) return;
+    var x: u32 = @intCast(NOTIF_PAD_X);
+    while (x + @as(u32, @intCast(NOTIF_PAD_X)) < pm.width) : (x += 1) {
+        pixels[@as(u32, @intCast(line_y)) * pm.width + x] = current_config.appearance.popup_separator_color;
+    }
+}
+
+/// The panel: "Notifications" over the newest items (app and summary,
+/// then the body, dimmed), or a message; then Do not disturb and Clear all.
+fn drawNotifPanel(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
+    const font = bar.font;
+    const ap = current_config.appearance;
+    const text_col = ap.text_color;
+    const dim_col = ap.popup_disabled_color;
+    const accent = ap.workspace_active_color;
+    const w: i64 = @intCast(pm.width);
+    const asc: i64 = font.ascentPx();
+    const desc: i64 = font.descentPx();
+    const right = w - NOTIF_PAD_X;
+
+    // Header: title, and the Do-not-disturb state on the right.
+    var y: i32 = 0;
+    const hb = y + @divTrunc(NOTIF_HEAD_H + @as(i32, @intCast(asc - desc)), 2);
+    _ = drawTextFit(pixels, pm, font, NOTIF_PAD_X, hb, "Notifications", w, text_col);
+    if (g_notif_state.dnd) {
+        const tag = NOTIF_ICON_BELL_OFF ++ " Do not disturb";
+        _ = drawTextFit(pixels, pm, font, right - textPixelWidth(font, tag), hb, tag, w, dim_col);
+    }
+    y += NOTIF_HEAD_H;
+    drawNotifSeparator(pixels, pm, y);
+    y += POPUP_SEPARATOR_HEIGHT;
+
+    if (notifMessage()) |msg| {
+        const mb = y + @divTrunc(NOTIF_MSG_H + @as(i32, @intCast(asc - desc)), 2);
+        _ = drawTextFit(pixels, pm, font, NOTIF_PAD_X, mb, msg, right - NOTIF_PAD_X, dim_col);
+        y += NOTIF_MSG_H;
+    } else {
+        const shown = @min(g_notif_hist.count, NOTIF_MAX_SHOWN);
+        const lh: i32 = @intCast(asc + desc);
+        for (g_notif_hist.slice()[0..shown]) |*it| {
+            const b1 = y + @divTrunc(NOTIF_ITEM_H - 2 * lh - 2, 2) + @as(i32, @intCast(asc));
+            const b2 = b1 + lh + 2;
+            var x = NOTIF_PAD_X;
+            const app = it.app.slice();
+            const app_col = if (it.urgency == 2) ap.workspace_active_color else accent;
+            if (app.len > 0) {
+                x += drawTextFit(pixels, pm, font, x, b1, app, @divTrunc(w, 3), app_col);
+                x += drawTextFit(pixels, pm, font, x, b1, "  ", w, text_col);
+            }
+            const summary = it.summary.slice();
+            _ = drawTextFit(pixels, pm, font, x, b1, if (summary.len > 0) summary else "(no title)", right - x, text_col);
+            const body = it.body.slice();
+            if (body.len > 0) _ = drawTextFit(pixels, pm, font, NOTIF_PAD_X, b2, body, right - NOTIF_PAD_X, dim_col);
+            y += NOTIF_ITEM_H;
+        }
+        if (g_notif_hist.count > shown) {
+            var mbuf: [32]u8 = undefined;
+            const more = std.fmt.bufPrint(&mbuf, "+{d} older", .{g_notif_hist.count - shown}) catch "";
+            const mb = y + @divTrunc(NOTIF_MORE_H + @as(i32, @intCast(asc - desc)), 2);
+            _ = drawTextFit(pixels, pm, font, NOTIF_PAD_X, mb, more, w, dim_col);
+            y += NOTIF_MORE_H;
+        }
+    }
+    drawNotifSeparator(pixels, pm, y);
+    y += POPUP_SEPARATOR_HEIGHT;
+
+    // Action rows (the only clickable rows, ids 1 and 2).
+    pm.row_count = 0;
+    const actions = [_]struct { id: i32, label: []const u8, value: []const u8, enabled: bool }{
+        .{ .id = 1, .label = if (g_notif_state.dnd) NOTIF_ICON_BELL_OFF ++ "  Do not disturb" else NOTIF_ICON_BELL ++ "  Do not disturb", .value = if (g_notif_state.dnd) "On" else "Off", .enabled = true },
+        .{ .id = 2, .label = "\u{F039F}  Clear all", .value = "", .enabled = g_mako_pid != 0 and !g_makoctl_failed and g_notif_hist.count > 0 },
+    };
+    for (actions) |a| {
+        const y0 = y;
+        const y1 = y + NOTIF_ACTION_H;
+        if (pm.row_count < pm.rows.len) {
+            pm.rows[pm.row_count] = .{ .y_start = y0, .y_end = y1, .item_id = if (a.enabled) a.id else null };
+            fillPopupRowBand(pixels, pm, y0, y1, if (a.enabled) pm.row_hover[pm.row_count] else 0);
+            pm.row_count += 1;
+        }
+        const ab = y0 + @divTrunc(NOTIF_ACTION_H + @as(i32, @intCast(asc - desc)), 2);
+        const col = if (a.enabled) text_col else dim_col;
+        _ = drawTextFit(pixels, pm, font, NOTIF_PAD_X, ab, a.label, w, col);
+        if (a.value.len > 0) _ = drawTextFit(pixels, pm, font, right - textPixelWidth(font, a.value), ab, a.value, w, if (g_notif_state.dnd) accent else dim_col);
+        y = y1;
+    }
+}
+
+/// A click on an action row (the panel stays open).
+fn notifPanelClick(bars_slice: []Bar, id: i32) void {
+    switch (id) {
+        1 => {
+            g_notif_state.dnd = !g_notif_state.dnd;
+            saveNotifState();
+            // Not running: saved, and applied when mako appears.
+            if (g_mako_pid != 0) startMakoctl(if (g_notif_state.dnd) .dnd_on else .dnd_off);
+        },
+        2 => if (g_mako_pid != 0) startMakoctl(.clear),
+        else => {},
+    }
+    for (bars_slice) |*b| {
+        if (b.popup) |pm| {
+            if (pm.kind == .notifications) drawPopup(b) catch {};
+        }
+    }
+    drawAllBars(bars_slice);
 }
 
 fn drawPopup(bar: *Bar) !void {
@@ -5229,6 +5621,7 @@ fn drawPopup(bar: *Bar) !void {
         .volume => drawVolumeRows(bar, pm, pixels),
         .volume_osd => drawVolumeOSD(bar, pm, pixels),
         .brightness_osd => drawBrightnessOSD(bar, pm, pixels),
+        .notifications => drawNotifPanel(bar, pm, pixels),
         .dock_menu => drawDockMenuRows(bar, pm, pixels),
     }
 
@@ -6143,6 +6536,7 @@ fn realMain() !void {
     }
     if (cavaWanted()) startCavaFetch();
     initBacklight();
+    initNotifications();
 
     // Main event loop: multiplex the Wayland display fd (compositor events),
     // a 1s timerfd (clock ticks), and the compositor's workspace-event socket
@@ -6185,6 +6579,7 @@ fn realMain() !void {
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [31] vol_sub_fd (pactl subscribe), refreshed below
         // [32] backlight value file: sysfs signals a change with POLLPRI.
         .{ .fd = g_backlight.pollFd(), .events = posix.POLL.PRI, .revents = 0 },
+        .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [33] makoctl pipe, refreshed below
     };
     comptime {
         if (MAX_CUSTOM_SCRIPTS != 4) @compileError("poll_fds' custom-script slots [21..28] are hand-unrolled for MAX_CUSTOM_SCRIPTS == 4; update both if that changes");
@@ -6210,11 +6605,15 @@ fn realMain() !void {
         poll_fds[30].fd = vol_fetch_fd;
         poll_fds[31].fd = vol_sub_fd;
         poll_fds[32].fd = g_backlight.pollFd();
+        poll_fds[33].fd = g_notif_fd;
 
         _ = try posix.poll(&poll_fds, -1);
 
         if (poll_fds[32].revents & (posix.POLL.PRI | posix.POLL.ERR) != 0) {
             checkBacklight(bars[0..bar_count]);
+        }
+        if (g_notif_fd >= 0 and poll_fds[33].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
+            onMakoctlReadable(bars[0..bar_count]);
         }
 
         if (poll_fds[0].revents & posix.POLL.IN != 0) {
@@ -6233,6 +6632,8 @@ fn realMain() !void {
             // Fallback for backlight drivers that don't signal POLLPRI: one
             // tiny pread a second, only when a device was found.
             if (g_backlight.present()) checkBacklight(bars[0..bar_count]);
+            // makoctl timeout, and the slow look for mako (re)starting.
+            if (notifModuleOn()) notifTick(bars[0..bar_count]);
             // Weather refetches (or adopts the desktop card's fresh answer
             // from the shared cache) whenever weather.zig says one is due.
             if (!dock_mode) weather.pump();
@@ -7135,6 +7536,23 @@ const DISK_REFRESH_SECONDS: i64 = 30;
 const NET_SPEED_REFRESH_SECONDS: i64 = 5;
 const NET_SSID_REFRESH_SECONDS: i64 = 10;
 const MAX_CUSTOM_SCRIPTS = 4;
+/// The bell is on by default: a right group that doesn't name the
+/// notifications kind gets an enabled entry, placed after volume (or at the
+/// end). A config turns it off with "enabled": false; Settings agrees (its
+/// ensureKindsPresent adds this kind enabled).
+fn withNotifications(allocator: std.mem.Allocator, right: []const ModuleEntry) []const ModuleEntry {
+    var after: usize = right.len;
+    for (right, 0..) |e, i| {
+        if (e.kind == .notifications) return right;
+        if (e.kind == .volume) after = i + 1;
+    }
+    const out = allocator.alloc(ModuleEntry, right.len + 1) catch return right;
+    @memcpy(out[0..after], right[0..after]);
+    out[after] = .{ .kind = .notifications, .enabled = true };
+    @memcpy(out[after + 1 ..], right[after..]);
+    return out;
+}
+
 const CUSTOM_SCRIPT_DEFAULT_INTERVAL_SECONDS: i64 = 10;
 
 /// Looks up the first ModuleEntry of `kind` in current_config.modules.right,
@@ -10937,6 +11355,22 @@ fn drawRightGroup(
                     _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, net_label, color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
                 }
             },
+            .notifications => {
+                // Bell: crossed out in Do not disturb, dimmed when mako
+                // isn't running (or the last makoctl failed). The click
+                // opens the history panel. No count: knowing about new
+                // notifications would mean polling makoctl.
+                if (!dock_mode) {
+                    if (!first) x_end -= MODULE_GAP;
+                    first = false;
+                    const icon: []const u8 = if (g_notif_state.dnd) NOTIF_ICON_BELL_OFF else NOTIF_ICON_BELL;
+                    const off = g_mako_pid == 0 or g_makoctl_failed;
+                    const col = if (off) current_config.appearance.popup_disabled_color else if (entry.in_drawer) drawer_color else text_color;
+                    const cell = reserveRightCell(x_end, textPixelWidth(font, icon), center_start_x);
+                    x_end = cell.next_pen;
+                    _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, icon, col, .toggle_notifications, click_regions, if (entry.in_drawer) &island_now else null, null);
+                }
+            },
             .layout => {
                 // Mango layout indicator: the active tag's layout as its own
                 // distinct glyph, oversized (2x raster, vertically centered —
@@ -11358,6 +11792,11 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                             return;
                         },
                         .volume_osd, .brightness_osd => {}, // dismissed before hit-test above; unreachable here
+                        .notifications => {
+                            // Do not disturb / Clear all; the panel stays open.
+                            notifPanelClick(router.bars, id);
+                            return;
+                        },
                         .dock_menu => {
                             if (id < 0) return;
                             const i: usize = @intCast(id);
@@ -11368,8 +11807,8 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                             return;
                         },
                     }
-                } else if (kind == .volume) {
-                    // Separator row: nothing to mute, panel stays open.
+                } else if (kind == .volume or kind == .notifications) {
+                    // Separator / greyed row: nothing to do, panel stays open.
                     return;
                 }
                 closePopup(bar);
@@ -11592,6 +12031,7 @@ fn handleAction(bar: *Bar, action: Action) void {
             }
             openVolumeMixerFetch(bar);
         },
+        .toggle_notifications => toggleNotifPanel(bar),
         .set_layout => |index| {
             if (index >= MANGO_LAYOUTS.len) return;
             bar.workspaces.setLayout(MANGO_LAYOUTS[index].name) catch |err| {
@@ -11652,6 +12092,7 @@ fn actionName(a: Action) []const u8 {
         .mpris_control => "mpris_control",
         .open_layout_picker => "open_layout_picker",
         .open_volume_mixer => "open_volume_mixer",
+        .toggle_notifications => "toggle_notifications",
         .set_layout => "set_layout",
         .launcher => "launcher",
         .focus_client => "focus_client",
@@ -13036,4 +13477,23 @@ test "monitor name copy truncates without leaking capture" {
     // Re-set to the same name (already at the cap → same truncated string)
     // is idempotent through the slice helpers the bar uses.
     try t.expectEqualStrings(ws.monitorName(), ws.monitorName());
+}
+
+test "notifications module: on by default, after volume; off stays off" {
+    var buf: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const a = fba.allocator();
+    const right = [_]ModuleEntry{ .{ .kind = .power }, .{ .kind = .volume }, .{ .kind = .tray } };
+    const got = withNotifications(a, &right);
+    try std.testing.expectEqual(@as(usize, 4), got.len);
+    try std.testing.expectEqual(ModuleKind.notifications, got[2].kind);
+    try std.testing.expect(got[2].enabled);
+    try std.testing.expectEqual(ModuleKind.tray, got[3].kind);
+    const off = [_]ModuleEntry{ .{ .kind = .power }, .{ .kind = .notifications, .enabled = false } };
+    const same = withNotifications(a, &off);
+    try std.testing.expectEqual(@as(usize, 2), same.len);
+    try std.testing.expect(!same[1].enabled);
+    const no_vol = [_]ModuleEntry{.{ .kind = .clock }};
+    const end = withNotifications(a, &no_vol);
+    try std.testing.expectEqual(ModuleKind.notifications, end[1].kind);
 }
