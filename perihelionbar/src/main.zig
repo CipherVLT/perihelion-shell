@@ -8,6 +8,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 const xdg = wayland.client.xdg;
+const zwp = wayland.client.zwp;
 
 const dbus = @import("dbus.zig");
 const font_mod = @import("font.zig");
@@ -5093,6 +5094,28 @@ fn spawnVolumeSet(entry_idx: usize, delta_pct: i8) void {
     spawnDetached(cmd);
 }
 
+/// The master sink at `pct` (Control Center slider), with the same OSD
+/// echo suppression as the mixer's master sets.
+fn spawnMasterVolumeAbs(pct: u8) void {
+    var buf: [128]u8 = undefined;
+    var sbuf: [160]u8 = undefined;
+    const sink = pactlSinkArg(&sbuf) orelse return;
+    vol_osd_suppress_left = 100;
+    const cmd = std.fmt.bufPrintZ(&buf, "pactl set-sink-volume {s} {d}%", .{ sink, pct }) catch return;
+    spawnDetached(cmd);
+}
+
+/// Toggles the master sink's mute (Control Center volume icon).
+fn spawnMasterMute(bar: *Bar) void {
+    var buf: [128]u8 = undefined;
+    var sbuf: [160]u8 = undefined;
+    const sink = pactlSinkArg(&sbuf) orelse return;
+    vol_osd_suppress_left = 100;
+    const cmd = std.fmt.bufPrintZ(&buf, "pactl set-sink-mute {s} toggle", .{sink}) catch return;
+    spawnDetached(cmd);
+    startVolumeFetch(bar.volume);
+}
+
 /// A left release over a popup with an armed press: the mixer mutes the
 /// row on a clean click or commits the dragged level; the Control Center
 /// does the same for its sliders (see ccRelease).
@@ -5313,6 +5336,11 @@ fn checkBacklight(bars_slice: []Bar) void {
     if (!current_config.bar.brightness_osd) return;
     const pct = g_backlight.sample() orelse return;
     g_bright_pct = pct;
+    // The Control Center's slider is its own feedback: no OSD over it.
+    if (anyControlCenterOpen(bars_slice)) {
+        redrawControlCenters(bars_slice);
+        return;
+    }
     for (bars_slice) |*b| showBrightnessOSD(b);
 }
 
@@ -5397,7 +5425,8 @@ fn notifModuleOn() bool {
 /// Startup: the state file, mako's PID, and a saved Do-not-disturb put
 /// back into mako.
 fn initNotifications() void {
-    if (!notifModuleOn()) return;
+    // The Control Center's Do-not-disturb pill shares this state.
+    if (!notifModuleOn() and !ccModuleOn()) return;
     const xdg_state = std.mem.span(std.c.getenv("XDG_STATE_HOME") orelse @as([*:0]const u8, ""));
     const home = std.mem.span(std.c.getenv("HOME") orelse @as([*:0]const u8, ""));
     g_notif_state_path = nsvc.statePath(&g_notif_state_path_buf, xdg_state, home);
@@ -5682,6 +5711,7 @@ fn notifPanelClick(bars_slice: []Bar, id: i32) void {
             if (pm.kind == .notifications) drawPopup(b) catch {};
         }
     }
+    redrawControlCenters(bars_slice); // its DND pill reads the same state
     drawAllBars(bars_slice);
 }
 
@@ -5921,11 +5951,6 @@ fn ccPillView(p: CcPill, buf: []u8) PillView {
     };
 }
 
-// Wiring stubs (filled in by the next change).
-fn ccOpened() void {}
-fn idleInhibitAvailable() bool {
-    return false;
-}
 
 /// A press in the panel: arm a slider (commit on release), or act on a pill.
 fn ccPress(bar: *Bar, pm: *PopupMenu) void {
@@ -5942,16 +5967,264 @@ fn ccPress(bar: *Bar, pm: *PopupMenu) void {
             pm.vol_drag_moved = true; // a click on the track sets that level
             drawPopup(bar) catch {};
         },
-        else => {},
+        .vol_icon => spawnMasterMute(bar),
+        .pill => |p| ccPillClick(bar, p),
+        .none => {},
     }
 }
 
+// --- control center wiring ---
+//
+// While a panel is open: one state read on open and every CC_REFRESH_MS
+// (one /bin/sh job running nmcli, bluetoothctl and powerprofilesctl, each
+// only if installed), killed after CC_TIMEOUT_MS. A timeout stops the
+// periodic reads until the panel is opened again (no respawn loop). Pill
+// clicks run their command in front of the same read, so the pill shows
+// the result. Closed: nothing runs.
+
+const CC_REFRESH_MS: i64 = 2000;
+const CC_TIMEOUT_MS: i64 = 3000;
+
+const CcAction = enum { none, wifi_on, wifi_off, bt_on, bt_off, profile };
+
+var g_cc_buf: [radiosvc.MAX_READ * 2]u8 = undefined;
+/// The state read / pill command (poll slot 34).
+var g_cc_proc: Job = .{ .buf = &g_cc_buf };
+var g_cc_last_read_ms: i64 = 0;
+var g_cc_hung: bool = false;
+var g_cc_pending: CcAction = .none;
+var g_cc_profile_buf: [24]u8 = undefined;
+var g_cc_profile_len: usize = 0;
+/// Tools found missing, logged once each.
+var g_cc_logged_missing: [3]bool = .{ false, false, false };
+
+var g_bri_buf: [256]u8 = undefined;
+/// brightnessctl for the slider (poll slot 35).
+var g_bri_proc: Job = .{ .buf = &g_bri_buf };
+var g_bri_pending: ?u8 = null;
+
+var g_idle_mgr: ?*zwp.IdleInhibitManagerV1 = null;
+var g_idle_inhibitor: ?*zwp.IdleInhibitorV1 = null;
+
+const CC_STATE_SCRIPT =
+    "if command -v nmcli >/dev/null 2>&1; then " ++
+    "printf '@@radio\\n'; nmcli radio wifi 2>/dev/null; " ++
+    "printf '@@dev\\n'; nmcli -t -f TYPE,STATE device 2>/dev/null; " ++
+    "printf '@@ap\\n'; nmcli -t -f ACTIVE,SSID device wifi list --rescan no 2>/dev/null; " ++
+    "else printf '@@missing nmcli\\n'; fi; " ++
+    "if command -v bluetoothctl >/dev/null 2>&1; then printf '@@bt\\n'; bluetoothctl --timeout 1 show 2>/dev/null; " ++
+    "else printf '@@missing bluetoothctl\\n'; fi; " ++
+    "if command -v powerprofilesctl >/dev/null 2>&1; then printf '@@pp\\n'; powerprofilesctl list 2>/dev/null; " ++
+    "else printf '@@missing powerprofilesctl\\n'; fi";
+
+fn ccModuleOn() bool {
+    if (dock_mode) return false;
+    for (current_config.modules.right) |e| {
+        if (e.kind == .control_center) return e.enabled;
+    }
+    return false;
+}
+
+fn idleInhibitAvailable() bool {
+    return g_idle_mgr != null and !dock_mode;
+}
+
+/// Keep awake on/off: an idle inhibitor on this bar's own surface. The
+/// compositor drops it with the surface, so a bar that exits can't leave
+/// the machine awake. Not saved: every session starts with it off.
+fn setKeepAwake(bar: *Bar, on: bool) void {
+    if (on == g_keep_awake) return;
+    if (on) {
+        const mgr = g_idle_mgr orelse return;
+        g_idle_inhibitor = mgr.createInhibitor(bar.surface) catch {
+            logging.warn("keep awake: could not create an idle inhibitor", .{});
+            return;
+        };
+        logging.step("keep awake: on (idle inhibitor on the bar)", .{});
+    } else {
+        if (g_idle_inhibitor) |i| i.destroy();
+        g_idle_inhibitor = null;
+        logging.step("keep awake: off", .{});
+    }
+    g_keep_awake = on;
+}
+
+/// Panel opened: read states now (unless a read is running).
+fn ccOpened() void {
+    g_cc_read = false;
+    g_cc_hung = false;
+    ccStartRead(.none);
+}
+
+fn ccStartRead(action: CcAction) void {
+    if (g_cc_proc.busy()) {
+        if (action != .none) g_cc_pending = action;
+        return;
+    }
+    var sb: [1400]u8 = undefined;
+    const prefix: []const u8 = switch (action) {
+        .none => "",
+        .wifi_on => "nmcli radio wifi on >/dev/null 2>&1; ",
+        .wifi_off => "nmcli radio wifi off >/dev/null 2>&1; ",
+        .bt_on => "rfkill unblock bluetooth >/dev/null 2>&1; bluetoothctl --timeout 2 power on >/dev/null 2>&1; ",
+        .bt_off => "bluetoothctl --timeout 2 power off >/dev/null 2>&1; ",
+        // The name came from powerprofilesctl's own list and passed
+        // powerprof.zig's [a-z0-9-] check, so it needs no quoting.
+        .profile => std.fmt.bufPrint(sb[1000..], "powerprofilesctl set {s} >/dev/null 2>&1; ", .{g_cc_profile_buf[0..g_cc_profile_len]}) catch return,
+    };
+    const script = std.fmt.bufPrintZ(sb[0..1000], "{s}{s}", .{ prefix, CC_STATE_SCRIPT }) catch return;
+    if (g_cc_proc.start(script)) g_cc_last_read_ms = monoNowMs();
+}
+
+/// Splits the state script's output into its "@@name" sections.
+fn ccSection(out: []const u8, name: []const u8) ?[]const u8 {
+    var tag_buf: [24]u8 = undefined;
+    const tag = std.fmt.bufPrint(&tag_buf, "@@{s}\n", .{name}) catch return null;
+    const at = if (std.mem.startsWith(u8, out, tag)) 0 else (std.mem.indexOf(u8, out, tag[0..]) orelse return null);
+    const start = at + tag.len;
+    const end = if (std.mem.indexOf(u8, out[start..], "\n@@")) |e| start + e + 1 else out.len;
+    return out[start..end];
+}
+
+fn ccFinishRead(bars_slice: []Bar, timed_out: bool) void {
+    const old_wifi = g_cc_wifi;
+    const old_bt = g_cc_bt;
+    const old_prof = g_cc_prof;
+    const was_read = g_cc_read;
+    g_cc_read = true;
+    if (timed_out) {
+        // Something hung: everything unavailable until the next open.
+        g_cc_hung = true;
+        g_cc_wifi = .{};
+        g_cc_bt = .unknown;
+        g_cc_prof = .{};
+        logging.warn("control center: state read did not answer in {d} ms; paused until the panel reopens", .{CC_TIMEOUT_MS});
+    } else {
+        const out = g_cc_proc.output();
+        const missing = [_][]const u8{ "nmcli", "bluetoothctl", "powerprofilesctl" };
+        for (missing, 0..) |m, i| {
+            var mb: [40]u8 = undefined;
+            const tag = std.fmt.bufPrint(&mb, "@@missing {s}", .{m}) catch continue;
+            if (std.mem.indexOf(u8, out, tag) != null and !g_cc_logged_missing[i]) {
+                g_cc_logged_missing[i] = true;
+                logging.step("control center: {s} not installed; its pill stays dimmed", .{m});
+            }
+        }
+        g_cc_wifi = if (ccSection(out, "dev")) |dev|
+            radiosvc.parseWifi(ccSection(out, "radio") orelse "", dev, ccSection(out, "ap") orelse "")
+        else
+            .{ .state = .absent };
+        g_cc_bt = if (ccSection(out, "bt")) |bt| radiosvc.parseBluetooth(bt) else .absent;
+        g_cc_prof = if (ccSection(out, "pp")) |pp| ppsvc.parseList(pp) else .{};
+    }
+    const changed = !was_read or old_wifi.state != g_cc_wifi.state or
+        !std.mem.eql(u8, old_wifi.ssid(), g_cc_wifi.ssid()) or old_bt != g_cc_bt or
+        old_prof.count != g_cc_prof.count or !std.mem.eql(u8, old_prof.activeName(), g_cc_prof.activeName());
+    if (changed) redrawControlCenters(bars_slice);
+    if (g_cc_pending != .none and !g_cc_hung) {
+        const a = g_cc_pending;
+        g_cc_pending = .none;
+        ccStartRead(a);
+    }
+}
+
+/// The 1 s tick: timeouts, and the 2 s refresh while a panel is open.
+fn ccTick(bars_slice: []Bar) void {
+    if (g_cc_proc.expire(CC_TIMEOUT_MS)) ccFinishRead(bars_slice, true);
+    if (g_bri_proc.expire(CC_TIMEOUT_MS)) {
+        logging.warn("control center: brightnessctl did not answer in {d} ms, killed", .{CC_TIMEOUT_MS});
+        g_bri_pending = null;
+    }
+    if (!g_cc_hung and !g_cc_proc.busy() and anyControlCenterOpen(bars_slice) and monoNowMs() - g_cc_last_read_ms >= CC_REFRESH_MS) {
+        ccStartRead(.none);
+    }
+}
+
+fn ccOnReadable(bars_slice: []Bar) void {
+    if (g_cc_proc.pump()) ccFinishRead(bars_slice, false);
+}
+
+fn briOnReadable() void {
+    if (!g_bri_proc.pump()) return;
+    if (g_bri_pending) |v| {
+        g_bri_pending = null;
+        startBrightnessSet(v);
+    }
+}
+
+/// brightnessctl on the device the OSD watches. The new level comes back
+/// through the backlight poll (no OSD while the panel is open).
+fn startBrightnessSet(pct: u8) void {
+    if (!g_backlight.present()) return;
+    if (g_bri_proc.busy()) {
+        g_bri_pending = pct;
+        return;
+    }
+    var nb: [64]u8 = undefined;
+    var qb: [80]u8 = undefined;
+    var sb: [200]u8 = undefined;
+    const name = std.fmt.bufPrint(&nb, "{s}", .{g_backlight.name()}) catch return;
+    const q = shellQuoteArg(name, &qb) orelse return;
+    const script = std.fmt.bufPrintZ(&sb, "brightnessctl -q -d {s} set {d}% >/dev/null 2>&1", .{ q, @max(pct, 1) }) catch return;
+    _ = g_bri_proc.start(script);
+}
+
+/// 'text' for sh (embedded quotes escaped). Null if `out` is too small.
+fn shellQuoteArg(text: []const u8, out: []u8) ?[]const u8 {
+    var n: usize = 0;
+    if (out.len < 2) return null;
+    out[n] = '\'';
+    n += 1;
+    for (text) |c| {
+        if (c == '\'') {
+            if (n + 4 > out.len) return null;
+            @memcpy(out[n .. n + 4], "'\\''");
+            n += 4;
+        } else {
+            if (n + 1 > out.len) return null;
+            out[n] = c;
+            n += 1;
+        }
+    }
+    if (n + 1 > out.len) return null;
+    out[n] = '\'';
+    return out[0 .. n + 1];
+}
+
+fn ccPillClick(bar: *Bar, p: CcPill) void {
+    var sbuf: [64]u8 = undefined;
+    if (!ccPillView(p, &sbuf).avail) return; // dimmed pills do nothing
+    switch (p) {
+        .wifi => ccStartRead(if (g_cc_wifi.state == .on) .wifi_off else .wifi_on),
+        .bluetooth => ccStartRead(if (g_cc_bt == .on) .bt_off else .bt_on),
+        .power => {
+            const n = ppsvc.next(&g_cc_prof) orelse return;
+            @memcpy(g_cc_profile_buf[0..n.len], n);
+            g_cc_profile_len = n.len;
+            ccStartRead(.profile);
+        },
+        .awake => setKeepAwake(bar, !g_keep_awake),
+        // One source of truth with the bell's panel: same state, same job.
+        .dnd => notifPanelClick(router_bars_for_cc, 1),
+    }
+    redrawControlCenters(router_bars_for_cc);
+}
+
+/// The bars, for pill clicks that reach shared code wanting all of them.
+var router_bars_for_cc: []Bar = &.{};
+
 fn ccRelease(bar: *Bar, row: usize, val: u8, moved: bool) void {
-    _ = row;
-    _ = val;
     _ = moved;
+    if (row == 0) {
+        spawnMasterVolumeAbs(val);
+        startVolumeFetch(bar.volume);
+    } else {
+        g_bright_pct = val;
+        startBrightnessSet(val);
+    }
     drawPopup(bar) catch {};
 }
+
 
 fn drawPopup(bar: *Bar) !void {
     var pm = &(bar.popup orelse return);
@@ -6894,6 +7167,7 @@ fn realMain() !void {
     if (cavaWanted()) startCavaFetch();
     initBacklight();
     initNotifications();
+    router_bars_for_cc = bars[0..bar_count];
 
     // Main event loop: multiplex the Wayland display fd (compositor events),
     // a 1s timerfd (clock ticks), and the compositor's workspace-event socket
@@ -6937,6 +7211,8 @@ fn realMain() !void {
         // [32] backlight value file: sysfs signals a change with POLLPRI.
         .{ .fd = g_backlight.pollFd(), .events = posix.POLL.PRI, .revents = 0 },
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [33] makoctl pipe, refreshed below
+        .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [34] Control Center state read
+        .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // [35] brightnessctl (slider)
     };
     comptime {
         if (MAX_CUSTOM_SCRIPTS != 4) @compileError("poll_fds' custom-script slots [21..28] are hand-unrolled for MAX_CUSTOM_SCRIPTS == 4; update both if that changes");
@@ -6963,6 +7239,8 @@ fn realMain() !void {
         poll_fds[31].fd = vol_sub_fd;
         poll_fds[32].fd = g_backlight.pollFd();
         poll_fds[33].fd = g_notif_proc.fd;
+        poll_fds[34].fd = g_cc_proc.fd;
+        poll_fds[35].fd = g_bri_proc.fd;
 
         _ = try posix.poll(&poll_fds, -1);
 
@@ -6971,6 +7249,12 @@ fn realMain() !void {
         }
         if (g_notif_proc.busy() and poll_fds[33].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
             onMakoctlReadable(bars[0..bar_count]);
+        }
+        if (g_cc_proc.busy() and poll_fds[34].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
+            ccOnReadable(bars[0..bar_count]);
+        }
+        if (g_bri_proc.busy() and poll_fds[35].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
+            briOnReadable();
         }
 
         if (poll_fds[0].revents & posix.POLL.IN != 0) {
@@ -6990,7 +7274,8 @@ fn realMain() !void {
             // tiny pread a second, only when a device was found.
             if (g_backlight.present()) checkBacklight(bars[0..bar_count]);
             // makoctl timeout, and the slow look for mako (re)starting.
-            if (notifModuleOn()) notifTick(bars[0..bar_count]);
+            if (notifModuleOn() or ccModuleOn()) notifTick(bars[0..bar_count]);
+            ccTick(bars[0..bar_count]);
             // Weather refetches (or adopts the desktop card's fresh answer
             // from the shared cache) whenever weather.zig says one is due.
             if (!dock_mode) weather.pump();
@@ -7117,12 +7402,15 @@ fn realMain() !void {
                     var mixer_open = false;
                     for (bars[0..bar_count]) |*b| {
                         if (b.popup) |pm| {
-                            if (pm.kind == .volume) {
+                            // The mixer and the Control Center show the
+                            // level themselves: no OSD over them.
+                            if (pm.kind == .volume or pm.kind == .control_center) {
                                 mixer_open = true;
                                 break;
                             }
                         }
                     }
+                    redrawControlCenters(bars[0..bar_count]);
                     // Panel-driven master sets suppress their own echo (set
                     // alongside the set-command); anything else pops the OSD.
                     if (!mixer_open and vol_osd_suppress_left <= 0) {
@@ -11889,6 +12177,9 @@ fn registryListener(registry: *wl.Registry, event: wl.Registry.Event, globals: *
                 const seat = registry.bind(g.name, wl.Seat, 7) catch return;
                 globals.seat = seat;
                 seat.setListener(*Globals, seatListener, globals);
+            } else if (std.mem.eql(u8, iface, "zwp_idle_inhibit_manager_v1")) {
+                // Keep awake (Control Center): Mango 0.18 advertises it.
+                g_idle_mgr = registry.bind(g.name, zwp.IdleInhibitManagerV1, 1) catch return;
             } else if (std.mem.eql(u8, iface, "xdg_wm_base")) {
                 const wm_base = registry.bind(g.name, xdg.WmBase, 3) catch return;
                 globals.wm_base = wm_base;
