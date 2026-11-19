@@ -1254,7 +1254,7 @@ run_spinner "Building perihelionbar" build_perihelionbar \
 # The build names its programs perihelion-bar, perihelion-settings and
 # perihelion-shell — the same names Perihelion Linux ships. The older
 # perihelionbar / perihelionbar-config / perihelionbar-shell names stay as
-# symlinks, so existing Mango and Hyprland configs, keybinds and scripts
+# symlinks, so existing window-manager configs, keybinds and scripts
 # keep working (and an older install's real files under those names are
 # replaced by the links).
 install_perihelion_bin() {  # <zig-out/bin dir> <built name> [old name]

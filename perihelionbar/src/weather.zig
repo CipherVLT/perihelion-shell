@@ -15,8 +15,7 @@
 //! Tests: `zig build test-weather` in perihelionbar/, or
 //! `zig test -lc src/weather.zig` (libc only for time/getenv/file I/O).
 //!
-//! The data contract, refresh cadence and retry policy follow the
-//! WeatherService singleton of Event Horizon Dotfiles 1.6.5:
+//! The data contract, refresh cadence and retry policy:
 //!   - refresh every 15 min (+/- 7.5 s jitter, never under 60 s)
 //!   - forecast requests at least 30 s apart
 //!   - up to 3 quick attempts 30 s apart, then exponential backoff
@@ -70,8 +69,8 @@ pub const DEFAULT_IP_URL = "https://ipapi.co/json/";
 
 const CURRENT_FIELDS = "temperature_2m,relative_humidity_2m,apparent_temperature,is_day," ++
     "precipitation,weather_code,surface_pressure,wind_speed_10m";
-// uv_index_max is the one addition over Event Horizon's request (it hard-
-// coded uv = 0): same call, a few more bytes, and the uv field is real.
+// uv_index_max is requested too (rather than hard-coding uv = 0): same
+// call, a few more bytes, and the uv field is real.
 const DAILY_FIELDS = "sunrise,sunset,temperature_2m_max,temperature_2m_min,weather_code," ++
     "precipitation_probability_max,uv_index_max";
 
@@ -170,8 +169,8 @@ pub const ForecastDay = struct {
 
 pub const SunEvent = struct { sunrise: bool, at: []const u8 };
 
-/// One weather snapshot — Event Horizon's `weather` object, field for
-/// field (camelCase → snake_case; `wind` keeps the API's own "12 km/h").
+/// One weather snapshot (snake_case fields; `wind` keeps the API's own
+/// "12 km/h").
 pub const Weather = struct {
     available: bool = false,
     loading: bool = true,
@@ -273,7 +272,7 @@ pub fn kindFor(code: u32) Kind {
     };
 }
 
-/// Human-readable condition (Event Horizon's table; 66/67 and 80-82 say
+/// Human-readable condition (WMO code table; 66/67 and 80-82 say
 /// what they are — freezing rain and showers — instead of plain "rain").
 pub fn conditionText(code: u32) []const u8 {
     return switch (code) {
@@ -1239,7 +1238,7 @@ pub const Service = struct {
         self.next_due_ms = now_ms + delay;
     }
 
-    /// Refresh period with Event Horizon's +/- 7.5 s jitter (so a fleet of
+    /// Refresh period with +/- 7.5 s jitter (so a fleet of
     /// shells started together doesn't hit the API in lockstep).
     fn nextInterval(self: *const Service, seed: i64) i64 {
         const h: u64 = @as(u64, @bitCast(seed)) *% 0x9E3779B97F4A7C15;
