@@ -157,6 +157,9 @@ jobs:
       - name: Unit-test Glance (commands, panel layout, hit-testing, open/close)
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build test-glance
+      - name: Unit-test Glance's Media tab (probe parsing, layout, drags, argv)
+        working-directory: perihelionbar-shell
+        run: /opt/zig/zig build test-glance-media
       - name: Check the app drawer's QML parses
         run: |
           dnf5 install -y --setopt=install_weak_deps=False qt6-qtdeclarative-devel
