@@ -194,3 +194,78 @@ Left-side order:
 - Turning the Perihelion Bar off must only hide/disable the Bar. It must never create or spawn a Dock.
 - Turning the Dock off and on must only show/hide the existing Dock. It must never create additional Dock instances.
 - Both the Bar and Dock must be treated as singletons. Prevent any code path that can spawn duplicates.
+
+- # CLAUDE.md
+
+Guidance for Claude / Claude Code when working on Perihelion-shell and the Perihelion Linux ISO.
+
+## Project Identity
+
+- **perihelion-shell** — Zig/Wayland bar + desktop widgets. Primary codebase.
+- **Perihelion** (ISO repo) — Fedora-based distro that pins a specific commit of perihelion-shell and ships it as Perihelion Linux (MangoWM-first).
+- This is **not** a simpbar project. simpbar was the historical base. All new work is Perihelion-native.
+- Target compositor: **MangoWM only**. Do not touch Hyprland or Niri paths unless explicitly asked.
+
+## Current State (as of late 2026)
+
+Desktop cards and bar features already landed and working:
+- Weather (Open-Meteo, shared cache, top-bar indicator)
+- System (rings + bars, CPU/GPU temps)
+- Fastfetch (follows real config)
+- Clock (digital / flip / stacked / classic)
+- Processes
+- Network
+- Notes
+- Calendar
+- Media
+- User
+- Brightness OSD
+- Notification center (mako history + DND)
+- Control Center (volume, brightness, Wi-Fi, Bluetooth, power profile, keep-awake, DND)
+
+## Porting Rules (Event Horizon → Perihelion)
+
+When porting widgets or features from Event Horizon dotfiles:
+
+1. **Rewrite in Zig**. Do not leave QML.
+2. **No Event Horizon branding** in code, strings, docs, or comments you add.
+3. **Reuse existing services** where possible (weather.zig, temps.zig, notifs.zig, backlight.zig, radios.zig, powerprof.zig, etc.).
+4. **Matugen theming** only. No hardcoded Event Horizon colors.
+5. **shell.json / config.json keys** with sensible defaults + Settings rows when user-facing.
+6. **Redraw only on change**. Cheap polling. No blocking on the main loop.
+7. **Independent cards** where practical. Shared cache/services are fine.
+8. **MangoWM-first**. Idle-inhibit, layer-shell, and keybinds must work under Mango.
+9. **Incremental**. Small commits. Update PROGRESS.md. Full Zig test suite before push.
+10. After shell changes land, update the pin in the Perihelion ISO repo (`build/refs/perihelionbar.ref`) and verify only the Mango ISO build.
+
+## Key Conventions
+
+- Zig version: **0.17.0** (use the version already in the environment / CI).
+- Tests: `zig build` + `zig build test-*` steps must pass.
+- Config: Prefer extending existing `shell.json` / `config.json` over new files.
+- State: Use `~/.local/state/perihelionbar/` or XDG paths. Never write to the user’s real config during tests.
+- Glass / blur: Respect existing matugen + frosted glass paths.
+- Bar modules: New modules go through `ModuleKind`, Settings round-trip, and default-on insertion where appropriate.
+
+## Current Priorities
+
+1. **Glance** (DarkDash-inspired dashboard) — in progress. Goal is a floating overview/media/weather surface that can eventually reduce reliance on the basic dock.
+2. Keep the existing dock functional until Glance is ready.
+3. Privacy indicators and other polish items are lower priority.
+
+## What Not To Do
+
+- Do not reintroduce “simpbar” framing in new code or docs.
+- Do not add Event Horizon logos, strings, or branding.
+- Do not break the MangoWM ISO path.
+- Do not start large new systems (full Control Center rewrites, embedded terminal, lock screen) without explicit request.
+- Do not assume Hyprland or Niri behavior.
+
+## Useful Paths (local development)
+
+- Shell: `/home/mirrez/ciphervlt/perihelion-shell`
+- ISO: `/home/mirrez/ciphervlt/Perihelion`
+- Event Horizon reference (read-only): `/home/mirrez/ciphervlt/eh-dotfiles/Event-Horizon-Dotfiles-main`
+- PROGRESS.md: `/home/mirrez/ciphervlt/PROGRESS.md`
+
+When in doubt, check current `main` of both repos and PROGRESS.md before starting new work.
