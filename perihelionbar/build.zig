@@ -107,6 +107,21 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     exe_mod.addImport("notifs", notifs_mod);
+    // Control Center: Wi-Fi / Bluetooth and power-profile output parsing.
+    const radios_mod = b.createModule(.{
+        .root_source_file = b.path("src/radios.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("radios", radios_mod);
+    const powerprof_mod = b.createModule(.{
+        .root_source_file = b.path("src/powerprof.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("powerprof", powerprof_mod);
     // Network-rate service behind the shell's Network card (same
     // convention: shared source, tests run from this build).
     const netrate_mod = b.createModule(.{
@@ -224,6 +239,15 @@ pub fn build(b: *Build) !void {
     const notifs_tests = b.addTest(.{ .root_module = notifs_mod, .use_llvm = true, .use_lld = true });
     const notifs_test_step = b.step("test-notifs", "Run src/notifs.zig unit tests");
     notifs_test_step.dependOn(&b.addRunArtifact(notifs_tests).step);
+
+    // `zig build test-radios` / `test-powerprof`: the Control Center's
+    // nmcli, bluetoothctl and powerprofilesctl parsing (fake output).
+    const radios_tests = b.addTest(.{ .root_module = radios_mod, .use_llvm = true, .use_lld = true });
+    const radios_test_step = b.step("test-radios", "Run src/radios.zig unit tests");
+    radios_test_step.dependOn(&b.addRunArtifact(radios_tests).step);
+    const powerprof_tests = b.addTest(.{ .root_module = powerprof_mod, .use_llvm = true, .use_lld = true });
+    const powerprof_test_step = b.step("test-powerprof", "Run src/powerprof.zig unit tests");
+    powerprof_test_step.dependOn(&b.addRunArtifact(powerprof_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.
