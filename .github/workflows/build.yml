@@ -84,6 +84,11 @@ jobs:
       - name: Unit-test the notification-center data (makoctl samples, state file)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-notifs
+      - name: Unit-test the Control Center parsers (nmcli, bluetoothctl, powerprofilesctl)
+        working-directory: perihelionbar
+        run: |
+          /opt/zig/zig build test-radios
+          /opt/zig/zig build test-powerprof
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc
