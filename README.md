@@ -67,6 +67,9 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
   - **Which config:** `fastfetch_config`, else `~/.config/fastfetch/config.jsonc` (or under `$XDG_CONFIG_HOME`), else Perihelion's default at `/usr/share/perihelion/fastfetch/config.jsonc`.
   - **Which program:** `fastfetch_binary`, else `perihelion-fastfetch` if one is on your PATH, else `fastfetch`. With none of them, the card fills in what it can read itself.
   - **How often:** fastfetch runs at start and every 30 minutes. Uptime, memory, disk and the clock are updated every minute without starting a process.
+  - **Rows fastfetch can't see from the desktop:** the card isn't started from a terminal, so it fills these itself. **Shell** is your login shell (from your account, else `$SHELL`) with its version, such as `bash 5.2.37`. **Terminal** is the terminal you'd get: `$TERMINAL`, else the first installed entry of xdg-terminal-exec's `xdg-terminals.list`, else what Mango's Super+Return bind launches, else foot if it's installed; shown with its version. **Terminal Font** comes from that terminal's config: foot's `foot.ini` (`font=`), kitty's `kitty.conf` (`font_family` / `font_size`, following `include` lines) or alacritty's `alacritty.toml`, with each terminal's default when the config doesn't set one. **Wmtheme** shows the GTK theme (gsettings, else `gtk-4.0` or `gtk-3.0` `settings.ini`), since Mango has no theme of its own. These are read once at start.
+  - A key whose format repeats its own label (`"format": "Uptime: {formatted}"`, `"OS Age: {result}"`) shows that label once: the row reads `Uptime   11 mins` and `OS Age   0 days`.
+  - A row with nothing to show is left out instead of showing a dash.
 
   Settings in `shell.json`:
 
