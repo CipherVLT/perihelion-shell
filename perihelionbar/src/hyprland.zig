@@ -72,12 +72,12 @@ fn resolveBase() []const u8 {
 
 fn initPaths() void {
     const home = resolveBase();
-    _ = std.fmt.bufPrintZ(&state_json_path, "{s}{s}", .{ home, JSON_REL }) catch {};
-    _ = std.fmt.bufPrintZ(&managed_lua_path, "{s}{s}", .{ home, LUA_REL }) catch {};
-    _ = std.fmt.bufPrintZ(&main_config_path, "{s}{s}", .{ home, MAIN_CONFIG_REL }) catch {};
+    _ = std.fmt.bufPrintSentinel(&state_json_path, "{s}{s}", .{ home, JSON_REL }, 0) catch {};
+    _ = std.fmt.bufPrintSentinel(&managed_lua_path, "{s}{s}", .{ home, LUA_REL }, 0) catch {};
+    _ = std.fmt.bufPrintSentinel(&main_config_path, "{s}{s}", .{ home, MAIN_CONFIG_REL }, 0) catch {};
 
     var config_dir: [MAX_PATH]u8 = undefined;
-    const dir = std.fmt.bufPrintZ(&config_dir, "{s}/.config/perihelionbar", .{home}) catch return;
+    const dir = std.fmt.bufPrintSentinel(&config_dir, "{s}/.config/perihelionbar", .{home}, 0) catch return;
     _ = mkdir(dir.ptr, 0o755);
 }
 
@@ -122,7 +122,7 @@ fn writeFileAtomic(path: [:0]const u8, data: []const u8) bool {
     if (path.len == 0) return false;
     const dir = path[0 .. std.mem.lastIndexOfScalar(u8, path, '/') orelse return false];
     var tmp_buf: [MAX_PATH]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}/.perihelionbar-tmp-{d}", .{ dir, std.c.getpid() }) catch return false;
+    const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}/.perihelionbar-tmp-{d}", .{ dir, std.c.getpid() }, 0) catch return false;
     if (!writeFileAll(tmp, data)) {
         _ = unlink(tmp);
         return false;
