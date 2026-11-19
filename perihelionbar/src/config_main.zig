@@ -2544,6 +2544,7 @@ const WIDGET_TABLE = [_]WidgetToggle{
     .{ .id = "fastfetch", .title = "Fastfetch", .subtitle = "System info card with your fastfetch logo" },
     .{ .id = "processes", .title = "Processes", .subtitle = "Top processes by CPU or memory (click to switch)" },
     .{ .id = "network", .title = "Network", .subtitle = "Download and upload speed with a short history graph" },
+    .{ .id = "user", .title = "User", .subtitle = "Your name, user@host and how long the computer has been up" },
 };
 
 // One mask bit per row (u16, u4 shifts above): keep the table within it.
@@ -2693,6 +2694,8 @@ const CARD_OPTIONS = [_]CardOption{
         .values = &.{ .{ .int = 1 }, .{ .int = 2 }, .{ .int = 5 }, .{ .int = 10 } },
         .default = .{ .int = 2 },
     },
+    .{ .key = "user_host", .title = "User card host", .subtitle = "Show user@host under your name", .default = .{ .boolean = true } },
+    .{ .key = "user_uptime_short", .title = "Short uptime", .subtitle = "up 3h 5m instead of up 3 hours, 5 minutes", .default = .{ .boolean = false } },
     .{
         .key = "calendar_reminders",
         .title = "Calendar reminders",
