@@ -228,19 +228,15 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // Calendar below the stack (≈ 215px tall); drag anywhere with
     // Ctrl+left-click once running.
     .{ .id = .calendar, .x = 24, .y = 612 },
-    // The single sticky note along the middle-left, clear of the watch
-    // (right) and the weather/media/calendar stack (left column) at the
-    // 13px default font. Drag it anywhere with Ctrl+left-click.
+    // The single sticky note along the middle-left, under the
+    // weather/media/calendar stack (left column) at the 13px default font. Drag it anywhere with Ctrl+left-click.
     .{ .id = .note1, .x = 24, .y = 846 },
-    // The analog watch stands alone on the right — it draws its own steel
-    // case instead of a frosted card.
-    .{ .id = .watch, .x = 1711, .y = 24 },
     // The desktop-icon grid (~/Desktop shortcuts) floats top-center: both
-    // side columns belong to the widget stack and the watch. Its height
+    // side columns belong to the widget stacks. Its height
     // grows and shrinks with the scanned shortcut count; drag it anywhere
     // with Ctrl+left-click.
     .{ .id = .icons, .x = 380, .y = 24 },
-    // The Fastfetch card takes the right column under the watch (≈ 480px
+    // The Fastfetch card takes the right column under the User card (≈ 480px
     // wide with Perihelion's feather logo; drag it anywhere).
     .{ .id = .fastfetch, .x = 1416, .y = 248 },
     // Top processes under the Fastfetch card on the right (≈ 250px wide,
@@ -249,8 +245,7 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // Network rates under the Processes card, same column width (≈ 110px
     // tall with the graph at the 13px font).
     .{ .id = .network, .x = 1636, .y = 930 },
-    // Who and how long, in the gap left of the watch and above the
-    // Fastfetch card (240 x ≈ 88px at the 13px font).
+    // Who and how long, above the Fastfetch card on the right.
     .{ .id = .user, .x = 1450, .y = 40 },
 };
 
@@ -366,7 +361,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
 /// Unknown ids warn and skip rather than failing startup.
 fn disabledMask(allocator: std.mem.Allocator) u16 {
     // The u16 mask (and u4 shifts below) hold at most 16 widgets — today
-    // there are 12. Trip the compiler, not a runtime panic, if a 17th
+    // there are 11. Trip the compiler, not a runtime panic, if a 17th
     // arrives (tile_dirty is a u16 too).
     comptime {
         const n = @typeInfo(widgets_mod.WidgetId).@"enum".fields.len;
@@ -381,9 +376,15 @@ fn disabledMask(allocator: std.mem.Allocator) u16 {
     while (it.next()) |line| {
         const id = std.mem.trim(u8, line, " \t\r");
         if (id.len == 0) continue;
-        const e = std.meta.stringToEnum(widgets_mod.WidgetId, id) orelse {
-            logging.warn("widgets: unknown id \"{s}\" in widgets-disabled — skipping", .{id});
-            continue;
+        const e = switch (widgets_mod.parseWidgetId(id)) {
+            .id => |v| v,
+            // A card that no longer exists (the old watch): nothing to
+            // switch off, and nothing worth a warning on every start.
+            .retired => continue,
+            .unknown => {
+                logging.warn("widgets: unknown id \"{s}\" in widgets-disabled — skipping", .{id});
+                continue;
+            },
         };
         mask |= @as(u16, 1) << @as(u4, @intCast(@intFromEnum(e)));
     }
@@ -584,9 +585,15 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
         var count: usize = 0;
         for (ws) |w| {
             if (count >= MAX_WIDGETS) break;
-            const id = std.meta.stringToEnum(widgets_mod.WidgetId, w.id) orelse {
-                logging.warn("config: unknown widget id \"{s}\" — skipping", .{w.id});
-                continue;
+            const id = switch (widgets_mod.parseWidgetId(w.id)) {
+                .id => |v| v,
+                // Removed cards (the old watch) drop out silently; the
+                // next saveConfig writes the list without them.
+                .retired => continue,
+                .unknown => {
+                    logging.warn("config: unknown widget id \"{s}\" — skipping", .{w.id});
+                    continue;
+                },
             };
             cfg.widget_cfgs[count] = .{ .id = id, .x = w.x, .y = w.y, .w = w.w orelse 0, .h = w.h orelse 0 };
             count += 1;
@@ -775,9 +782,9 @@ const Host = struct {
     /// Per-widget ARGB tile cache (allocated in initWidgets, freed in
     /// main): a widget re-renders into its own tile only when its
     /// `tile_dirty` bit is set, and every frame just composites the tiles
-    /// onto a fresh zero-filled surface. The watch's 6 Hz beat then costs
-    /// one 190x240 repaint instead of re-rastering every widget on every
-    /// output (measured: 12% -> ~3% of a core).
+    /// onto a fresh zero-filled surface. A card that changes then costs
+    /// one tile repaint instead of re-rastering every widget on every
+    /// output.
     tiles: [MAX_WIDGETS]?[]u32 = [_]?[]u32{null} ** MAX_WIDGETS,
     tile_dirty: u16 = 0xFFFF, // all dirty until first paint; MAX_WIDGETS ≤ 16
     /// Frosted glass behind the cards: the wallpaper, decoded small and
@@ -828,14 +835,6 @@ const Host = struct {
     resize_index: ?usize = null,
     resize_off_x: i32 = 0,
     resize_off_y: i32 = 0,
-    // Bezel-timer grab on the watch: press (no Ctrl) on the bezel ring
-    // starts a circular turn. Angles are pointer angles about the dial
-    // center (0 at 12, clockwise); the widget folds the swept angle into
-    // its resting offset.
-    bezel_index: ?usize = null,
-    bezel_base: u8 = 0,
-    bezel_last_a: f64 = 0,
-    bezel_accum: f64 = 0,
     // Overview mode (Alt+W): a second layer surface on the overlay layer,
     // created on open and destroyed on close. Null when construction
     // failed — that degrades the feature, never the shell.
@@ -980,7 +979,6 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
             .system => .{ .system = .{} },
             .calendar => .{ .calendar = .{} },
             .note1 => .{ .note1 = .{} },
-            .watch => .{ .watch = .{} },
             .icons => .{ .icons = .{} },
             .fastfetch => .{ .fastfetch = .{} },
             .processes => .{ .processes = .{} },
@@ -1337,14 +1335,12 @@ fn paintDesktop(host: *Host, d: *Desktop) !void {
             .zoom = zoom,
         };
         const tr = widgets_mod.Rect{ .x = 0, .y = 0, .w = rect.w, .h = rect.h };
-        // The watch draws its own steel case — no frosted card behind it
-        // (the case and bracelet ARE the widget chrome). Same for the
-        // desktop-icon grid: bare glyphs over the wallpaper like a classic
-        // desktop. Cards never highlight on hover — the fill stays bg_color
+        // The desktop-icon grid has no frosted card behind it: bare
+        // glyphs over the wallpaper like a classic desktop. Cards never highlight on hover — the fill stays bg_color
         // under the pointer; hover tracking itself (clicks, the weather
         // condition-fx) is untouched, only the wash is gone.
         switch (std.meta.activeTag(host.widgets[i])) {
-            .watch, .icons => {},
+            .icons => {},
             else => {
                 // Frosted glass card (glass.zig): the blurred wallpaper under
                 // it, tinted with the theme, smooth corners, a light edge.
@@ -1616,12 +1612,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
             }
             host.pointer_x = e.surface_x.toInt();
             host.pointer_y = e.surface_y.toInt();
-            if (host.bezel_index) |i| {
-                // Bezel turn in progress: the insert follows the pointer
-                // around the dial. Tiles are position-independent here too —
-                // only the bezel offset changed, so just re-render it.
-                turnBezel(host, i);
-            } else if (host.resize_index) |i| {
+            if (host.resize_index) |i| {
                 // Corner resize in progress: grow/shrink the card live with
                 // the top-left pinned, reallocating the paint tile as the
                 // size changes (content re-renders from the new rect, so
@@ -1721,10 +1712,9 @@ fn pointerButton(host: *Host, btn: u32, pressed: bool) void {
             const pi = host.press_index;
             if (pi == null or pi != ei) endEdit(host);
         }
-        // Bezel ring (no Ctrl) starts a timer turn; a corner grip starts a
-        // resize; anywhere else the press is a move when Ctrl is known (see
-        // tryStartDrag) or a click on release.
-        if (!tryStartBezel(host) and !tryStartResize(host)) tryStartDrag(host);
+        // A corner grip starts a resize; anywhere else the press is a move
+        // when Ctrl is known (see tryStartDrag) or a click on release.
+        if (!tryStartResize(host)) tryStartDrag(host);
         logging.step("ptr: press hovered={?} ctrl={}", .{ host.hovered_index, host.ctrl_down });
     } else {
         host.left_down = false;
@@ -1732,12 +1722,6 @@ fn pointerButton(host: *Host, btn: u32, pressed: bool) void {
             endDrag(host);
         } else if (host.resize_index != null) {
             endResize(host);
-        } else if (host.bezel_index) |i| {
-            host.bezel_index = null;
-            // Settle with the release point, then arm (or clear).
-            turnBezel(host, i);
-            host.widgets[i].watch.releaseBezel(nowMs());
-            markDirty(host, i);
         } else if (host.press_index) |i| {
             host.press_index = null;
             // A click is press + release over the same widget.
@@ -1800,52 +1784,10 @@ fn pointerButton(host: *Host, btn: u32, pressed: bool) void {
     }
 }
 
-/// Press (no Ctrl) landed on the watch's bezel ring: start a circular
-/// turn for the hidden timer instead of a click or a move. The press is
-/// consumed — releasing arms the timer, it never reaches click().
-fn tryStartBezel(host: *Host) bool {
-    if (!host.left_down or host.ctrl_down) return false;
-    if (host.drag_index != null or host.bezel_index != null) return false;
-    const index = host.press_index orelse host.hovered_index orelse return false;
-    if (std.meta.activeTag(host.widgets[index]) != .watch) return false;
-    const r = host.widget_rects[index];
-    if (!widgets_mod.WatchWidget.bezelHit(r, widgetZoom(host, index), host.pointer_x, host.pointer_y)) return false;
-    host.bezel_index = index;
-    host.bezel_base = host.widgets[index].watch.bezel_min;
-    host.bezel_last_a = widgets_mod.WatchWidget.pointerAngle(r, host.pointer_x, host.pointer_y);
-    host.bezel_accum = 0;
-    host.press_index = null; // consumed: a turn is not a click
-    host.hovered_index = index;
-    host.needs_repaint = true;
-    return true;
-}
-
-/// Pointer moved mid bezel-turn: fold the swept angle into the widget's
-/// resting offset (1 minute per 6°, clamped 0..59 there).
-fn turnBezel(host: *Host, i: usize) void {
-    const W = widgets_mod.WatchWidget;
-    const r = host.widget_rects[i];
-    const ctr = W.dialCenter(r);
-    const dx = @as(f64, @floatFromInt(host.pointer_x)) - ctr[0];
-    const dy = @as(f64, @floatFromInt(host.pointer_y)) - ctr[1];
-    if (dx * dx + dy * dy < 16.0) return; // on the center pin — no angle
-    const a = W.pointerAngle(r, host.pointer_x, host.pointer_y);
-    var delta = a - host.bezel_last_a;
-    while (delta > std.math.pi) : (delta -= 2 * std.math.pi) {}
-    while (delta < -std.math.pi) : (delta += 2 * std.math.pi) {}
-    host.bezel_last_a = a;
-    host.bezel_accum += delta;
-    if (host.widgets[i].watch.turnBezel(host.bezel_base, host.bezel_accum)) {
-        markDirty(host, i);
-    }
-}
-
 /// True when a Ctrl+drag may begin: button down, Ctrl held, no drag yet,
-/// and the press landed on a widget. Never steals a bezel turn — Ctrl
-/// pressed mid-turn leaves the bezel alone.
+/// and the press landed on a widget.
 fn tryStartDrag(host: *Host) void {
     if (!host.left_down or !host.ctrl_down or host.drag_index != null) return;
-    if (host.bezel_index != null) return;
     const index = host.press_index orelse host.hovered_index orelse return;
     const r = host.widget_rects[index];
     host.drag_index = index;
@@ -1897,7 +1839,7 @@ fn resizeHit(r: widgets_mod.Rect, x: i32, y: i32) bool {
 /// resizes, it doesn't move.
 fn tryStartResize(host: *Host) bool {
     if (!host.left_down or host.resize_index != null) return false;
-    if (host.drag_index != null or host.bezel_index != null) return false;
+    if (host.drag_index != null) return false;
     const index = host.press_index orelse host.hovered_index orelse return false;
     // The icons grid is content-sized — its corner grip does nothing.
     if (std.meta.activeTag(host.widgets[index]) == .icons) return false;

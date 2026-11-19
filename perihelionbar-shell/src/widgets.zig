@@ -35,7 +35,24 @@ const nsvc = @import("netrate");
 // User/uptime service for the User card: ../perihelionbar/src/userinfo.zig.
 const usvc = @import("userinfo");
 
-pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes, network, user };
+pub const WidgetId = enum { clock, weather, media, system, calendar, note1, icons, fastfetch, processes, network, user };
+
+/// Card ids that existed once and were removed. An old shell.json or
+/// widgets-disabled may still name them; they are skipped without a
+/// warning (see parseWidgetId).
+pub const RETIRED_WIDGET_IDS = [_][]const u8{"watch"};
+
+pub const ParsedWidgetId = union(enum) { id: WidgetId, retired, unknown };
+
+/// A shell.json / widgets-disabled card id: a live card, a removed one
+/// (ignore quietly), or something unknown (worth a warning).
+pub fn parseWidgetId(s: []const u8) ParsedWidgetId {
+    if (std.meta.stringToEnum(WidgetId, s)) |id| return .{ .id = id };
+    for (RETIRED_WIDGET_IDS) |r| {
+        if (std.mem.eql(u8, s, r)) return .retired;
+    }
+    return .unknown;
+}
 
 /// Axis-aligned rect in surface coordinates. The host keeps one per widget
 /// (measured from the font at startup, placed from config).
@@ -126,15 +143,6 @@ const WX_STRIP_GAP: i64 = 12; // header → hairline → strip
 const WX_STRIP_ROW_GAP: i64 = 2;
 const WX_COL_MIN: i64 = 50; // 284 wide at 1x → five day columns
 
-// Analog watch (Seiko diver style) geometry: a compact tile whose content
-// IS the widget — the host skips its frosted card for this one, the steel
-// case and bezel are the chrome. No bracelet: just the head, with short
-// lug stubs top and bottom. cardSizeFor and WatchWidget.paint share these
-// so the measured rect always fits the painted watch.
-const WATCH_W: i64 = 190;
-const WATCH_H: i64 = 200;
-const WATCH_CASE_R: f64 = 86;
-
 // Desktop-icons geometry: a 2-column grid of icon cells (44px bitmap + up
 // to two 13px label lines), no card background — these sit directly on the
 // wallpaper the way a classic desktop does. Sizing is content-driven: the
@@ -189,8 +197,6 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
         // Sticky note: a text card, tall enough for six wrapped lines.
         // Header strip (tabs, +, ×) over notes_lines lines of text.
         .note1 => .{ @intCast(NoteWidget.NOTE_W), @intCast(2 * CARD_PAD + noteHeaderH(lh) + notes_layout.lines * lh) },
-        // Fixed-size: the watch is drawn from its own geometry, not the font.
-        .watch => .{ @intCast(WATCH_W), @intCast(WATCH_H) },
         // Desktop icons: the real size is content-driven (rescan count =>
         // applyIconsSize); the base is just the empty-state minimum so the
         // first frame has a tile to paint into.
@@ -446,7 +452,7 @@ pub const Canvas = struct {
         var y = y_start;
         while (y < y_end) : (y += 1) {
             const row = self.pixels[@as(usize, @intCast(y)) * self.width ..][0..self.width];
-            // Opaque primitives (watch case plates, bars, day/date windows)
+            // Opaque primitives (bars, tiles, filled cells)
             // are most of the fillRect calls; write them row-wise instead of
             // running the per-pixel alpha blend.
             if (sa == 255) {
@@ -613,8 +619,7 @@ pub const Canvas = struct {
     }
 
     /// Anti-aliased filled circle: solid inside, one-pixel feather at the
-    /// rim from the signed distance to it. The case and dial edges lean on
-    /// this — at 172px across, hard-edged stair-stepping would be obvious.
+    /// rim from the signed distance to it (gauge caps, avatar discs).
     pub fn fillCircleAA(self: Canvas, cx: f64, cy: f64, rad: f64, color: u32) void {
         const x0: i64 = @intFromFloat(@floor(cx - rad - 1.0));
         const x1: i64 = @intFromFloat(@ceil(cx + rad + 1.0));
@@ -632,8 +637,8 @@ pub const Canvas = struct {
         }
     }
 
-    /// AA-filled ring (annulus) — bezels and the stepped edge where the
-    /// case drops into the dial. Coverage is the product of both rims'.
+    /// AA-filled ring (annulus) — gauge tracks. Coverage is the smaller of
+    /// both rims'.
     pub fn fillRingAA(self: Canvas, cx: f64, cy: f64, rad_in: f64, rad_out: f64, color: u32) void {
         const x0: i64 = @intFromFloat(@floor(cx - rad_out - 1.0));
         const x1: i64 = @intFromFloat(@ceil(cx + rad_out + 1.0));
@@ -688,8 +693,7 @@ pub const Canvas = struct {
     }
 
     /// AA-filled convex polygon (either winding): per-pixel coverage from
-    /// the distance to the nearest edge. This is how rotated index batons
-    /// and the sweeping hands stay smooth at any angle.
+    /// the distance to the nearest edge, so rotated shapes stay smooth.
     pub fn fillConvex(self: Canvas, pts: []const FPt, color: u32) void {
         if (pts.len < 3) return;
         var minx = pts[0].x;
@@ -3634,421 +3638,6 @@ pub const CalendarWidget = struct {
     }
 };
 
-// --- analog watch (Seiko 5 automatic) --------------------------------------
-
-/// An analog clock drawn like a Seiko SKX diver: knurled steel case with a
-/// black 60-minute bezel (numerals, triangle pip at 12), lume plots
-/// (triangle at 12, bars at 6/9, dots elsewhere), a Mercedes hour hand, and
-/// a day-date window at 3 — no bracelet, just the head on short lug stubs.
-/// The seconds hand steps in 1/6-second beats — the 21,600 vph sweep of the
-/// 7S26 movement rather than a dead-beat tick.
-///
-/// Clicking anywhere on the dial flips between the black (SKX007) and a
-/// deep-blue dial. Hidden extra: circular-dragging the bezel ring turns
-/// the insert into a countdown timer (see tryStartBezel in main.zig) —
-/// the pip marks the target minute, notify-send plus the freedesktop
-/// alarm sound fires at zero. Every paint reads the wall clock fresh —
-/// no hand-angle state, nothing to drift.
-pub const WatchWidget = struct {
-    /// 0 = black diver, 1 = blue diver.
-    dial: u8 = 0,
-    /// Hidden bezel timer: minutes the insert is turned clockwise off 12
-    /// (0 = home, timer off). Set by circular-dragging the bezel ring; the
-    /// host owns the grab, this is just the resting offset.
-    bezel_min: u8 = 0,
-    /// monoMs() deadline the countdown fires at, 0 = disarmed. Runtime
-    /// state only — never persisted, a restart clears it.
-    timer_end_ms: i64 = 0,
-
-    /// Six repaints a second = six beats (21,600 vibrations/hour).
-    pub const interval_ms: i64 = 167; // six beats per second (21,600 vph)
-
-    /// Colours for one dial variant (0xAARRGGBB). The steel of the case
-    /// and the lume are shared between both variants.
-    const Palette = struct {
-        dial: u32,
-        bezel: u32,
-        bezel_text: u32,
-        minute_tick: u32,
-        five_tick: u32,
-        lume: u32,
-        hand: u32,
-        seconds: u32,
-        brand: u32,
-        window_fg: u32,
-    };
-
-    const STEEL_BODY: u32 = 0xFFA9AEB6;
-    const STEEL_POLISH: u32 = 0xFFD6DBE1;
-    const STEEL_BEZEL: u32 = 0xFFBEC3CA;
-    const STEEL_SHADOW: u32 = 0xFF7C818A;
-    const STEEL_CAP: u32 = 0xFFC8CDD4;
-    const BEZEL_DIM: u32 = 0xFF8B9098;
-    const PLOT_EDGE: u32 = 0xFF2E3238; // surround that lifts lume plots off the dial
-    const WINDOW_BG: u32 = 0xFFFFFFFF;
-    const WINDOW_BORDER: u32 = 0xFF1C1C1F;
-
-    const BLACK_DIVER: Palette = .{
-        .dial = 0xFF121418,
-        .bezel = 0xFF16181D,
-        .bezel_text = 0xFFE9EBEF,
-        .minute_tick = 0xFF6E737C,
-        .five_tick = 0xFFC9CED6,
-        .lume = 0xFFDCE6B8,
-        .hand = 0xFFDCE0E6,
-        .seconds = 0xFFB4BAC2,
-        .brand = 0xFFE9EBEF,
-        .window_fg = 0xFF17171A,
-    };
-    const BLUE_DIVER: Palette = .{
-        .dial = 0xFF152A45,
-        .bezel = 0xFF13263E,
-        .bezel_text = 0xFFE9EBEF,
-        .minute_tick = 0xFF6E7B8C,
-        .five_tick = 0xFFC9D2DE,
-        .lume = 0xFFDCE6B8,
-        .hand = 0xFFDCE0E6,
-        .seconds = 0xFFB4BAC2,
-        .brand = 0xFFE9EBEF,
-        .window_fg = 0xFF17171A,
-    };
-
-    /// Uppercased day abbreviations for the window — DAYS is title-case for
-    /// the digital clock's sub-line.
-    const DAYS_UPPER = [_][]const u8{ "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
-
-    const DEG = std.math.pi / 180.0;
-
-    pub fn tick(self: *WatchWidget) bool {
-        self.pollTimer(monoMs());
-        return true; // the hands move on every beat — always repaint
-    }
-
-    /// Click the dial to swap it (the host repaints after any click).
-    /// A press that starts on the bezel ring never reaches here — the host
-    /// consumes it as a bezel turn (see tryStartBezel in main.zig).
-    pub fn click(self: *WatchWidget) void {
-        self.dial = (self.dial + 1) % 2;
-    }
-
-    /// Dial center in the same tile-local coordinates paint uses.
-    pub fn dialCenter(r: Rect) [2]f64 {
-        return .{
-            @as(f64, @floatFromInt(r.x)) + @as(f64, @floatFromInt(r.w)) / 2.0,
-            @as(f64, @floatFromInt(r.y)) + @as(f64, @floatFromInt(r.h)) / 2.0,
-        };
-    }
-
-    /// True when (px, py) lands on the bezel ring (insert + knurled flank),
-    /// scaled by the card's content zoom to match the paint.
-    pub fn bezelHit(r: Rect, zoom: f32, px: i32, py: i32) bool {
-        const ctr = dialCenter(r);
-        const dx = @as(f64, @floatFromInt(px)) - ctr[0];
-        const dy = @as(f64, @floatFromInt(py)) - ctr[1];
-        const dist = @sqrt(dx * dx + dy * dy);
-        const z = @as(f64, zoom);
-        return dist >= 56.0 * z and dist <= 89.0 * z;
-    }
-
-    /// Pointer angle about the dial center: 0 at 12, growing clockwise
-    /// (matches radial()). Undefined at the exact center — callers skip
-    /// tiny radii.
-    pub fn pointerAngle(r: Rect, px: i32, py: i32) f64 {
-        const ctr = dialCenter(r);
-        const dx = @as(f64, @floatFromInt(px)) - ctr[0];
-        const dy = @as(f64, @floatFromInt(py)) - ctr[1];
-        return std.math.atan2(dx, -dy);
-    }
-
-    /// Fold a grab-relative turn (radians, clockwise positive) into the
-    /// resting offset: 1 minute per 6°, clamped 0..59 so an armed timer
-    /// always shows the pip visibly off 12. Returns true when it moved.
-    pub fn turnBezel(self: *WatchWidget, base: u8, accum_rad: f64) bool {
-        const mins = @as(f64, @floatFromInt(base)) + accum_rad * 180.0 / std.math.pi / 6.0;
-        const clamped: u8 = @intCast(std.math.clamp(@as(i64, @intFromFloat(@round(mins))), 0, 59));
-        if (clamped == self.bezel_min) return false;
-        self.bezel_min = clamped;
-        return true;
-    }
-
-    /// Button released after a bezel turn: arm the countdown, or clear it
-    /// when the pip came home to 12.
-    pub fn releaseBezel(self: *WatchWidget, now_ms: i64) void {
-        if (self.bezel_min == 0) {
-            self.timer_end_ms = 0;
-            return;
-        }
-        self.timer_end_ms = now_ms + @as(i64, self.bezel_min) * 60_000;
-        logging.step("watch: timer armed for {d} min", .{self.bezel_min});
-    }
-
-    /// Countdown expiry check for tick(): fires once — notify-send plus the
-    /// freedesktop alarm sound — and snaps the bezel home.
-    fn pollTimer(self: *WatchWidget, now_ms: i64) void {
-        if (self.timer_end_ms == 0 or now_ms < self.timer_end_ms) return;
-        const mins = self.bezel_min;
-        self.timer_end_ms = 0;
-        self.bezel_min = 0;
-        logging.step("watch: timer done ({d} min)", .{mins});
-        var nb: [256]u8 = undefined;
-        const msg = std.fmt.bufPrintZ(
-            &nb,
-            "notify-send -a perihelionbar -u critical 'Timer done' '{d}-minute timer up' && canberra-gtk-play -f /usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga 2>/dev/null || paplay /usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga 2>/dev/null || true",
-            .{mins},
-        ) catch return;
-        spawnDetached(msg);
-    }
-
-    /// Radial unit direction for angle `a` in radians: 0 = 12 o'clock,
-    /// growing clockwise.
-    fn radial(a: f64) [2]f64 {
-        return .{ @sin(a), -@cos(a) };
-    }
-
-    /// Point at radius `along` with lateral offset `off` from the dial
-    /// center, along direction (dx, dy).
-    fn at(cx: f64, cy: f64, dx: f64, dy: f64, along: f64, off: f64) Canvas.FPt {
-        return .{ .x = cx + dx * along - dy * off, .y = cy + dy * along + dx * off };
-    }
-
-    /// Tapered baton from radius r0 to r1 (either end may pass the center,
-    /// so hands can carry a tail), width w0 → w1. AA via fillConvex.
-    fn baton(c: Canvas, cx: f64, cy: f64, a: f64, r0: f64, r1: f64, w0: f64, w1: f64, color: u32) void {
-        const d = radial(a);
-        const pts = [4]Canvas.FPt{
-            at(cx, cy, d[0], d[1], r0, -w0 / 2),
-            at(cx, cy, d[0], d[1], r1, -w1 / 2),
-            at(cx, cy, d[0], d[1], r1, w1 / 2),
-            at(cx, cy, d[0], d[1], r0, w0 / 2),
-        };
-        c.fillConvex(&pts, color);
-    }
-
-    /// Centered, letterspaced text — dial brand lettering is spaced like
-    /// this on the real watch. ASCII only (SEIKO / AUTOMATIC).
-    fn drawSpaced(c: Canvas, cx: i64, baseline: i64, text: []const u8, gap: i64, color: u32) void {
-        var total: i64 = 0;
-        for (text, 0..) |_, i| {
-            total += (c.font.glyph(text[i]) catch continue).advance_x;
-            if (i + 1 < text.len) total += gap;
-        }
-        var pen = cx - @divTrunc(total, 2);
-        for (text, 0..) |_, i| {
-            _ = c.drawText(pen, baseline, text[i .. i + 1], color);
-            pen += (c.font.glyph(text[i]) catch continue).advance_x + gap;
-        }
-    }
-
-    pub fn paint(self: *const WatchWidget, c: Canvas, r: Rect) void {
-        const P: Palette = if (self.dial == 0) BLACK_DIVER else BLUE_DIVER;
-        // Corner-resize zoom: the whole dial scales about the rect center
-        // (at base size the center and every radius match the old fixed
-        // geometry exactly). All radii below ride `z`.
-        const z = c.zoom;
-        const cx_i: i64 = @as(i64, r.x) + @divTrunc(@as(i64, @intCast(r.w)), 2);
-        const cy_i: i64 = @as(i64, r.y) + @divTrunc(@as(i64, @intCast(r.h)), 2);
-        const cx: f64 = @floatFromInt(cx_i);
-        const cy: f64 = @floatFromInt(cy_i);
-
-        // Wall clock drives every hand — no angle state to drift. The
-        // sub-second read gives the beat phase (6 beats per second).
-        var tp: posix.timespec = undefined;
-        if (libc_mono.clock_gettime(0, &tp) != 0) { // 0 = CLOCK_REALTIME
-            tp.sec = @intCast(libc_time.time(null));
-            tp.nsec = 0;
-        }
-        const epoch: i64 = @intCast(tp.sec);
-        var tm: libc_time.Tm = undefined;
-        _ = libc_time.localtime_r(&epoch, &tm);
-        const nsec: i64 = @intCast(tp.nsec);
-        const beat: i64 = @divTrunc(@mod(nsec, 1_000_000_000) * 6, 1_000_000_000);
-
-        // Seconds: 6°/s with the hand stepping 1° per beat. Minute and
-        // hour ride continuously on top of that.
-        const sec_a = (@as(f64, @floatFromInt(tm.sec)) * 6.0 + @as(f64, @floatFromInt(beat))) * DEG;
-        const min_a = (@as(f64, @floatFromInt(tm.min)) + @as(f64, @floatFromInt(tm.sec)) / 60.0) * 6.0 * DEG;
-        const hr_a = (@as(f64, @floatFromInt(@mod(tm.hour, 12))) + @as(f64, @floatFromInt(tm.min)) / 60.0) * 30.0 * DEG;
-
-        // Short lug stubs top and bottom — the head without its bracelet,
-        // drawn first so the case laps over their inner ends.
-        for ([2]bool{ true, false }) |is_top| {
-            const s: f64 = if (is_top) -1.0 else 1.0;
-            const lugs = [4]Canvas.FPt{
-                .{ .x = cx - 23 * z, .y = cy + s * 76 * z },
-                .{ .x = cx + 23 * z, .y = cy + s * 76 * z },
-                .{ .x = cx + 17 * z, .y = cy + s * 97 * z },
-                .{ .x = cx - 17 * z, .y = cy + s * 97 * z },
-            };
-            c.fillConvex(&lugs, STEEL_BODY);
-        }
-
-        // Crown at 4 o'clock (SKX puts it between 3 and 4), poking out
-        // from behind the case: a radial stem plus the knurled knob.
-        const crown_a = 120.0 * DEG;
-        baton(c, cx, cy, crown_a, 78 * z, 90 * z, 7.0 * z, 7.0 * z, STEEL_BODY);
-        const cd = radial(crown_a);
-        const kx = cx + cd[0] * 90 * z;
-        const ky = cy + cd[1] * 90 * z;
-        c.fillCircleAA(kx, ky, 5.2 * z, STEEL_BODY);
-        c.fillRingAA(kx, ky, 3.0 * z, 5.2 * z, STEEL_SHADOW);
-
-        // Case: brushed body, polished outer band, then the bezel stack.
-        c.fillCircleAA(cx, cy, WATCH_CASE_R * z, STEEL_BODY);
-        c.fillRingAA(cx, cy, (WATCH_CASE_R - 3) * z, WATCH_CASE_R * z, STEEL_POLISH);
-        // Coin-edge knurling on the bezel flank.
-        var e: u32 = 0;
-        while (e < 60) : (e += 1) {
-            baton(c, cx, cy, @as(f64, @floatFromInt(e)) * 6.0 * DEG, 79.5 * z, 83.0 * z, 1.4 * z, 1.4 * z, STEEL_SHADOW);
-        }
-        // Black 60-minute insert.
-        c.fillRingAA(cx, cy, 60 * z, 79 * z, P.bezel);
-
-        // Bezel minute ticks — every minute for the first quarter like the
-        // real insert, fives elsewhere — skipping the numeral/triangle spots.
-        // The whole insert rides `bez_off`: the turned offset in radians.
-        const bez_off = @as(f64, @floatFromInt(self.bezel_min)) * 6.0 * DEG;
-        var i: u32 = 0;
-        while (i < 60) : (i += 1) {
-            const a_deg: i32 = @intCast(i * 6);
-            const near_num = @abs(a_deg - 60) < 10 or @abs(a_deg - 120) < 10 or
-                @abs(a_deg - 180) < 10 or @abs(a_deg - 240) < 10 or @abs(a_deg - 300) < 10;
-            const near_pip = a_deg < 10 or a_deg > 350;
-            if (near_num or near_pip) continue;
-            const a = @as(f64, @floatFromInt(i)) * 6.0 * DEG + bez_off;
-            if (i % 5 == 0) {
-                baton(c, cx, cy, a, 72.5 * z, 77.5 * z, 2.0 * z, 2.2 * z, P.bezel_text);
-            } else if (i <= 15) {
-                baton(c, cx, cy, a, 74.5 * z, 77.5 * z, 1.0 * z, 1.0 * z, BEZEL_DIM);
-            }
-        }
-
-        // Triangle pip at 12 on the bezel, apex toward the dial. Rides the
-        // bezel offset like the rest of the insert.
-        {
-            const pd = radial(bez_off);
-            const t_out = [3]Canvas.FPt{
-                at(cx, cy, pd[0], pd[1], 77.5 * z, -4.5 * z),
-                at(cx, cy, pd[0], pd[1], 77.5 * z, 4.5 * z),
-                at(cx, cy, pd[0], pd[1], 63.0 * z, 0),
-            };
-            c.fillConvex(&t_out, P.bezel_text);
-            const t_in = [3]Canvas.FPt{
-                at(cx, cy, pd[0], pd[1], 75.5 * z, -2.6 * z),
-                at(cx, cy, pd[0], pd[1], 75.5 * z, 2.6 * z),
-                at(cx, cy, pd[0], pd[1], 65.5 * z, 0),
-            };
-            c.fillConvex(&t_in, P.lume);
-        }
-
-        // Bezel numerals 10..50.
-        const numerals = [_]struct { deg: f64, label: *const [2]u8 }{
-            .{ .deg = 60, .label = "10" },
-            .{ .deg = 120, .label = "20" },
-            .{ .deg = 180, .label = "30" },
-            .{ .deg = 240, .label = "40" },
-            .{ .deg = 300, .label = "50" },
-        };
-        for (numerals) |n| {
-            const d = radial(n.deg * DEG + bez_off);
-            const px = cx + d[0] * 68.5 * z;
-            const py = cy + d[1] * 68.5 * z;
-            const tw = c.textWidth(n.label);
-            _ = c.drawText(
-                @as(i64, @intFromFloat(px)) - @divTrunc(tw, 2),
-                @as(i64, @intFromFloat(py)) + @divTrunc(c.font.ascentPx(), 2),
-                n.label,
-                P.bezel_text,
-            );
-        }
-
-        // Dial with a stepped edge out of the bezel.
-        c.fillRingAA(cx, cy, 58.5 * z, 60.5 * z, 0x88000000);
-        c.fillCircleAA(cx, cy, 59 * z, P.dial);
-
-        // Dial minute track just inside the edge.
-        var m: u32 = 0;
-        while (m < 60) : (m += 1) {
-            const a = @as(f64, @floatFromInt(m)) * 6.0 * DEG;
-            if (m % 5 == 0) {
-                baton(c, cx, cy, a, 53.5 * z, 58.0 * z, 1.8 * z, 2.0 * z, P.five_tick);
-            } else {
-                baton(c, cx, cy, a, 55.0 * z, 58.0 * z, 0.9 * z, 0.9 * z, P.minute_tick);
-            }
-        }
-
-        // Lume plots: triangle at 12, bars at 6 and 9, dots elsewhere —
-        // none at 3, where the day-date window sits.
-        var k: i32 = 0;
-        while (k < 12) : (k += 1) {
-            if (k == 3) continue;
-            const a = @as(f64, @floatFromInt(k)) * 30.0 * DEG;
-            const d = radial(a);
-            if (k == 0) {
-                const tri_out = [3]Canvas.FPt{
-                    at(cx, cy, d[0], d[1], 50 * z, -5.5 * z),
-                    at(cx, cy, d[0], d[1], 50 * z, 5.5 * z),
-                    at(cx, cy, d[0], d[1], 37 * z, 0),
-                };
-                c.fillConvex(&tri_out, PLOT_EDGE);
-                const tri_in = [3]Canvas.FPt{
-                    at(cx, cy, d[0], d[1], 48.5 * z, -3.6 * z),
-                    at(cx, cy, d[0], d[1], 48.5 * z, 3.6 * z),
-                    at(cx, cy, d[0], d[1], 38.5 * z, 0),
-                };
-                c.fillConvex(&tri_in, P.lume);
-            } else if (k == 6 or k == 9) {
-                baton(c, cx, cy, a, 38 * z, 50 * z, 9.0 * z, 9.0 * z, PLOT_EDGE);
-                baton(c, cx, cy, a, 39.5 * z, 48.5 * z, 6.2 * z, 6.2 * z, P.lume);
-            } else {
-                c.fillCircleAA(cx + d[0] * 44 * z, cy + d[1] * 44 * z, 5.4 * z, PLOT_EDGE);
-                c.fillCircleAA(cx + d[0] * 44 * z, cy + d[1] * 44 * z, 4.1 * z, P.lume);
-            }
-        }
-
-        // Day-date window at 3 o'clock — smaller here to sit inside the
-        // diver dial.
-        const win_x = cx_i + c.zx(10);
-        const win_y = cy_i - c.zx(10);
-        const win_w = c.zx(47);
-        const win_h = c.zx(20);
-        c.fillRect(win_x - 1, win_y - 1, @as(u64, @intCast(win_w + 2)), @as(u64, @intCast(win_h + 2)), WINDOW_BORDER);
-        c.fillRect(win_x, win_y, @as(u64, @intCast(win_w)), @as(u64, @intCast(win_h)), WINDOW_BG);
-        c.fillRect(win_x + c.zx(28), win_y + 1, 1, @as(u64, @intCast(win_h - 2)), 0xFF3A3A3E);
-        var date_buf: [4]u8 = undefined;
-        const date_str = std.fmt.bufPrint(&date_buf, "{d}", .{tm.mday}) catch " ";
-        const day_str = DAYS_UPPER[@as(usize, @intCast(tm.wday))];
-        const text_base = cy_i + @divTrunc(c.font.ascentPx(), 2);
-        const day_w = c.textWidth(day_str);
-        _ = c.drawText(win_x + c.zx(1) + @divTrunc(c.zx(26) - day_w, 2), text_base, day_str, P.window_fg);
-        const date_w = c.textWidth(date_str);
-        _ = c.drawText(win_x + c.zx(29) + @divTrunc(c.zx(17) - date_w, 2), text_base, date_str, P.window_fg);
-
-        // Branding: SEIKO under the 12, Automatic above the 6 — no "5"
-        // shield on a diver.
-        drawSpaced(c, cx_i, cy_i - c.zx(24), "SEIKO", c.zx(2), P.brand);
-        drawSpaced(c, cx_i, cy_i + c.zx(31), "Automatic", c.zx(1), P.brand);
-
-        // Hands: silver bodies with lume fill (sword minute over the
-        // Mercedes hour), then the thin seconds hand with its lollipop pip,
-        // stepping exactly 1° per beat.
-        baton(c, cx, cy, hr_a, -8 * z, 30 * z, 8.0 * z, 6.0 * z, P.hand);
-        baton(c, cx, cy, hr_a, -2 * z, 26 * z, 4.5 * z, 3.5 * z, P.lume);
-        const hd = radial(hr_a);
-        c.fillCircleAA(cx + hd[0] * 21 * z, cy + hd[1] * 21 * z, 6.2 * z, P.hand);
-        c.fillCircleAA(cx + hd[0] * 21 * z, cy + hd[1] * 21 * z, 4.6 * z, P.lume);
-        baton(c, cx, cy, hr_a, 15 * z, 27 * z, 1.4 * z, 1.4 * z, P.hand); // Mercedes bar
-        baton(c, cx, cy, min_a, -9 * z, 50 * z, 7.0 * z, 4.5 * z, P.hand);
-        baton(c, cx, cy, min_a, 0, 44 * z, 3.6 * z, 2.6 * z, P.lume);
-        baton(c, cx, cy, sec_a, -14 * z, 56 * z, 1.8 * z, 1.8 * z, P.seconds);
-        const sd = radial(sec_a);
-        c.fillCircleAA(cx + sd[0] * 44 * z, cy + sd[1] * 44 * z, 4.6 * z, P.seconds); // lollipop
-        c.fillCircleAA(cx + sd[0] * 44 * z, cy + sd[1] * 44 * z, 3.0 * z, P.lume);
-        c.fillCircleAA(cx - sd[0] * 12 * z, cy - sd[1] * 12 * z, 2.8 * z, P.seconds); // counterweight
-        c.fillCircleAA(cx, cy, 4.4 * z, STEEL_CAP);
-        c.fillCircleAA(cx, cy, 1.8 * z, P.hand);
-    }
-};
-
 // --- notes (sticky notes with tabs) -------------------------------------------
 
 // The Notes card: plain-text notes you type straight into the desktop card.
@@ -6346,7 +5935,6 @@ pub const Widget = union(WidgetId) {
     media: MediaWidget,
     system: SystemWidget,
     calendar: CalendarWidget,
-    watch: WatchWidget,
     note1: NoteWidget,
     icons: IconsWidget,
     fastfetch: FastfetchWidget,
@@ -6367,7 +5955,6 @@ pub const Widget = union(WidgetId) {
             .calendar => CalendarWidget.interval_ms,
             // Editing notes blink every half second; idle ones never repaint.
             .note1 => |*n| if (n.editing or n.armed()) NoteWidget.interval_ms else NoteWidget.idle_interval_ms,
-            .watch => WatchWidget.interval_ms,
             // The icons grid only self-heals a dead inotify watch here.
             .icons => IconsWidget.interval_ms,
             .fastfetch => FastfetchWidget.interval_ms,
@@ -6403,9 +5990,6 @@ pub const Widget = union(WidgetId) {
             },
             .note1 => |*n| blk: {
                 break :blk n.tick();
-            },
-            .watch => |*w| blk: {
-                break :blk w.tick();
             },
             // Repaints only when a shown row changed.
             .fastfetch => |*f| f.tick(),
@@ -6462,7 +6046,6 @@ pub const Widget = union(WidgetId) {
             .system => |*s| s.click(),
             .calendar => |*k| k.clickAt(r, font, zoom, x, y),
             .note1 => |*n| n.clickAt(r, font, x, y),
-            .watch => |*w| w.click(),
             .icons => |*ic| ic.click(r, x, y),
             .fastfetch => {},
             .processes => |*p| p.click(),
@@ -6481,7 +6064,6 @@ pub const Widget = union(WidgetId) {
             .system => |*w| w.paint(c, r),
             .calendar => |*w| w.paint(c, r),
             .note1 => |*n| n.paint(c, r),
-            .watch => |*w| w.paint(c, r),
             .icons => |*ic| ic.paint(c, r),
             .fastfetch => |*f| f.paint(c, r),
             .processes => |*p| p.paint(c, r),
@@ -6500,50 +6082,14 @@ pub fn noteSlot(w: *const Widget) ?u8 {
     };
 }
 
-// --- bezel-timer math tests ------------------------------------------------
-// Run from perihelionbar-shell/ with:
-//   zig test --dep font --dep logging --dep art -Mroot=src/widgets.zig
-//     -Mfont=../perihelionbar/src/font.zig -Mlogging=../perihelionbar/src/logging.zig
-//     -Mart=src/art.zig -I../perihelionbar/src -I/usr/include/freetype2
-//     -I/usr/include/libpng16 -lfreetype -lc
-// (freetype headers are for font.zig's @cImport; the tests below never
-// touch the font).
+// --- widget id tests -------------------------------------------------------
 
-test "watch bezel hit ring" {
-    const r = Rect{ .x = 840, .y = 12, .w = 190, .h = 200 }; // cx=935, cy=112
-    // On the ring at 12, 3, 6, 9 (r 60..79).
-    try std.testing.expect(WatchWidget.bezelHit(r, 1.0, 935, 112 - 70));
-    try std.testing.expect(WatchWidget.bezelHit(r, 1.0, 935 + 70, 112));
-    try std.testing.expect(WatchWidget.bezelHit(r, 1.0, 935, 112 + 70));
-    try std.testing.expect(WatchWidget.bezelHit(r, 1.0, 935 - 70, 112));
-    // Dial center and far outside are not bezel.
-    try std.testing.expect(!WatchWidget.bezelHit(r, 1.0, 935, 112));
-    try std.testing.expect(!WatchWidget.bezelHit(r, 1.0, 935, 112 - 40));
-    try std.testing.expect(!WatchWidget.bezelHit(r, 1.0, 0, 0));
-}
-
-test "watch pointer angle quadrants" {
-    const r = Rect{ .x = 840, .y = 12, .w = 190, .h = 200 };
-    const eps = 1e-9;
-    try std.testing.expect(@abs(WatchWidget.pointerAngle(r, 935, 112 - 50) - 0.0) < eps); // 12
-    try std.testing.expect(@abs(WatchWidget.pointerAngle(r, 935 + 50, 112) - std.math.pi / 2.0) < eps); // 3
-    try std.testing.expect(@abs(WatchWidget.pointerAngle(r, 935, 112 + 50) - std.math.pi) < eps); // 6
-    try std.testing.expect(@abs(WatchWidget.pointerAngle(r, 935 - 50, 112) + std.math.pi / 2.0) < eps); // 9
-}
-
-test "watch bezel turn quantize + clamp" {
-    var w = WatchWidget{};
-    const sixth = std.math.pi / 30.0; // 6° in radians
-    // A clockwise 30° turn from home = 5 minutes.
-    try std.testing.expect(w.turnBezel(0, sixth * 5));
-    try std.testing.expectEqual(@as(u8, 5), w.bezel_min);
-    // Same input twice: second call reports no movement.
-    try std.testing.expect(!w.turnBezel(0, sixth * 5));
-    // Counter-clockwise past home clamps at 0, clockwise past the top at 59.
-    try std.testing.expect(w.turnBezel(5, -sixth * 10));
-    try std.testing.expectEqual(@as(u8, 0), w.bezel_min);
-    try std.testing.expect(w.turnBezel(0, sixth * 100));
-    try std.testing.expectEqual(@as(u8, 59), w.bezel_min);
+test "widget ids: live, retired watch, unknown" {
+    try std.testing.expectEqual(ParsedWidgetId{ .id = .clock }, parseWidgetId("clock"));
+    try std.testing.expectEqual(ParsedWidgetId{ .id = .user }, parseWidgetId("user"));
+    try std.testing.expectEqual(ParsedWidgetId.retired, parseWidgetId("watch"));
+    try std.testing.expectEqual(ParsedWidgetId.unknown, parseWidgetId("clocks"));
+    try std.testing.expectEqual(ParsedWidgetId.unknown, parseWidgetId(""));
 }
 
 // --- sticky-note tests ------------------------------------------------------
