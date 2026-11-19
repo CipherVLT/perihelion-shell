@@ -1882,7 +1882,7 @@ pub const FastfetchWidget = struct {
             // tree prefix) aligned in one column, "break" as a half gap.
             var label_w: i64 = 0;
             for (s.cardRows()) |*row| {
-                if (row.kind == .row) label_w = @max(label_w, c.textWidth(row.label.slice()));
+                if (row.kind == .row and row.value.len > 0) label_w = @max(label_w, c.textWidth(row.label.slice()));
             }
             const val_x = text_x + label_w + c.zx(FF_LABEL_GAP);
             for (s.cardRows()) |*row| {
@@ -1897,12 +1897,10 @@ pub const FastfetchWidget = struct {
                         b += lh + rg;
                     },
                     .row => {
+                        // A row with no value is left out (never a "—").
+                        if (row.value.len == 0) continue;
                         _ = c.drawText(text_x, b, row.label.slice(), accent);
-                        if (row.value.len > 0) {
-                            _ = c.drawText(val_x, b, fitText(c, row.value.slice(), right - val_x, &fit_buf), text_col);
-                        } else {
-                            _ = c.drawText(val_x, b, "\u{2014}", dim(text_col, 0x66));
-                        }
+                        _ = c.drawText(val_x, b, fitText(c, row.value.slice(), right - val_x, &fit_buf), text_col);
                         b += lh + rg;
                     },
                 }
@@ -1910,16 +1908,15 @@ pub const FastfetchWidget = struct {
         } else {
             // Fields layout: fastfetch's default keys, aligned.
             var label_w: i64 = 0;
-            for (s.shownFields()) |f| label_w = @max(label_w, c.textWidth(f.label()));
+            for (s.shownFields()) |f| {
+                if (s.value(f).len > 0) label_w = @max(label_w, c.textWidth(f.label()));
+            }
             const val_x = text_x + label_w + c.zx(FF_LABEL_GAP);
             for (s.shownFields()) |f| {
-                _ = c.drawText(text_x, b, f.label(), accent);
                 const v = s.value(f);
-                if (v.len > 0) {
-                    _ = c.drawText(val_x, b, fitText(c, v, right - val_x, &fit_buf), text_col);
-                } else {
-                    _ = c.drawText(val_x, b, "\u{2014}", dim(text_col, 0x66));
-                }
+                if (v.len == 0) continue; // no value: no row
+                _ = c.drawText(text_x, b, f.label(), accent);
+                _ = c.drawText(val_x, b, fitText(c, v, right - val_x, &fit_buf), text_col);
                 b += lh + rg;
             }
         }

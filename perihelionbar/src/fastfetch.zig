@@ -127,6 +127,7 @@ const libc = struct {
     extern "c" fn statvfs(path: [*:0]const u8, buf: *Statvfs) c_int;
     extern "c" fn time(t: ?*i64) i64;
     extern "c" fn localtime_r(t: *const i64, out: *Tm) ?*Tm;
+    extern "c" fn getuid() u32;
 };
 
 /// "2026-11-18 15:53" — fastfetch's date/time without the seconds (a card
@@ -389,6 +390,8 @@ pub const Config = struct {
     root: []const u8 = "",
     /// Home directory ("" = $HOME).
     home: []const u8 = "",
+    /// Whose login shell to show (null = getuid()).
+    uid: ?u32 = null,
 };
 
 /// shell.json keys (std.json, ignore_unknown_fields).
@@ -498,6 +501,302 @@ pub fn distroGlyph(id: []const u8) u32 {
     return 0xF31A; // linux-tux
 }
 
+// --- desktop readers: shell, terminal, terminal font, GTK theme ------------------------
+//
+// The card runs fastfetch from perihelion-shell, not from a terminal, so
+// fastfetch's shell module names perihelion-shell, and its terminal,
+// terminal-font and WM-theme modules find nothing (Mango has no theme of
+// its own). Those four rows are filled here instead: the login shell from
+// the passwd entry, the terminal the user would get (TERMINAL,
+// xdg-terminal-exec's list, Mango's Super+Return bind, foot), that
+// terminal's font from its config, and the GTK theme. Read once at start
+// (a few small files); versions come from the regular fastfetch run.
+
+/// Rows the card fills from the desktop rather than from fastfetch.
+pub const Native = enum { none, shell, terminal, terminal_font, wm_theme };
+
+/// What buildPlan needs to know about the desktop: binaries whose
+/// `--version` the fastfetch run should print, and whether gsettings can
+/// be asked for the GTK theme.
+pub const Extras = struct {
+    shell_path: []const u8 = "",
+    term_path: []const u8 = "",
+    gsettings: bool = false,
+};
+
+pub const GSETTINGS_THEME_CMD = "gsettings get org.gnome.desktop.interface gtk-theme 2>/dev/null";
+
+pub fn baseName(p: []const u8) []const u8 {
+    const t = std.mem.trimEnd(u8, p, "/");
+    return if (std.mem.lastIndexOfScalar(u8, t, '/')) |i| t[i + 1 ..] else t;
+}
+
+/// Login shell of `uid` from passwd text (name:pw:uid:gid:gecos:home:shell).
+pub fn passwdShell(text: []const u8, uid: u32) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        var f = std.mem.splitScalar(u8, line, ':');
+        _ = f.next() orelse continue;
+        _ = f.next() orelse continue;
+        const u = std.fmt.parseInt(u32, f.next() orelse continue, 10) catch continue;
+        if (u != uid) continue;
+        _ = f.next() orelse continue;
+        _ = f.next() orelse continue;
+        _ = f.next() orelse continue;
+        const sh = std.mem.trim(u8, f.next() orelse continue, " \t\r");
+        return if (sh.len > 0) sh else null;
+    }
+    return null;
+}
+
+/// The version in a `--version` line: the first token that starts with a
+/// digit and has a dot, cut at the first other character.
+/// "GNU bash, version 5.2.37(1)-release" -> "5.2.37",
+/// "fish, version 4.0.2", "kitty 0.39.1 created by …",
+/// "foot version: 1.20.2 +pgo" -> the numbers.
+pub fn parseVersion(line: []const u8) ?[]const u8 {
+    var it = std.mem.tokenizeAny(u8, line, " \t,:");
+    while (it.next()) |tok| {
+        if (!std.ascii.isDigit(tok[0])) continue;
+        var end: usize = 0;
+        var dots: usize = 0;
+        while (end < tok.len and (std.ascii.isDigit(tok[end]) or tok[end] == '.')) : (end += 1) {
+            if (tok[end] == '.') dots += 1;
+        }
+        const v = std.mem.trimEnd(u8, tok[0..end], ".");
+        if (dots > 0 and std.mem.indexOfScalar(u8, v, '.') != null) return v;
+    }
+    return null;
+}
+
+/// "name version" from a `--version` line, or just the name.
+fn withVersion(out: []u8, name: []const u8, version_line: []const u8) []const u8 {
+    const v = parseVersion(version_line) orelse return name;
+    return std.fmt.bufPrint(out, "{s} {s}", .{ name, v }) catch name;
+}
+
+/// Terminal entries of an xdg-terminals.list, in order, as binary-ish
+/// names ("foot.desktop" -> "foot", "com.mitchellh.ghostty.desktop" ->
+/// "ghostty", "kitty.desktop:new-window" -> "kitty"). Comments,
+/// directives ("/execarg…") and exclusions ("-name") are skipped.
+pub fn xdgTerminalEntries(text: []const u8, out: [][]const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        if (n == out.len) break;
+        var line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#' or line[0] == '/' or line[0] == '-') continue;
+        if (line[0] == '+') line = line[1..];
+        if (std.mem.indexOfScalar(u8, line, ':')) |c| line = line[0..c];
+        if (std.mem.endsWith(u8, line, ".desktop")) line = line[0 .. line.len - ".desktop".len];
+        if (std.mem.lastIndexOfScalar(u8, line, '.')) |d| line = line[d + 1 ..];
+        if (line.len == 0) continue;
+        out[n] = line;
+        n += 1;
+    }
+    return n;
+}
+
+/// A desktop id that names a launcher rather than the terminal itself.
+fn terminalBinary(name: []const u8) []const u8 {
+    if (std.mem.eql(u8, name, "foot-server") or std.mem.eql(u8, name, "footclient")) return "foot";
+    return name;
+}
+
+/// The program Mango's Return binds spawn (the plain Super+Return one when
+/// there are several): "bind=SUPER,Return,spawn,kitty" -> "kitty".
+pub fn mangoTerminal(text: []const u8) ?[]const u8 {
+    var first: ?[]const u8 = null;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, "bind")) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        // bind, bindl, bindr, bindlr, binds (Mango's variants).
+        const suffix = std.mem.trimEnd(u8, line[4..eq], " ");
+        var name_ok = suffix.len <= 2;
+        for (suffix) |ch| {
+            if (std.mem.indexOfScalar(u8, "lrs", ch) == null) name_ok = false;
+        }
+        if (!name_ok) continue;
+        var f = std.mem.splitScalar(u8, line[eq + 1 ..], ',');
+        const mods = std.mem.trim(u8, f.next() orelse continue, " \t");
+        const key = std.mem.trim(u8, f.next() orelse continue, " \t");
+        const action = std.mem.trim(u8, f.next() orelse continue, " \t");
+        const cmd = std.mem.trim(u8, f.rest(), " \t");
+        if (!std.ascii.eqlIgnoreCase(key, "Return")) continue;
+        if (!std.mem.eql(u8, action, "spawn") and !std.mem.eql(u8, action, "spawn_shell")) continue;
+        var tok = std.mem.tokenizeAny(u8, cmd, " \t");
+        const prog = baseName(tok.next() orelse continue);
+        if (prog.len == 0) continue;
+        if (std.ascii.eqlIgnoreCase(mods, "SUPER")) return prog;
+        if (first == null) first = prog;
+    }
+    return first;
+}
+
+/// Files a Mango config pulls in ("source=./cfg/keybinds.conf",
+/// "source_optional=~/…"), in order.
+pub fn mangoSources(text: []const u8, out: [][]const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        if (n == out.len) break;
+        const line = std.mem.trim(u8, raw, " \t\r");
+        const v = if (std.mem.startsWith(u8, line, "source="))
+            line["source=".len..]
+        else if (std.mem.startsWith(u8, line, "source_optional="))
+            line["source_optional=".len..]
+        else
+            continue;
+        const p = std.mem.trim(u8, v, " \t\"");
+        if (p.len == 0) continue;
+        out[n] = p;
+        n += 1;
+    }
+    return n;
+}
+
+/// A terminal font as found in its config: family and size (either may be
+/// missing; the reader fills in the terminal's defaults).
+pub const TermFont = struct {
+    family: Text(80) = .{},
+    size: Text(16) = .{},
+
+    /// "JetBrainsMono Nerd Font 11".
+    pub fn format(self: *const TermFont, out: []u8) []const u8 {
+        if (self.family.len == 0) return "";
+        if (self.size.len == 0) return self.family.slice();
+        return std.fmt.bufPrint(out, "{s} {s}", .{ self.family.slice(), self.size.slice() }) catch self.family.slice();
+    }
+};
+
+/// "11.0" -> "11", "10.50" -> "10.5".
+fn cleanSize(s: []const u8) []const u8 {
+    var v = std.mem.trim(u8, s, " \t\"'");
+    if (std.mem.indexOfScalar(u8, v, '.') != null) {
+        v = std.mem.trimEnd(u8, v, "0");
+        v = std.mem.trimEnd(u8, v, ".");
+    }
+    return v;
+}
+
+/// foot.ini: the first font of `font=` in [main] (or before any section),
+/// with its :size= (points) or :pixelsize= (shown as px).
+pub fn footFont(text: []const u8, out: *TermFont) void {
+    var main = true;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#' or line[0] == ';') continue;
+        if (line[0] == '[') {
+            main = std.mem.eql(u8, line, "[main]");
+            continue;
+        }
+        if (!main) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        if (!std.mem.eql(u8, std.mem.trim(u8, line[0..eq], " \t"), "font")) continue;
+        var first = std.mem.trim(u8, line[eq + 1 ..], " \t");
+        if (std.mem.indexOfScalar(u8, first, ',')) |c| first = std.mem.trim(u8, first[0..c], " \t");
+        var parts = std.mem.splitScalar(u8, first, ':');
+        out.family.set(std.mem.trim(u8, parts.next() orelse "", " \t"));
+        out.size = .{};
+        while (parts.next()) |attr| {
+            const a = std.mem.trim(u8, attr, " \t");
+            if (std.mem.startsWith(u8, a, "size=")) out.size.set(cleanSize(a["size=".len..]));
+            if (std.mem.startsWith(u8, a, "pixelsize=")) {
+                var pb: [24]u8 = undefined;
+                out.size.set(std.fmt.bufPrint(&pb, "{s}px", .{cleanSize(a["pixelsize=".len..])}) catch "");
+            }
+        }
+    }
+}
+
+/// One kitty.conf line: font_family / font_size into `out`; the path of an
+/// `include` line is returned for the caller to follow.
+pub fn kittyLine(raw: []const u8, out: *TermFont) ?[]const u8 {
+    const line = std.mem.trim(u8, raw, " \t\r");
+    if (line.len == 0 or line[0] == '#') return null;
+    const sp = std.mem.indexOfAny(u8, line, " \t") orelse return null;
+    const key = line[0..sp];
+    const val = std.mem.trim(u8, line[sp..], " \t");
+    if (std.mem.eql(u8, key, "include")) return val;
+    if (std.mem.eql(u8, key, "font_family")) {
+        // kitty 0.36+: font_family family="JetBrains Mono" style=…
+        if (std.mem.indexOf(u8, val, "family=")) |fi| {
+            var v = val[fi + "family=".len ..];
+            if (v.len > 0 and (v[0] == '"' or v[0] == '\'')) {
+                const q = v[0];
+                v = v[1..];
+                v = v[0 .. std.mem.indexOfScalar(u8, v, q) orelse v.len];
+            } else {
+                v = v[0 .. std.mem.indexOfAny(u8, v, " \t") orelse v.len];
+            }
+            out.family.set(v);
+        } else if (!std.mem.eql(u8, val, "auto")) {
+            out.family.set(val);
+        }
+    }
+    if (std.mem.eql(u8, key, "font_size")) out.size.set(cleanSize(val));
+    return null;
+}
+
+/// alacritty.toml: [font] size, and the normal face's family ([font.normal]
+/// family = …, or [font] normal = { family = … }).
+pub fn alacrittyFont(text: []const u8, out: *TermFont) void {
+    var section: []const u8 = "";
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        if (line[0] == '[') {
+            section = std.mem.trim(u8, line, "[] \t");
+            continue;
+        }
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = std.mem.trim(u8, line[0..eq], " \t");
+        const val = std.mem.trim(u8, line[eq + 1 ..], " \t");
+        if (std.mem.eql(u8, section, "font") and std.mem.eql(u8, key, "size")) out.size.set(cleanSize(val));
+        if (std.mem.eql(u8, section, "font.normal") and std.mem.eql(u8, key, "family")) out.family.set(std.mem.trim(u8, val, "\"'"));
+        if (std.mem.eql(u8, section, "font") and std.mem.eql(u8, key, "normal")) {
+            if (std.mem.indexOf(u8, val, "family")) |fi| {
+                var v = val[fi + "family".len ..];
+                v = std.mem.trimStart(u8, v, " \t=");
+                if (v.len > 0 and (v[0] == '"' or v[0] == '\'')) {
+                    const q = v[0];
+                    v = v[1..];
+                    out.family.set(v[0 .. std.mem.indexOfScalar(u8, v, q) orelse v.len]);
+                }
+            }
+        }
+    }
+}
+
+/// gsettings' answer "'adw-gtk3-dark'\n" -> "adw-gtk3-dark".
+pub fn gsettingsString(out: []const u8) []const u8 {
+    return std.mem.trim(u8, out, " \t\r\n'\"");
+}
+
+/// A format that starts with its own label, the way a config written for
+/// the terminal does ("OS Age: {result}", "Uptime: {formatted}"): the
+/// words become the row's label and the rest stays the format, so the
+/// card doesn't show "Uptime   Uptime: 11 mins".
+pub const FormatPrefix = struct { words: []const u8, rest: []const u8 };
+
+pub fn splitFormatPrefix(format: []const u8) ?FormatPrefix {
+    const brace = std.mem.indexOfScalar(u8, format, '{') orelse return null;
+    const colon = std.mem.indexOf(u8, format[0..brace], ": ") orelse return null;
+    const words = std.mem.trim(u8, format[0..colon], " ");
+    var alpha = false;
+    for (words) |ch| {
+        if (std.ascii.isAlphabetic(ch)) alpha = true;
+    }
+    if (!alpha) return null;
+    const rest = std.mem.trimStart(u8, format[colon + 2 ..], " ");
+    if (rest.len == 0) return null;
+    return .{ .words = words, .rest = rest };
+}
+
 // --- config layout: the user's fastfetch config as card rows -----------------------
 
 pub const Layout = enum { config, fields };
@@ -520,6 +819,9 @@ pub const CardRow = struct {
     /// Holds a value from the binary (or the config itself), not a
     /// native stand-in.
     fresh: bool = false,
+    /// Filled from the desktop instead of fastfetch's own module (see
+    /// Native).
+    native: Native = .none,
 };
 
 pub const Plan = struct {
@@ -783,10 +1085,24 @@ fn strField(o: std.json.ObjectMap, name: []const u8) ?[]const u8 {
     return if (v == .string) v.string else null;
 }
 
+/// 'text' for sh, with embedded quotes escaped. Null if `out` is too small.
+fn shellQuote(text: []const u8, out: []u8) ?[]const u8 {
+    var w = Buf{ .b = out };
+    w.put("'");
+    for (text) |ch| {
+        if (ch == '\'') w.put("'\\''") else w.put(&[_]u8{ch});
+    }
+    w.put("'");
+    return if (w.ok) out[0..w.n] else null;
+}
+
 /// Reads a fastfetch JSONC config into card rows and writes the derived
 /// config the binary runs (same modules and options, keys "@@N", no
-/// logo, separator ": "). Null when it isn't a usable config.
-pub fn buildPlan(alloc: std.mem.Allocator, jsonc: []const u8, rows: *[MAX_ROWS]CardRow, derived: []u8) ?Plan {
+/// logo, separator ": "). The shell, terminal, terminal-font and WM-theme
+/// modules become desktop rows (Native): the binary prints the shell's and
+/// terminal's `--version` line and gsettings' GTK theme for them instead.
+/// Null when it isn't a usable config.
+pub fn buildPlan(alloc: std.mem.Allocator, jsonc: []const u8, rows: *[MAX_ROWS]CardRow, derived: []u8, ex: Extras) ?Plan {
     const clean = stripJsonc(alloc, jsonc) catch return null;
     const root = std.json.parseFromSliceLeaky(std.json.Value, alloc, clean, .{}) catch return null;
     if (root != .object) return null;
@@ -856,9 +1172,52 @@ pub fn buildPlan(alloc: std.mem.Allocator, jsonc: []const u8, rows: *[MAX_ROWS]C
             continue;
         }
 
-        const tl = typeLabel(t, &tlb);
+        // "OS Age: {result}": the words are the label, the rest the format.
+        const prefix: ?FormatPrefix = if (format) |f| splitFormatPrefix(f) else null;
+        const tl = if (prefix) |px| px.words else typeLabel(t, &tlb);
+        const eff_format: ?[]const u8 = if (prefix) |px| px.rest else format;
         var r = CardRow{ .field = std.meta.stringToEnum(Field, t) };
         r.label.set(if (key) |k| deriveLabel(k, tl, &lb) else tl);
+
+        const native: Native = if (std.mem.eql(u8, t, "shell"))
+            .shell
+        else if (std.mem.eql(u8, t, "terminal"))
+            .terminal
+        else if (std.mem.eql(u8, t, "terminalfont"))
+            .terminal_font
+        else if (std.mem.eql(u8, t, "wmtheme"))
+            .wm_theme
+        else
+            .none;
+        if (native != .none) {
+            r.field = null;
+            r.native = native;
+            // What the run prints for this row, if anything.
+            var cb: [400]u8 = undefined;
+            const cmd: ?[]const u8 = switch (native) {
+                .shell, .terminal => blk: {
+                    const path = if (native == .shell) ex.shell_path else ex.term_path;
+                    if (path.len == 0) break :blk null;
+                    var qb: [300]u8 = undefined;
+                    const q = shellQuote(path, &qb) orelse break :blk null;
+                    break :blk std.fmt.bufPrint(&cb, "{s} --version 2>/dev/null | head -n 1", .{q}) catch null;
+                },
+                .wm_theme => if (ex.gsettings) GSETTINGS_THEME_CMD else null,
+                else => null,
+            };
+            if (cmd) |text| {
+                const idx = plan.modules;
+                r.module = @intCast(idx);
+                if (idx > 0) w.put(",");
+                w.fmt("{{\"type\":\"command\",\"key\":\"@@{d}\",\"text\":", .{idx});
+                w.str(text);
+                w.put("}");
+                plan.modules += 1;
+            }
+            rows[plan.rows] = r;
+            plan.rows += 1;
+            continue;
+        }
         if (std.mem.eql(u8, t, "datetime")) {
             // Shown natively and kept current; no point running it.
             r.live = .datetime;
@@ -867,7 +1226,11 @@ pub fn buildPlan(alloc: std.mem.Allocator, jsonc: []const u8, rows: *[MAX_ROWS]C
             plan.rows += 1;
             continue;
         }
-        if (format == null) {
+        // Live rows only where the card's own value looks like fastfetch's
+        // (its default format; "{formatted}" is the uptime default).
+        const default_fmt = eff_format == null or
+            (std.mem.eql(u8, t, "uptime") and std.mem.eql(u8, eff_format.?, "{formatted}"));
+        if (default_fmt) {
             r.live = if (std.mem.eql(u8, t, "uptime")) .uptime else if (std.mem.eql(u8, t, "memory")) .memory else if (std.mem.eql(u8, t, "disk")) .disk else .none;
         }
         const idx = plan.modules;
@@ -879,7 +1242,18 @@ pub fn buildPlan(alloc: std.mem.Allocator, jsonc: []const u8, rows: *[MAX_ROWS]C
         const tag = std.fmt.bufPrint(&kb, "\"key\":\"@@{d}\"", .{idx}) catch continue;
         if (idx > 0) w.put(",");
         if (obj) |o| {
-            writeObject(&w, o, &.{ "key", "keyColor", "keyFormat", "keyWidth", "keyIcon" }, tag);
+            if (prefix) |px| {
+                // Same module, its label words dropped from the format.
+                var eb: [600]u8 = undefined;
+                var ew = Buf{ .b = &eb };
+                ew.put(tag);
+                ew.put(",\"format\":");
+                ew.str(px.rest);
+                if (!ew.ok) continue;
+                writeObject(&w, o, &.{ "key", "keyColor", "keyFormat", "keyWidth", "keyIcon", "format" }, eb[0..ew.n]);
+            } else {
+                writeObject(&w, o, &.{ "key", "keyColor", "keyFormat", "keyWidth", "keyIcon" }, tag);
+            }
         } else {
             w.put("{\"type\":");
             w.str(t);
@@ -955,6 +1329,15 @@ pub const Service = struct {
     config_path: Text(320) = .{},
     derived_path: Text(320) = .{},
 
+    // The desktop rows (Native), read once at start.
+    shell_path: Text(256) = .{},
+    shell_name: Text(64) = .{},
+    term_name: Text(64) = .{},
+    term_path: Text(256) = .{},
+    term_font: Text(112) = .{},
+    gtk_theme: Text(96) = .{},
+    gsettings: bool = false,
+
     /// Detection and config reading only (PATH lookups, a few small file
     /// reads, one small file write): no process.
     pub fn init(cfg: Config) Service {
@@ -962,6 +1345,7 @@ pub const Service = struct {
         s.root.set(cfg.root);
         s.home.set(if (cfg.home.len > 0) cfg.home else env("HOME"));
         s.detectSource(cfg.binary);
+        s.detectDesktop(cfg.uid orelse libc.getuid());
         var text_buf: [32768]u8 = undefined;
         const cfg_text = s.findConfig(cfg.config, &text_buf);
         if (cfg_text) |text| s.useConfigLayout(text);
@@ -1026,9 +1410,18 @@ pub const Service = struct {
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
         var derived: [16384]u8 = undefined;
-        const plan = buildPlan(arena.allocator(), text, &self.rows, &derived) orelse return;
+        // Version lines only for binaries that can actually be run.
+        var sp_ok = false;
+        if (self.shell_path.len > 0) sp_ok = libc.access(self.shell_path.z().ptr, X_OK) == 0;
+        const ex = Extras{
+            .shell_path = if (sp_ok) self.shell_path.slice() else "",
+            .term_path = self.term_path.slice(),
+            .gsettings = self.gsettings,
+        };
+        const plan = buildPlan(arena.allocator(), text, &self.rows, &derived, ex) orelse return;
         self.layout = .config;
         self.row_count = plan.rows;
+        self.fillDesktopRows();
         self.palette = plan.palette;
         self.has_datetime = plan.datetime;
         // Native fields behind the rows: first paint, minute refresh, fallback.
@@ -1179,6 +1572,11 @@ pub const Service = struct {
                 for (self.rows[0..self.row_count], 0..) |*r, i| {
                     if (r.module != tg.idx) continue;
                     got_rows += 1;
+                    if (r.native != .none) {
+                        self.desktopAnswer(r, tg.value);
+                        seen_rows[i] = true;
+                        continue;
+                    }
                     if (!seen_rows[i]) {
                         r.value.set(tg.value);
                     } else {
@@ -1199,6 +1597,9 @@ pub const Service = struct {
         var lines = std.mem.splitScalar(u8, body, '\n');
         while (lines.next()) |line| {
             const row = parseRow(line) orelse continue;
+            // fastfetch's shell is its parent, perihelion-shell: keep the
+            // login shell read natively.
+            if (row.field == .shell) continue;
             const idx = @intFromEnum(row.field);
             if (std.mem.indexOfScalar(Field, self.shownFields(), row.field) == null) continue;
             got += 1;
@@ -1373,6 +1774,285 @@ pub const Service = struct {
         while (self.logo_count > 0 and self.logo[self.logo_count - 1].len == 0) self.logo_count -= 1;
     }
 
+    // --- desktop rows (shell, terminal, terminal font, GTK theme) ---
+
+    /// A binary by name: under root's /usr/bin in tests, else on PATH.
+    fn findBin(self: *const Service, name: []const u8, out: *Text(256)) bool {
+        if (name.len == 0) return false;
+        if (self.root.len > 0) {
+            var zb: [400]u8 = undefined;
+            const z = pathZ(&zb, "{s}/usr/bin/{s}", .{ self.root.slice(), name }) orelse return false;
+            if (libc.access(z.ptr, X_OK) != 0) return false;
+            out.set(z);
+            return true;
+        }
+        return findOnPath(name, out);
+    }
+
+    /// The user's config dir: $XDG_CONFIG_HOME (real use only), else
+    /// ~/.config.
+    fn configDir(self: *const Service, buf: []u8) []const u8 {
+        const xdg = env("XDG_CONFIG_HOME");
+        if (xdg.len > 0 and self.root.len == 0) return std.fmt.bufPrint(buf, "{s}", .{xdg}) catch "";
+        return std.fmt.bufPrint(buf, "{s}/.config", .{self.home.slice()}) catch "";
+    }
+
+    /// A path from a config file: "~/x" under home, "/x" under root (tests),
+    /// "./x" or "x" relative to `dir`.
+    fn resolvePath(self: *const Service, p: []const u8, dir: []const u8, out: []u8) ?[:0]const u8 {
+        if (std.mem.startsWith(u8, p, "~/")) return pathZ(out, "{s}{s}", .{ self.home.slice(), p[1..] });
+        if (p.len > 0 and p[0] == '/') return pathZ(out, "{s}{s}", .{ self.root.slice(), p });
+        const rel = if (std.mem.startsWith(u8, p, "./")) p[2..] else p;
+        return pathZ(out, "{s}/{s}", .{ dir, rel });
+    }
+
+    fn detectDesktop(self: *Service, uid: u32) void {
+        var buf: [16384]u8 = undefined;
+        var pb: [400]u8 = undefined;
+        var cb: [320]u8 = undefined;
+        const cfg = self.configDir(&cb);
+
+        // Login shell: passwd entry, else $SHELL.
+        var sh: []const u8 = "";
+        if (pathZ(&pb, "{s}/etc/passwd", .{self.root.slice()})) |p| {
+            if (readFile(p, &buf)) |t| sh = passwdShell(t, uid) orelse "";
+        }
+        if (sh.len == 0 and self.root.len == 0) sh = env("SHELL");
+        self.shell_path.set(sh);
+        self.shell_name.set(baseName(sh));
+
+        self.detectTerminal(cfg, &buf);
+        self.detectTermFont(cfg, &buf);
+
+        // GTK theme: GTK 4's settings, then GTK 3's; gsettings (asked in
+        // the fastfetch run) wins when it answers.
+        for ([_][]const u8{ "gtk-4.0", "gtk-3.0" }) |v| {
+            const p = pathZ(&pb, "{s}/{s}/settings.ini", .{ cfg, v }) orelse continue;
+            const t = readFile(p, &buf) orelse continue;
+            if (keyValue(t, "gtk-theme-name")) |name| {
+                self.gtk_theme.set(name);
+                break;
+            }
+        }
+        var gb: Text(256) = .{};
+        self.gsettings = self.findBin("gsettings", &gb);
+    }
+
+    /// The terminal the user gets: $TERMINAL, xdg-terminal-exec's list
+    /// (first installed entry), the program Mango's Return bind spawns,
+    /// then foot when it's installed.
+    fn detectTerminal(self: *Service, cfg: []const u8, buf: []u8) void {
+        var pb: [400]u8 = undefined;
+        if (self.root.len == 0) {
+            var tok = std.mem.tokenizeAny(u8, env("TERMINAL"), " \t");
+            if (tok.next()) |t| {
+                if (self.setTerminal(baseName(t), false)) return;
+            }
+        }
+        // xdg-terminal-exec: desktop-specific lists first.
+        var desk_buf: [32]u8 = undefined;
+        var desk: []const u8 = "";
+        if (self.root.len == 0) {
+            var d = env("XDG_CURRENT_DESKTOP");
+            if (std.mem.indexOfScalar(u8, d, ':')) |i| d = d[0..i];
+            if (d.len > 0 and d.len <= desk_buf.len) desk = std.ascii.lowerString(&desk_buf, d);
+        }
+        const r = self.root.slice();
+        var lists: [5]?[:0]const u8 = .{null} ** 5;
+        var lb: [5][400]u8 = undefined;
+        if (desk.len > 0) lists[0] = pathZ(&lb[0], "{s}/{s}-xdg-terminals.list", .{ cfg, desk });
+        lists[1] = pathZ(&lb[1], "{s}/xdg-terminals.list", .{cfg});
+        if (desk.len > 0) lists[2] = pathZ(&lb[2], "{s}/etc/xdg/{s}-xdg-terminals.list", .{ r, desk });
+        lists[3] = pathZ(&lb[3], "{s}/etc/xdg/xdg-terminals.list", .{r});
+        lists[4] = pathZ(&lb[4], "{s}/usr/share/xdg-terminal-exec/xdg-terminals.list", .{r});
+        for (lists) |lp| {
+            const p = lp orelse continue;
+            const t = readFile(p, buf) orelse continue;
+            var entries: [16][]const u8 = undefined;
+            const n = xdgTerminalEntries(t, &entries);
+            for (entries[0..n]) |e| {
+                if (self.setTerminal(terminalBinary(e), true)) return;
+            }
+        }
+        // Mango: the user's config, then the system one Perihelion ships.
+        const mango_cfgs = [_]struct { base: []const u8, under_root: bool }{
+            .{ .base = cfg, .under_root = false },
+            .{ .base = "/usr/share/perihelion", .under_root = true },
+            .{ .base = "/etc", .under_root = true },
+        };
+        for (mango_cfgs) |mc| {
+            var db: [400]u8 = undefined;
+            const dir = (if (mc.under_root)
+                std.fmt.bufPrint(&db, "{s}{s}/mango", .{ r, mc.base })
+            else
+                std.fmt.bufPrint(&db, "{s}/mango", .{mc.base})) catch continue;
+            const main_p = pathZ(&pb, "{s}/config.conf", .{dir}) orelse continue;
+            // Own buffer: the source list below points into it while each
+            // sourced file is read into `buf`.
+            var mbuf: [8192]u8 = undefined;
+            const t = readFile(main_p, &mbuf) orelse continue;
+            if (mangoTerminal(t)) |prog| {
+                if (self.setTerminal(prog, false)) return;
+            }
+            var srcs: [16][]const u8 = undefined;
+            const n = mangoSources(t, &srcs);
+            for (srcs[0..n]) |src| {
+                var rp: [400]u8 = undefined;
+                const sp = self.resolvePath(src, dir, &rp) orelse continue;
+                const st = readFile(sp, buf) orelse continue;
+                if (mangoTerminal(st)) |prog| {
+                    if (self.setTerminal(prog, false)) return;
+                }
+            }
+        }
+        _ = self.setTerminal("foot", true);
+    }
+
+    /// Takes `name` as the terminal. With `need_bin`, only when it is
+    /// installed; without, the name stands even if no binary is found
+    /// (the row shows it without a version).
+    fn setTerminal(self: *Service, name: []const u8, need_bin: bool) bool {
+        if (name.len == 0) return false;
+        var path: Text(256) = .{};
+        const have = self.findBin(name, &path);
+        if (need_bin and !have) return false;
+        self.term_name.set(name);
+        self.term_path = if (have) path else .{};
+        return true;
+    }
+
+    /// The terminal's font from its config: foot, kitty (following its
+    /// include lines) or alacritty, with each one's defaults.
+    fn detectTermFont(self: *Service, cfg: []const u8, buf: []u8) void {
+        const name = self.term_name.slice();
+        var pb: [400]u8 = undefined;
+        var f = TermFont{};
+        const r = self.root.slice();
+        if (std.mem.eql(u8, name, "foot")) {
+            f.family.set("monospace");
+            f.size.set("8");
+            const paths = [_]?[:0]const u8{ pathZ(&pb, "{s}/foot/foot.ini", .{cfg}), null };
+            var found = false;
+            if (paths[0]) |p| {
+                if (readFile(p, buf)) |t| {
+                    footFont(t, &f);
+                    found = true;
+                }
+            }
+            if (!found) {
+                if (pathZ(&pb, "{s}/etc/xdg/foot/foot.ini", .{r})) |p| {
+                    if (readFile(p, buf)) |t| footFont(t, &f);
+                }
+            }
+        } else if (std.mem.eql(u8, name, "kitty")) {
+            f.family.set("monospace");
+            f.size.set("11");
+            var dir_b: [400]u8 = undefined;
+            const user = pathZ(&pb, "{s}/kitty/kitty.conf", .{cfg});
+            var opened = false;
+            if (user) |p| {
+                if (std.fmt.bufPrint(&dir_b, "{s}/kitty", .{cfg})) |dir| {
+                    opened = self.kittyFile(p, dir, &f, 0);
+                } else |_| {}
+            }
+            if (!opened) {
+                if (std.fmt.bufPrint(&dir_b, "{s}/etc/xdg/kitty", .{r})) |dir| {
+                    if (pathZ(&pb, "{s}/kitty.conf", .{dir})) |p| _ = self.kittyFile(p, dir, &f, 0);
+                } else |_| {}
+            }
+        } else if (std.mem.eql(u8, name, "alacritty")) {
+            f.family.set("monospace");
+            f.size.set("11.25");
+            const cands = [_]?[:0]const u8{
+                pathZ(&pb, "{s}/alacritty/alacritty.toml", .{cfg}),
+            };
+            var done = false;
+            if (cands[0]) |p| {
+                if (readFile(p, buf)) |t| {
+                    alacrittyFont(t, &f);
+                    done = true;
+                }
+            }
+            if (!done) {
+                var hb: [400]u8 = undefined;
+                if (pathZ(&hb, "{s}/.alacritty.toml", .{self.home.slice()})) |p| {
+                    if (readFile(p, buf)) |t| {
+                        alacrittyFont(t, &f);
+                        done = true;
+                    }
+                }
+            }
+            if (!done) {
+                if (pathZ(&pb, "{s}/etc/alacritty/alacritty.toml", .{r})) |p| {
+                    if (readFile(p, buf)) |t| alacrittyFont(t, &f);
+                }
+            }
+        } else return;
+        var ob: [112]u8 = undefined;
+        self.term_font.set(f.format(&ob));
+    }
+
+    /// One kitty.conf and the files it includes (depth-limited). False
+    /// when the file can't be read.
+    fn kittyFile(self: *const Service, path: [:0]const u8, dir: []const u8, f: *TermFont, depth: u8) bool {
+        var buf: [16384]u8 = undefined;
+        const t = readFile(path, &buf) orelse return false;
+        var it = std.mem.splitScalar(u8, t, '\n');
+        while (it.next()) |line| {
+            const inc = kittyLine(line, f) orelse continue;
+            if (depth >= 4 or std.mem.indexOfAny(u8, inc, "*?$") != null) continue;
+            var rp: [400]u8 = undefined;
+            const p = self.resolvePath(inc, dir, &rp) orelse continue;
+            const slash = std.mem.lastIndexOfScalar(u8, p, '/') orelse continue;
+            var db: [400]u8 = undefined;
+            const sub = std.fmt.bufPrint(&db, "{s}", .{p[0..slash]}) catch continue;
+            _ = self.kittyFile(p, sub, f, depth + 1);
+        }
+        return true;
+    }
+
+    /// Desktop values into the config layout's rows; rows with nothing to
+    /// show and nothing coming from the run are dropped, so the card never
+    /// shows an empty row.
+    fn fillDesktopRows(self: *Service) void {
+        var n: usize = 0;
+        for (self.rows[0..self.row_count]) |row| {
+            var r = row;
+            if (r.kind == .row and r.native != .none) {
+                r.value.set(switch (r.native) {
+                    .shell => self.shell_name.slice(),
+                    .terminal => self.term_name.slice(),
+                    .terminal_font => self.term_font.slice(),
+                    .wm_theme => self.gtk_theme.slice(),
+                    .none => "",
+                });
+                if (r.value.len == 0 and r.module < 0) continue;
+            }
+            // No spacer first, none twice in a row.
+            if (r.kind == .spacer and (n == 0 or self.rows[n - 1].kind == .spacer)) continue;
+            self.rows[n] = r;
+            n += 1;
+        }
+        while (n > 0 and self.rows[n - 1].kind == .spacer) n -= 1;
+        self.row_count = n;
+    }
+
+    /// The run's line for a desktop row: a `--version` line for the shell
+    /// and terminal ("bash 5.2.37"), gsettings' theme name.
+    fn desktopAnswer(self: *Service, r: *CardRow, line: []const u8) void {
+        var vb: [128]u8 = undefined;
+        switch (r.native) {
+            .shell => r.value.set(withVersion(&vb, self.shell_name.slice(), line)),
+            .terminal => r.value.set(withVersion(&vb, self.term_name.slice(), line)),
+            .wm_theme => {
+                const t = gsettingsString(line);
+                if (t.len > 0) r.value.set(t);
+            },
+            else => {},
+        }
+        r.fresh = true;
+    }
+
     // --- native collection ---
 
     const Which = enum { all, live, static };
@@ -1436,11 +2116,7 @@ pub const Service = struct {
         }
         if (self.wants(.disk, which)) self.collectDisk(root, &buf, &out);
         if (self.wants(.packages, which)) self.collectPackages(root, &out);
-        if (self.wants(.shell, which)) {
-            const sh = env("SHELL");
-            const base = if (std.mem.lastIndexOfScalar(u8, sh, '/')) |i| sh[i + 1 ..] else sh;
-            if (base.len > 0) self.setVal(.shell, base);
-        }
+        if (self.wants(.shell, which) and self.shell_name.len > 0) self.setVal(.shell, self.shell_name.slice());
         if (self.wants(.wm, which) or self.wants(.de, which)) {
             var name = env("XDG_CURRENT_DESKTOP");
             if (std.mem.indexOfScalar(u8, name, ':')) |i| name = name[0..i];
@@ -2093,7 +2769,7 @@ test "Perihelion's config becomes sectioned rows and a tagged derived config" {
     defer arena.deinit();
     var rows: [MAX_ROWS]CardRow = [_]CardRow{.{}} ** MAX_ROWS;
     var derived: [16384]u8 = undefined;
-    const plan = buildPlan(arena.allocator(), PERIHELION_CONFIG, &rows, &derived).?;
+    const plan = buildPlan(arena.allocator(), PERIHELION_CONFIG, &rows, &derived, .{}).?;
     try std.testing.expect(plan.palette);
     try std.testing.expect(plan.datetime);
     // host cpu gpu memory disk | os kernel bios packages wm | command uptime
@@ -2183,4 +2859,230 @@ test "config layout: tagged output fills rows, repeats join, fallback to native"
     _ = s.runComplete("", 2); // binary went quiet
     try std.testing.expectEqual(Source.native, s.source);
     try std.testing.expectEqualStrings("812 days", s.cardRows()[16].value.slice()); // kept
+}
+
+
+// --- desktop readers ---------------------------------------------------------------------
+
+test "login shell from passwd, versions from --version lines" {
+    const pw =
+        \\root:x:0:0:root:/root:/bin/bash
+        \\perihelion:x:1000:1000:Perihelion User:/home/perihelion:/usr/bin/fish
+        \\nologin:x:1001:1001::/home/n:
+    ;
+    try std.testing.expectEqualStrings("/usr/bin/fish", passwdShell(pw, 1000).?);
+    try std.testing.expectEqualStrings("/bin/bash", passwdShell(pw, 0).?);
+    try std.testing.expect(passwdShell(pw, 1001) == null);
+    try std.testing.expect(passwdShell(pw, 4242) == null);
+    try std.testing.expectEqualStrings("5.2.37", parseVersion("GNU bash, version 5.2.37(1)-release (x86_64-redhat-linux-gnu)").?);
+    try std.testing.expectEqualStrings("4.0.2", parseVersion("fish, version 4.0.2").?);
+    try std.testing.expectEqualStrings("5.9", parseVersion("zsh 5.9 (x86_64-redhat-linux-gnu)").?);
+    try std.testing.expectEqualStrings("0.39.1", parseVersion("kitty 0.39.1 created by Kovid Goyal").?);
+    try std.testing.expectEqualStrings("1.20.2", parseVersion("foot version: 1.20.2 +pgo +ime +graphemes -assertions").?);
+    try std.testing.expect(parseVersion("no digits here") == null);
+    try std.testing.expect(parseVersion("x86_64 build 42") == null);
+    var b: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("fish 4.0.2", withVersion(&b, "fish", "fish, version 4.0.2"));
+    try std.testing.expectEqualStrings("fish", withVersion(&b, "fish", ""));
+}
+
+test "terminal from xdg-terminals.list and Mango binds" {
+    var e: [8][]const u8 = undefined;
+    const n = xdgTerminalEntries("# mine\n/execarg_default -e\n-xterm.desktop\n+com.mitchellh.ghostty.desktop\nkitty.desktop:new-window\n\nfoot.desktop\n", &e);
+    try std.testing.expectEqual(@as(usize, 3), n);
+    try std.testing.expectEqualStrings("ghostty", e[0]);
+    try std.testing.expectEqualStrings("kitty", e[1]);
+    try std.testing.expectEqualStrings("foot", e[2]);
+    try std.testing.expectEqualStrings("foot", terminalBinary("foot-server"));
+
+    const binds =
+        \\# Terminal
+        \\bind=SUPER+SHIFT,Return,spawn,kitty --class perihelion-float
+        \\bind=SUPER,Return,spawn,/usr/bin/kitty
+        \\bind=NONE,Return,setkeymode,default
+    ;
+    try std.testing.expectEqualStrings("kitty", mangoTerminal(binds).?);
+    try std.testing.expectEqualStrings("foot", mangoTerminal("bind=SUPER+ALT,Return,spawn,foot -e btop\n").?);
+    try std.testing.expect(mangoTerminal("bind=SUPER,d,spawn,rofi\nbinding=SUPER,Return,spawn,x\n") == null);
+    var src: [4][]const u8 = undefined;
+    const sn = mangoSources("source=./cfg/keybinds.conf\n# source=./off.conf\nsource_optional=~/.config/mango/glass.conf\n", &src);
+    try std.testing.expectEqual(@as(usize, 2), sn);
+    try std.testing.expectEqualStrings("./cfg/keybinds.conf", src[0]);
+    try std.testing.expectEqualStrings("~/.config/mango/glass.conf", src[1]);
+}
+
+test "terminal fonts: foot, kitty, alacritty" {
+    var b: [112]u8 = undefined;
+    var f = TermFont{};
+    footFont("[main]\nfont=JetBrainsMono Nerd Font:size=11, Noto Color Emoji\n[colors]\nfont=ignored\n", &f);
+    try std.testing.expectEqualStrings("JetBrainsMono Nerd Font 11", f.format(&b));
+    f = .{};
+    footFont("font=Fira Code:pixelsize=14\n", &f);
+    try std.testing.expectEqualStrings("Fira Code 14px", f.format(&b));
+
+    f = .{};
+    _ = kittyLine("font_family      DejaVu Sans Mono", &f);
+    _ = kittyLine("font_size 11.0", &f);
+    try std.testing.expectEqualStrings("DejaVu Sans Mono 11", f.format(&b));
+    _ = kittyLine("font_family family=\"JetBrains Mono\" style=Regular", &f);
+    _ = kittyLine("font_size 10.50", &f);
+    try std.testing.expectEqualStrings("JetBrains Mono 10.5", f.format(&b));
+    try std.testing.expectEqualStrings("/etc/xdg/kitty/kitty.conf", kittyLine("include /etc/xdg/kitty/kitty.conf", &f).?);
+    try std.testing.expect(kittyLine("# font_family X", &f) == null);
+
+    f = .{};
+    alacrittyFont("[font]\nsize = 12.0\n\n[font.normal]\nfamily = \"Iosevka Term\"\nstyle = \"Regular\"\n", &f);
+    try std.testing.expectEqualStrings("Iosevka Term 12", f.format(&b));
+    f = .{};
+    alacrittyFont("[font]\nnormal = { family = \"Hack\", style = \"Regular\" }\nsize = 9.5\n", &f);
+    try std.testing.expectEqualStrings("Hack 9.5", f.format(&b));
+    try std.testing.expectEqualStrings("adw-gtk3-dark", gsettingsString("'adw-gtk3-dark'\n"));
+}
+
+test "format prefixes become labels" {
+    const a = splitFormatPrefix("OS Age: {result}").?;
+    try std.testing.expectEqualStrings("OS Age", a.words);
+    try std.testing.expectEqualStrings("{result}", a.rest);
+    try std.testing.expectEqualStrings("{formatted}", splitFormatPrefix("Uptime: {formatted}").?.rest);
+    try std.testing.expect(splitFormatPrefix("{5} {1} Type {2}") == null);
+    try std.testing.expect(splitFormatPrefix("Perihelion Linux {arch}") == null);
+    try std.testing.expect(splitFormatPrefix("{1}: {2}") == null);
+}
+
+/// The ISO's fastfetch config (system_files/common/usr/share/perihelion/
+/// fastfetch/config.jsonc), trimmed to the rows this test checks.
+const ISO_CONFIG =
+    \\{
+    \\    "display": { "separator": " ➜  " },
+    \\    "modules": [
+    \\        "break",
+    \\        { "type": "os", "key": "OS   ", "format": "Perihelion Linux {arch}" },
+    \\        { "type": "shell", "key": " └  " },
+    \\        "break",
+    \\        { "type": "wm", "key": "WM   " },
+    \\        { "type": "wmtheme", "key": " ├ 󰉼 " },
+    \\        { "type": "terminal", "key": " ├  " },
+    \\        { "type": "terminalfont", "key": " └  " },
+    \\        "break",
+    \\        { "type": "command", "text": "perihelion-os-age", "format": "OS Age: {result}", "key": " ├ 󰃭 " },
+    \\        { "type": "uptime", "format": "Uptime: {formatted}", "key": " └ 󰥔 " },
+    \\        "break",
+    \\    ]
+    \\}
+;
+
+test "ISO config: desktop rows, no doubled labels, empty rows dropped" {
+    var rb: [64]u8 = undefined;
+    const root = std.fmt.bufPrint(&rb, "/tmp/perihelion-ff-iso-{d}", .{std.c.getpid()}) catch unreachable;
+    var hb: [80]u8 = undefined;
+    const home = std.fmt.bufPrint(&hb, "{s}/home", .{root}) catch unreachable;
+    writeFile(root, "etc/passwd", "root:x:0:0::/root:/bin/bash\nperihelion:x:1000:1000::/home/perihelion:/usr/bin/bash\n", 0o644);
+    writeFile(root, "usr/bin/bash", "#!/bin/sh\n", 0o755);
+    writeFile(root, "usr/bin/kitty", "#!/bin/sh\n", 0o755);
+    // Mango's config sources the keybinds that launch kitty.
+    writeFile(home, ".config/mango/config.conf", "source=./cfg/keybinds.conf\n", 0o644);
+    writeFile(home, ".config/mango/cfg/keybinds.conf", "bind=SUPER,Return,spawn,kitty\n", 0o644);
+    // kitty.conf includes the system file that sets the font.
+    writeFile(home, ".config/kitty/kitty.conf", "include /etc/xdg/kitty/kitty.conf\nglobinclude perihelion-colors.conf\n", 0o644);
+    writeFile(root, "etc/xdg/kitty/kitty.conf", "font_family DejaVu Sans Mono\nfont_size 11.0\n", 0o644);
+    writeFile(home, ".config/gtk-4.0/settings.ini", "[Settings]\ngtk-theme-name=adw-gtk3-dark\n", 0o644);
+    writeFile(home, ".config/fastfetch/config.jsonc", ISO_CONFIG, 0o644);
+
+    var s = Service.init(.{ .root = root, .home = home, .uid = 1000, .logo = "none" });
+    try std.testing.expectEqual(Layout.config, s.layout);
+    try std.testing.expectEqualStrings("kitty", s.term_name.slice());
+    try std.testing.expectEqualStrings("DejaVu Sans Mono 11", s.term_font.slice());
+
+    const R = struct { label: []const u8, value: []const u8, native: Native };
+    const want = [_]R{
+        .{ .label = "OS", .value = "", .native = .none },
+        .{ .label = "\u{E795} Shell", .value = "bash", .native = .shell },
+        .{ .label = "", .value = "", .native = .none }, // spacer
+        .{ .label = "WM", .value = "", .native = .none },
+        .{ .label = "\u{F027C} Wmtheme", .value = "adw-gtk3-dark", .native = .wm_theme },
+        .{ .label = "\u{E795} Terminal", .value = "kitty", .native = .terminal },
+        .{ .label = "\u{F031} Terminal Font", .value = "DejaVu Sans Mono 11", .native = .terminal_font },
+        .{ .label = "", .value = "", .native = .none }, // spacer
+        .{ .label = "\u{F00ED} OS Age", .value = "", .native = .none },
+        .{ .label = "\u{F0954} Uptime", .value = "", .native = .none },
+    };
+    const rows = s.cardRows();
+    try std.testing.expectEqual(want.len, rows.len);
+    for (want, 0..) |w, i| {
+        if (w.label.len == 0) {
+            try std.testing.expectEqual(RowKind.spacer, rows[i].kind);
+            continue;
+        }
+        try std.testing.expectEqual(w.native, rows[i].native);
+        if (w.native != .none) try std.testing.expectEqualStrings(w.value, rows[i].value.slice());
+    }
+    try std.testing.expectEqualStrings("OS Age", rows[8].label.slice()[rows[8].label.len - 6 ..]);
+    try std.testing.expectEqual(Live.uptime, rows[9].live);
+
+    // The run: bash's and kitty's --version lines, the command's bare
+    // result (its "OS Age: " prefix is gone from the derived format).
+    s.source = .system;
+    s.bin.set("/usr/bin/fastfetch");
+    s.fallback_bin.set("/usr/bin/fastfetch");
+    var idx_shell: i16 = -1;
+    var idx_term: i16 = -1;
+    var idx_age: i16 = -1;
+    for (rows) |*r| {
+        if (r.native == .shell) idx_shell = r.module;
+        if (r.native == .terminal) idx_term = r.module;
+        if (std.mem.endsWith(u8, r.label.slice(), "OS Age")) idx_age = r.module;
+    }
+    try std.testing.expect(idx_shell >= 0 and idx_term >= 0 and idx_age >= 0);
+    var ob: [512]u8 = undefined;
+    const out = try std.fmt.bufPrint(&ob, "@@{d}: GNU bash, version 5.2.37(1)-release (x86_64-redhat-linux-gnu)\n@@{d}: kitty 0.39.1 created by Kovid Goyal\n@@{d}: 3 days\n", .{ idx_shell, idx_term, idx_age });
+    _ = s.runComplete(out, 0);
+    try std.testing.expectEqualStrings("bash 5.2.37", s.cardRows()[1].value.slice());
+    try std.testing.expectEqualStrings("kitty 0.39.1", s.cardRows()[5].value.slice());
+    try std.testing.expectEqualStrings("3 days", s.cardRows()[8].value.slice());
+
+    // Derived config: the command keeps its text, its format lost the label.
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    var rows2: [MAX_ROWS]CardRow = [_]CardRow{.{}} ** MAX_ROWS;
+    var derived: [16384]u8 = undefined;
+    const plan = buildPlan(arena.allocator(), ISO_CONFIG, &rows2, &derived, .{ .shell_path = "/usr/bin/bash", .term_path = "/usr/bin/kitty" }).?;
+    const parsed = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(), derived[0..plan.derived_len], .{});
+    var saw_age = false;
+    var saw_uptime = false;
+    var saw_shell_cmd = false;
+    for (parsed.object.get("modules").?.array.items) |m| {
+        const t = m.object.get("type").?.string;
+        if (std.mem.eql(u8, t, "command")) {
+            const text = m.object.get("text").?.string;
+            if (std.mem.eql(u8, text, "perihelion-os-age")) {
+                try std.testing.expectEqualStrings("{result}", m.object.get("format").?.string);
+                saw_age = true;
+            }
+            if (std.mem.eql(u8, text, "'/usr/bin/bash' --version 2>/dev/null | head -n 1")) saw_shell_cmd = true;
+        }
+        if (std.mem.eql(u8, t, "uptime")) {
+            try std.testing.expectEqualStrings("{formatted}", m.object.get("format").?.string);
+            saw_uptime = true;
+        }
+        try std.testing.expect(!std.mem.eql(u8, t, "shell") and !std.mem.eql(u8, t, "terminal") and !std.mem.eql(u8, t, "terminalfont"));
+    }
+    try std.testing.expect(saw_age and saw_uptime and saw_shell_cmd);
+}
+
+test "no terminal font or GTK theme: those rows are dropped" {
+    var rb: [64]u8 = undefined;
+    const root = std.fmt.bufPrint(&rb, "/tmp/perihelion-ff-none-{d}", .{std.c.getpid()}) catch unreachable;
+    var hb: [80]u8 = undefined;
+    const home = std.fmt.bufPrint(&hb, "{s}/home", .{root}) catch unreachable;
+    writeFile(home, ".config/fastfetch/config.jsonc", ISO_CONFIG, 0o644);
+    var s = Service.init(.{ .root = root, .home = home, .uid = 1000, .logo = "none" });
+    for (s.cardRows()) |*r| {
+        try std.testing.expect(r.native != .terminal_font and r.native != .wm_theme and r.native != .terminal);
+        try std.testing.expect(r.native != .shell); // no passwd entry, $SHELL ignored in tests
+    }
+    // Spacers never doubled after the drops.
+    const rows = s.cardRows();
+    for (rows[1..], 1..) |*r, i| {
+        try std.testing.expect(!(r.kind == .spacer and rows[i - 1].kind == .spacer));
+    }
 }
