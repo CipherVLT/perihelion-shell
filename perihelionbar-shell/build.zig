@@ -242,9 +242,29 @@ pub fn build(b: *Build) !void {
     const glance_test_run = b.addRunArtifact(glance_tests);
     glance_test_step.dependOn(&glance_test_run.step);
 
+    // `zig build test-glance-media`: src/glance_media.zig's unit tests — the
+    // Media tab's probe parsing, layout, hit-testing, drags and action argv.
+    // The shared volume maths, from the bar's sources like weather.zig.
+    const volume_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/volume.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const glance_media_mod = b.createModule(.{
+        .root_source_file = b.path("src/glance_media.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    glance_media_mod.addImport("volume", volume_mod);
+    const glance_media_tests = b.addTest(.{ .root_module = glance_media_mod, .use_llvm = true, .use_lld = true });
+    const glance_media_test_step = b.step("test-glance-media", "Run src/glance_media.zig unit tests");
+    const glance_media_test_run = b.addRunArtifact(glance_media_tests);
+    glance_media_test_step.dependOn(&glance_media_test_run.step);
+
     // `zig build test`: every unit test in this package, so both packages
     // answer the same command.
     const test_step = b.step("test", "Run all perihelionbar-shell unit tests");
     test_step.dependOn(&widgets_test_run.step);
     test_step.dependOn(&glance_test_run.step);
+    test_step.dependOn(&glance_media_test_run.step);
 }
