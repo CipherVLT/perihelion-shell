@@ -24,9 +24,11 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 `perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, fastfetch, calendar with reminders, analog watch, sticky note.
 
 - Same matugen colors as the bar, translucent cards.
-- Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
+- Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, calendar reminders, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
 - **Ctrl + drag** any card to move it — position saves to `~/.config/perihelionbar/shell.json`.
-- Calendar reminders live in `~/.config/perihelionbar/reminders.txt` (`YYYY-MM-DD HH:MM text`).
+- Calendar reminders live in `~/.config/perihelionbar/reminders.txt` (`YYYY-MM-DD HH:MM text`, or `YYYY-MM-DD HH:MM lead text` to be notified `lead` days early). Click a day to add or remove one.
+  - The Calendar card can list today's and upcoming reminders under the month, earliest first, under a **Reminders** header like the Notes card's. Today's are in your accent colour, and today's ones whose time has passed are dimmed. Click a row to open that day's reminders. Pick how many rows in Settings, or set `"calendar_reminders"` in `shell.json` to 0 (off, the default) up to 6. The card grows by one header plus the rows, so you may need to drag a card that sits right under it.
+  - The card re-reads the file every 30 seconds (and right after you add or remove a reminder from the card). The read is at most 4 KB of a local file, and the list is only redrawn when it changes.
 - The Notes card holds up to nine notes. Click a note to type in it. Esc, or clicking somewhere else, saves it, and it also saves itself a moment after you stop typing.
   - **Tabs:** the header has one tab per note, **+** for a new note and **×** to delete the open note. Click × twice to confirm. The deleted text is kept in `notes/.last-deleted.txt`, in case you change your mind. A new note you leave empty just goes away.
   - **Checklists:** start a line with `- [ ] ` and it shows as a checkbox when you're not typing. Click the box to tick it. `- ` lines show as bullets and `# ` lines as headings. While you type, you see the plain text.

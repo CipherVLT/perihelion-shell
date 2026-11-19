@@ -69,6 +69,9 @@ jobs:
       - name: Unit-test the top-processes service (fake /proc tree)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-procs
+      - name: Unit-test the reminders service (Calendar card)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-reminders
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc

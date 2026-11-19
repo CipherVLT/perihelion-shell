@@ -28,6 +28,8 @@ const tsvc = @import("temps");
 const ffsvc = @import("fastfetch");
 // Top-processes service for the Processes card: ../perihelionbar/src/procs.zig.
 const psvc = @import("procs");
+// Reminders file parsing for the Calendar card: ../perihelionbar/src/reminders.zig.
+const rsvc = @import("reminders");
 
 pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes };
 
@@ -93,6 +95,22 @@ const CAL_HEAD_GAP: i64 = 6;
 const CAL_WD_GAP: i64 = 4;
 const CAL_FOOT_GAP: i64 = 6;
 const CAL_ARROW_ZONE: i64 = 20; // clickable width of the < / > header zones
+// Reminders list under the footer: a gap, a Notes-style header (title over
+// a hairline), then one row per reminder (shell.json calendar_reminders).
+const CAL_REM_GAP: i64 = 10;
+const CAL_REM_HEAD_GAP: i64 = 8; // same as NOTE_HEADER_GAP
+
+/// shell.json calendar_reminders: rows listed under the month grid
+/// (0 = no list). Set by the host before cards are measured.
+pub var calendar_reminder_rows: usize = 0;
+/// Most rows shell.json calendar_reminders can ask for.
+pub const CAL_REMINDER_ROWS_MAX: usize = rsvc.MAX_ROWS;
+
+/// Height the reminders list adds to the Calendar card (0 when off).
+fn calRemindersH(lh: i64) i64 {
+    if (calendar_reminder_rows == 0) return 0;
+    return CAL_REM_GAP + lh + CAL_REM_HEAD_GAP + @as(i64, @intCast(calendar_reminder_rows)) * lh;
+}
 
 // Weather-card geometry: a four-line header (big temperature across lines
 // 1-2, condition, place) over a forecast strip of day columns (label, icon
@@ -163,7 +181,7 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
             .{ @intCast(2 * CARD_PAD + 4 * RING_D + 3 * RING_GAP), @intCast(2 * CARD_PAD + RING_D + RING_LABEL_GAP + lh) }
         else
             .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP + 3 * BAR_H + 2 * 4) },
-        .calendar => .{ @intCast(CAL_W), @intCast(2 * CARD_PAD + 3 * lh + CAL_HEAD_GAP + CAL_WD_GAP + CAL_ROWS * CAL_CELL_H + CAL_FOOT_GAP) },
+        .calendar => .{ @intCast(CAL_W), @intCast(2 * CARD_PAD + 3 * lh + CAL_HEAD_GAP + CAL_WD_GAP + CAL_ROWS * CAL_CELL_H + CAL_FOOT_GAP + calRemindersH(lh)) },
         // Sticky note: a text card, tall enough for six wrapped lines.
         // Header strip (tabs, +, ×) over notes_lines lines of text.
         .note1 => .{ @intCast(NoteWidget.NOTE_W), @intCast(2 * CARD_PAD + noteHeaderH(lh) + notes_layout.lines * lh) },
@@ -2715,7 +2733,7 @@ fn parseKbAfterColon(line: []const u8) u64 {
 //     global public holidays in the bright accent, regional ones dimmed.
 
 const MAX_HOLIDAYS: usize = 48;
-const REM_MAX: usize = 48;
+const REM_MAX: usize = rsvc.MAX;
 const NOTIFY_GRACE_S: i64 = 900; // deliver a due notification up to 15 min late
 
 const Holiday = struct {
@@ -2726,63 +2744,9 @@ const Holiday = struct {
     name: [56]u8,
 };
 
-const Reminder = struct {
-    y: i32,
-    m: u8,
-    d: u8,
-    hh: u8,
-    mm: u8,
-    lead: u8,
-    text_off: u16,
-    text_len: u16,
-    raw_len: u16,
-    fired: bool,
-    /// The exact file line — reloads carry `fired` across by matching this.
-    raw: [176]u8,
-
-    fn text(self: *const Reminder) []const u8 {
-        return self.raw[self.text_off .. self.text_off + self.text_len];
-    }
-};
+const Reminder = rsvc.Reminder;
 
 const CalPhase = enum { holidays, menu };
-
-/// Parses "YYYY-MM-DD HH:MM [lead] text" into `out` (raw copy included).
-/// The lead field is optional so hand-written lines like
-/// "2026-10-20 10:00 PayDay" work: a non-numeric first token means the
-/// text starts right there and the reminder notifies on the day (lead 0).
-fn parseReminderLine(line: []const u8, out: *Reminder) bool {
-    if (line.len < 18) return false;
-    if (line[4] != '-' or line[7] != '-' or line[10] != ' ' or line[13] != ':' or line[16] != ' ') return false;
-    if (line.len > out.raw.len) return false;
-    const y = std.fmt.parseInt(i32, line[0..4], 10) catch return false;
-    const m = std.fmt.parseInt(u8, line[5..7], 10) catch return false;
-    const d = std.fmt.parseInt(u8, line[8..10], 10) catch return false;
-    const hh = std.fmt.parseInt(u8, line[11..13], 10) catch return false;
-    const mm = std.fmt.parseInt(u8, line[14..16], 10) catch return false;
-    var i: usize = 17;
-    while (i < line.len and line[i] != ' ') i += 1;
-    const lead_opt: ?u8 = std.fmt.parseInt(u8, line[17..i], 10) catch null;
-    if (lead_opt != null and (i >= line.len or i + 1 >= line.len)) return false; // lead but no text
-    const lead = lead_opt orelse 0;
-    var text_start: usize = if (lead_opt != null) i + 1 else 17;
-    while (text_start < line.len and line[text_start] == ' ') text_start += 1;
-    if (text_start >= line.len) return false; // text required
-    if (y < 1970 or y > 2100 or m < 1 or m > 12 or d < 1 or d > 31) return false;
-    if (hh > 23 or mm > 59 or lead > 60) return false;
-    @memcpy(out.raw[0..line.len], line);
-    out.raw_len = @intCast(line.len);
-    out.y = y;
-    out.m = m;
-    out.d = d;
-    out.hh = hh;
-    out.mm = mm;
-    out.lead = lead;
-    out.text_off = @intCast(text_start);
-    out.text_len = @intCast(line.len - text_start);
-    out.fired = false;
-    return true;
-}
 
 /// Notification moment for a reminder: its date shifted back `lead` days, at
 /// HH:MM local time (mktime — wall-clock, so DST resolves normally).
@@ -3069,7 +3033,7 @@ pub const CalendarWidget = struct {
             }
             if (fresh_count >= REM_MAX) break;
             var r: Reminder = undefined;
-            if (!parseReminderLine(line, &r)) {
+            if (!rsvc.parseLine(line, &r)) {
                 logging.step("calendar: skipping malformed line: {s}", .{line});
                 continue;
             }
@@ -3256,6 +3220,8 @@ pub const CalendarWidget = struct {
         wd_b: i64, // weekday row baseline
         foot_b: i64, // footer baseline
         lh: i64,
+        rem_top: i64, // top of the "Reminders" header (list on)
+        rows_top: i64, // top of the first reminder row
     };
 
     fn calLayout(r: Rect, font: *font_mod.Font, zoom: f32) CalLayout {
@@ -3271,7 +3237,9 @@ pub const CalendarWidget = struct {
         const wd_b = r.y + pad + lh + head_gap + ascent;
         const grid_y = r.y + pad + 2 * lh + head_gap + wd_gap;
         const foot_b = grid_y + CAL_ROWS * cell_h + foot_gap + ascent;
-        return .{ .padx = padx, .grid_x = padx, .grid_y = grid_y, .b1 = b1, .wd_b = wd_b, .foot_b = foot_b, .lh = lh };
+        const rem_top = foot_b - ascent + lh + zf(CAL_REM_GAP, zoom);
+        const rows_top = rem_top + lh + zf(CAL_REM_HEAD_GAP, zoom);
+        return .{ .padx = padx, .grid_x = padx, .grid_y = grid_y, .b1 = b1, .wd_b = wd_b, .foot_b = foot_b, .lh = lh, .rem_top = rem_top, .rows_top = rows_top };
     }
 
     fn navMonth(self: *CalendarWidget, delta: i32) void {
@@ -3390,6 +3358,55 @@ pub const CalendarWidget = struct {
                 _ = c.drawText(l.padx, l.foot_b, fitText(c, label, grid_w, &clip), col);
             }
         }
+
+        if (calendar_reminder_rows > 0) self.paintReminders(c, l, grid_w);
+    }
+
+    /// The reminders shown under the grid: today's and the next ones,
+    /// earliest first, at most calendar_reminder_rows. Fills `out`.
+    fn listedReminders(self: *const CalendarWidget, out: *[rsvc.MAX_ROWS]usize) usize {
+        const rows = @min(calendar_reminder_rows, rsvc.MAX_ROWS);
+        return rsvc.upcoming(self.reminders[0..self.reminder_count], self.today_days, out[0..rows]);
+    }
+
+    /// Reminders list: a Notes-style header (accent title over a hairline),
+    /// then "day  time  text" rows. Today's day label is in the accent; a
+    /// reminder of today whose time already passed is dimmed.
+    fn paintReminders(self: *const CalendarWidget, c: Canvas, l: CalLayout, inner_w: i64) void {
+        const t = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const ascent: i64 = c.font.ascentPx();
+        _ = c.drawText(l.padx, l.rem_top + ascent, "Reminders", accent);
+        c.fillRect(l.padx, l.rem_top + l.lh + @divTrunc(c.zx(CAL_REM_HEAD_GAP), 2), @intCast(@max(inner_w, 0)), 1, dim(t, 0x22));
+
+        var idx: [rsvc.MAX_ROWS]usize = undefined;
+        const n = self.listedReminders(&idx);
+        if (n == 0) {
+            _ = c.drawText(l.padx, l.rows_top + ascent, "Nothing coming up", dim(t, 0x88));
+            return;
+        }
+        // Day column as wide as the widest label actually shown.
+        var label_w: i64 = 0;
+        for (idx[0..n]) |ri| {
+            var lb: [16]u8 = undefined;
+            label_w = @max(label_w, c.textWidth(rsvc.dayLabel(&self.reminders[ri], self.today_days, &lb)));
+        }
+        const gap = c.zx(6);
+        const time_x = l.padx + label_w + gap;
+        const text_x = time_x + c.textWidth("00:00") + gap;
+        for (idx[0..n], 0..) |ri, row| {
+            const r = &self.reminders[ri];
+            const b = l.rows_top + @as(i64, @intCast(row)) * l.lh + ascent;
+            const is_today = r.day() == self.today_days;
+            const passed = is_today and r.fired;
+            var lb: [16]u8 = undefined;
+            _ = c.drawText(l.padx, b, rsvc.dayLabel(r, self.today_days, &lb), if (is_today and !passed) accent else dim(t, 0x99));
+            var tb: [8]u8 = undefined;
+            const tm = std.fmt.bufPrint(&tb, "{d:0>2}:{d:0>2}", .{ r.hh, r.mm }) catch "";
+            _ = c.drawText(time_x, b, tm, dim(t, 0x99));
+            var clip: [200]u8 = undefined;
+            _ = c.drawText(text_x, b, fitText(c, r.text(), l.padx + inner_w - text_x, &clip), if (passed) dim(t, 0x88) else t);
+        }
     }
 
     /// Left-click: header arrows step months, the month title jumps back to
@@ -3419,6 +3436,17 @@ pub const CalendarWidget = struct {
             const day = row * 7 + col - first_col + 1;
             if (day >= 1 and day <= daysInMonth(self.view_y, self.view_m)) {
                 self.openDayMenu(self.view_y, self.view_m, @intCast(day));
+            }
+            return;
+        }
+        // A reminder row opens its day's menu (add another, or remove it).
+        if (calendar_reminder_rows > 0 and py64 >= l.rows_top and px64 >= l.padx and px64 < l.padx + grid_w) {
+            const row: usize = @intCast(@divFloor(py64 - l.rows_top, l.lh));
+            var idx: [rsvc.MAX_ROWS]usize = undefined;
+            const n = self.listedReminders(&idx);
+            if (row < n) {
+                const rem = &self.reminders[idx[row]];
+                self.openDayMenu(rem.y, rem.m, rem.d);
             }
         }
     }

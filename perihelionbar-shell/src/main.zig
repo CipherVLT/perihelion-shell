@@ -108,6 +108,8 @@ const JsonConfig = struct {
     processes_count: ?u32 = null,
     processes_interval_seconds: ?u32 = null,
     processes_group: ?bool = null,
+    // Calendar card: reminder rows listed under the month grid.
+    calendar_reminders: ?u32 = null,
     // Notes card.
     notes_tabs: ?bool = null,
     notes_checklists: ?bool = null,
@@ -185,6 +187,9 @@ const ShellConfig = struct {
     processes_count: u32 = 6,
     processes_interval_seconds: u32 = 3,
     processes_group: bool = false,
+    /// Calendar card: today's and upcoming reminders listed under the
+    /// month grid, 0-6 rows (0 = no list, the card keeps its old size).
+    calendar_reminders: u32 = 0,
     /// Notes card: header with tabs, checklist drawing, base text lines.
     notes: widgets_mod.NotesLayout = .{},
     /// "" = ~/.config/perihelionbar/notes; a leading "~/" means $HOME.
@@ -529,6 +534,7 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
     if (parsed.processes_count) |v| cfg.processes_count = @intCast(std.math.clamp(@as(usize, v), procs_service.MIN_SHOWN, procs_service.MAX_SHOWN));
     if (parsed.processes_interval_seconds) |v| cfg.processes_interval_seconds = std.math.clamp(v, 1, 60);
     if (parsed.processes_group) |v| cfg.processes_group = v;
+    if (parsed.calendar_reminders) |v| cfg.calendar_reminders = @intCast(@min(@as(usize, v), widgets_mod.CAL_REMINDER_ROWS_MAX));
     if (parsed.notes_tabs) |v| cfg.notes.tabs = v;
     if (parsed.notes_checklists) |v| cfg.notes.checklists = v;
     if (parsed.notes_lines) |v| cfg.notes.lines = std.math.clamp(@as(i64, v), 3, 30);
@@ -928,6 +934,7 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
     widgets_mod.clock_layout = cfg.clock;
     widgets_mod.system_style = cfg.system_style;
     widgets_mod.processes_rows = cfg.processes_count;
+    widgets_mod.calendar_reminder_rows = cfg.calendar_reminders;
     widgets_mod.notes_layout = cfg.notes;
     widgets_mod.weather_click = cfg.weather_click;
     for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
@@ -1125,6 +1132,7 @@ fn saveConfig(host: *Host) void {
         "  \"processes_sort\": \"{s}\",\n  \"processes_count\": {d},\n  \"processes_interval_seconds\": {d},\n  \"processes_group\": {s},\n",
         .{ g_shell_cfg.processes_sort.tag(), g_shell_cfg.processes_count, g_shell_cfg.processes_interval_seconds, jsonBool(g_shell_cfg.processes_group) },
     )) return;
+    if (!w.appendFmt("  \"calendar_reminders\": {d},\n", .{g_shell_cfg.calendar_reminders})) return;
     const nd_esc = jsonEscape(g_shell_cfg.notes_dir, &esc) orelse return;
     const nl = g_shell_cfg.notes;
     if (!w.appendFmt(
