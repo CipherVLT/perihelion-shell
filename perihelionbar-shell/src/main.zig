@@ -22,13 +22,17 @@ const logging = @import("logging");
 const widgets_mod = @import("widgets");
 const glass = @import("glass.zig");
 const overview_mod = @import("overview");
+const weather_service = @import("weather");
+const temps_service = @import("temps");
+const ff_service = @import("fastfetch");
+const procs_service = @import("procs");
 
 pub const panic = std.debug.FullPanic(logging.panicHandler);
 
 const MAX_OUTPUTS: usize = 8;
 // 6 base widgets + 3 sticky notes = 9 ≤ 12. Only bits tell you a tile is
 // stale, without scanning every widget for changes.
-const MAX_WIDGETS: usize = 8;
+const MAX_WIDGETS: usize = 10;
 const FONT_PIXEL_SIZE: u32 = 13;
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -71,6 +75,45 @@ const JsonConfig = struct {
     holiday_country: ?[]const u8 = null,
     holiday_region: ?[]const u8 = null,
     overview_favorites: ?[]const []const u8 = null,
+    // Weather card (widgets.zig WeatherWidget / weather.zig). Coordinates
+    // win over a city; with neither, IP geolocation (when allowed).
+    weather_latitude: ?f64 = null,
+    weather_longitude: ?f64 = null,
+    weather_city: ?[]const u8 = null,
+    weather_units: ?[]const u8 = null,
+    weather_click: ?[]const u8 = null,
+    weather_auto_location: ?bool = null,
+    weather_refresh_minutes: ?u32 = null,
+    weather_ip_url: ?[]const u8 = null,
+    // System card temperatures (temps.zig).
+    system_gpu: ?[]const u8 = null,
+    system_temp_units: ?[]const u8 = null,
+    system_temp_interval_seconds: ?u32 = null,
+    system_nvidia_smi: ?bool = null,
+    // Fastfetch card (fastfetch.zig).
+    fastfetch_fields: ?[]const []const u8 = null,
+    fastfetch_refresh_minutes: ?u32 = null,
+    fastfetch_binary: ?[]const u8 = null,
+    fastfetch_logo: ?[]const u8 = null,
+    fastfetch_config: ?[]const u8 = null,
+    // Clock card face.
+    clock_style: ?[]const u8 = null,
+    clock_24h: ?bool = null,
+    clock_seconds: ?bool = null,
+    clock_date: ?bool = null,
+    // System card look: "bars" | "rings".
+    system_style: ?[]const u8 = null,
+    // Processes card (procs.zig).
+    processes_sort: ?[]const u8 = null,
+    processes_count: ?u32 = null,
+    processes_interval_seconds: ?u32 = null,
+    processes_group: ?bool = null,
+    // Notes card.
+    notes_tabs: ?bool = null,
+    notes_checklists: ?bool = null,
+    notes_lines: ?u32 = null,
+    notes_dir: ?[]const u8 = null,
+    notes_page: ?u32 = null,
     widgets: ?[]const JsonWidgetCfg = null,
 };
 
@@ -80,6 +123,9 @@ const JsonMatugenColors = struct {
     border_color: ?[]const u8 = null,
     hover_color: ?[]const u8 = null,
     holiday_color: ?[]const u8 = null,
+    // Tertiary accent (every preset and the matugen template carry it);
+    // widgets know it as accent2_color.
+    matrix_color: ?[]const u8 = null,
     // Perihelion: perihelion-theme may set how opaque the widget cards are
     // for its current style (Material You's darker surfaces need more to
     // read as the bar's grey). Absent: shell.json's card_bg_opacity.
@@ -101,6 +147,50 @@ const ShellConfig = struct {
     corner_radius: u32 = 18, // Perihelion: soft glass cards (perihelionbar: 12)
     holiday_country: []const u8 = "AU",
     holiday_region: []const u8 = "",
+    weather_latitude: ?f64 = null,
+    weather_longitude: ?f64 = null,
+    weather_city: []const u8 = "",
+    weather_units: weather_service.Units = .celsius,
+    /// weather_units "auto" (the default): °F for US places, °C elsewhere.
+    weather_units_auto: bool = true,
+    /// What a click on the Weather card does.
+    weather_click: widgets_mod.WeatherClick = .forecast,
+    weather_auto_location: bool = true,
+    weather_refresh_minutes: u32 = 15,
+    /// Empty = weather.zig's default (ipapi.co).
+    weather_ip_url: []const u8 = "",
+    /// "auto" | "none" | index | PCI address | "amd"/"intel"/"nvidia";
+    /// a click on the System card saves the PCI address it switched to.
+    system_gpu: []const u8 = "auto",
+    system_temp_units: temps_service.Units = .celsius,
+    system_temp_interval_seconds: u32 = 2,
+    system_nvidia_smi: bool = true,
+    /// Fastfetch card rows in order (count 0 = fastfetch.zig's defaults).
+    fastfetch_fields: [ff_service.FIELD_COUNT]ff_service.Field = undefined,
+    fastfetch_field_count: usize = 0,
+    /// 0 = run fastfetch once at startup only.
+    fastfetch_refresh_minutes: u32 = 30,
+    /// "" auto-detect, "none" built-in collector only, else a path/name.
+    fastfetch_binary: []const u8 = "",
+    /// "auto" | "distro" | "none" | path to a text logo.
+    fastfetch_logo: []const u8 = "auto",
+    /// "" = auto (~/.config/fastfetch/config.jsonc, then Perihelion's
+    /// shipped copy) | "none" (fields layout) | a config file path.
+    fastfetch_config: []const u8 = "",
+    /// Clock face: digital | flip | stacked ("macos") | classic.
+    clock: widgets_mod.ClockLayout = .{},
+    system_style: widgets_mod.SystemStyle = .bars,
+    /// Processes card: order, rows (3-8), sample interval, group by name.
+    processes_sort: procs_service.Sort = .cpu,
+    processes_count: u32 = 6,
+    processes_interval_seconds: u32 = 3,
+    processes_group: bool = false,
+    /// Notes card: header with tabs, checklist drawing, base text lines.
+    notes: widgets_mod.NotesLayout = .{},
+    /// "" = ~/.config/perihelionbar/notes; a leading "~/" means $HOME.
+    notes_dir: []const u8 = "",
+    /// File number of the open note (noteN.txt), saved on each switch.
+    notes_page: u8 = 1,
     /// Overview dash launch commands (shell.json `overview_favorites`).
     fav_cmds: [overview_mod.MAX_FAVS][]const u8 = undefined,
     fav_count: usize = 0,
@@ -110,18 +200,20 @@ const ShellConfig = struct {
 
 const DEFAULT_WIDGETS = [_]WidgetCfg{
     .{ .id = .clock, .x = 24, .y = 24 },
+    // Weather carries a forecast strip under its header (≈ 195px tall at
+    // the 13px font); the rest of the column starts below it.
     .{ .id = .weather, .x = 24, .y = 106 },
-    .{ .id = .media, .x = 24, .y = 176 },
+    .{ .id = .media, .x = 24, .y = 314 },
     // Media is a tall card (cover + progress + controls ≈ 156px at the
     // 13px font); system sits below it with a gap.
-    .{ .id = .system, .x = 24, .y = 350 },
+    .{ .id = .system, .x = 24, .y = 484 },
     // Calendar below the stack (≈ 215px tall); drag anywhere with
     // Ctrl+left-click once running.
-    .{ .id = .calendar, .x = 24, .y = 470 },
+    .{ .id = .calendar, .x = 24, .y = 612 },
     // The single sticky note along the middle-left, clear of the watch
     // (right) and the weather/media/calendar stack (left column) at the
     // 13px default font. Drag it anywhere with Ctrl+left-click.
-    .{ .id = .note1, .x = 24, .y = 700 },
+    .{ .id = .note1, .x = 24, .y = 846 },
     // The analog watch stands alone on the right — it draws its own steel
     // case instead of a frosted card.
     .{ .id = .watch, .x = 1711, .y = 24 },
@@ -130,6 +222,12 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // grows and shrinks with the scanned shortcut count; drag it anywhere
     // with Ctrl+left-click.
     .{ .id = .icons, .x = 380, .y = 24 },
+    // The Fastfetch card takes the right column under the watch (≈ 480px
+    // wide with Perihelion's feather logo; drag it anywhere).
+    .{ .id = .fastfetch, .x = 1416, .y = 248 },
+    // Top processes under the Fastfetch card on the right (≈ 250px wide,
+    // ≈ 150px tall at six rows and the 13px font).
+    .{ .id = .processes, .x = 1636, .y = 760 },
 };
 
 var shell_config_path_buf: [512]u8 = undefined;
@@ -242,17 +340,19 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
 /// @intFromEnum(WidgetId) for each id named (one per line) in the
 /// widgets-disabled file. Missing/unreadable file = 0 (all enabled).
 /// Unknown ids warn and skip rather than failing startup.
-fn disabledMask(allocator: std.mem.Allocator) u8 {
-    // The u8 mask (and u3 shifts below) hold at most 8 widgets — today there
-    // are 7. Trip the compiler, not a runtime panic, if an 8th+ arrives.
+fn disabledMask(allocator: std.mem.Allocator) u16 {
+    // The u16 mask (and u4 shifts below) hold at most 16 widgets — today
+    // there are 10. Trip the compiler, not a runtime panic, if a 17th
+    // arrives (tile_dirty is a u16 too).
     comptime {
         const n = @typeInfo(widgets_mod.WidgetId).@"enum".fields.len;
-        if (n > 8) @compileError("disabledMask: u8 mask holds at most 8 widgets");
+        if (n > 16) @compileError("disabledMask: u16 mask holds at most 16 widgets");
+        if (n > MAX_WIDGETS) @compileError("MAX_WIDGETS must cover every WidgetId");
     }
     if (widgets_disabled_path.len == 0) return 0;
     const bytes = readFileAlloc(allocator, widgets_disabled_path) catch return 0;
     defer allocator.free(bytes);
-    var mask: u8 = 0;
+    var mask: u16 = 0;
     var it = std.mem.splitScalar(u8, bytes, '\n');
     while (it.next()) |line| {
         const id = std.mem.trim(u8, line, " \t\r");
@@ -261,7 +361,7 @@ fn disabledMask(allocator: std.mem.Allocator) u8 {
             logging.warn("widgets: unknown id \"{s}\" in widgets-disabled — skipping", .{id});
             continue;
         };
-        mask |= @as(u8, 1) << @as(u3, @intCast(@intFromEnum(e)));
+        mask |= @as(u16, 1) << @as(u4, @intCast(@intFromEnum(e)));
     }
     return mask;
 }
@@ -275,7 +375,7 @@ fn applyDisabledWidgets(allocator: std.mem.Allocator, cfg: *ShellConfig) void {
     if (mask == 0) return;
     var n: usize = 0;
     for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
-        const bit: u8 = @as(u8, 1) << @as(u3, @intCast(@intFromEnum(wc.id)));
+        const bit: u16 = @as(u16, 1) << @as(u4, @intCast(@intFromEnum(wc.id)));
         if (mask & bit != 0) {
             logging.step("widgets: {s} switched off — skipping", .{@tagName(wc.id)});
             continue;
@@ -362,6 +462,78 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
         if (hc.len > 0) cfg.holiday_country = hc;
     }
     if (parsed.holiday_region) |hr| cfg.holiday_region = hr;
+    if (parsed.weather_latitude) |v| cfg.weather_latitude = v;
+    if (parsed.weather_longitude) |v| cfg.weather_longitude = v;
+    if (parsed.weather_city) |v| cfg.weather_city = v;
+    if (parsed.weather_units) |v| {
+        if (weather_service.Units.parse(v)) |u| {
+            cfg.weather_units = u;
+            cfg.weather_units_auto = false;
+        } else {
+            if (!std.ascii.eqlIgnoreCase(v, "auto")) logging.warn("config: weather_units \"{s}\" is not auto, C or F — using auto", .{v});
+            cfg.weather_units_auto = true;
+        }
+    }
+    if (parsed.weather_click) |v| {
+        cfg.weather_click = widgets_mod.WeatherClick.parse(v) orelse blk: {
+            logging.warn("config: weather_click \"{s}\" is not forecast or units — using forecast", .{v});
+            break :blk .forecast;
+        };
+    }
+    if (parsed.weather_auto_location) |v| cfg.weather_auto_location = v;
+    if (parsed.weather_refresh_minutes) |v| cfg.weather_refresh_minutes = std.math.clamp(v, 1, 1440);
+    if (parsed.weather_ip_url) |v| cfg.weather_ip_url = v;
+    if (parsed.system_gpu) |v| {
+        if (v.len > 0) cfg.system_gpu = v;
+    }
+    if (parsed.system_temp_units) |v| {
+        cfg.system_temp_units = temps_service.Units.parse(v) orelse blk: {
+            logging.warn("config: system_temp_units \"{s}\" is not C or F — using C", .{v});
+            break :blk .celsius;
+        };
+    }
+    if (parsed.system_temp_interval_seconds) |v| cfg.system_temp_interval_seconds = std.math.clamp(v, 1, 60);
+    if (parsed.system_nvidia_smi) |v| cfg.system_nvidia_smi = v;
+    if (parsed.fastfetch_fields) |names| {
+        var unknown: usize = 0;
+        cfg.fastfetch_field_count = ff_service.parseFields(names, &cfg.fastfetch_fields, &unknown);
+        if (unknown > 0) logging.warn("config: fastfetch_fields has {d} unknown name(s) — skipped", .{unknown});
+    }
+    if (parsed.fastfetch_refresh_minutes) |v| cfg.fastfetch_refresh_minutes = @min(v, 1440);
+    if (parsed.fastfetch_binary) |v| cfg.fastfetch_binary = v;
+    if (parsed.fastfetch_logo) |v| {
+        if (v.len > 0) cfg.fastfetch_logo = v;
+    }
+    if (parsed.fastfetch_config) |v| cfg.fastfetch_config = v;
+    if (parsed.clock_style) |v| {
+        cfg.clock.style = widgets_mod.ClockStyle.parse(v) orelse blk: {
+            logging.warn("config: clock_style \"{s}\" unknown (digital|flip|stacked|classic) — using digital", .{v});
+            break :blk .digital;
+        };
+    }
+    if (parsed.clock_24h) |v| cfg.clock.h24 = v;
+    if (parsed.clock_seconds) |v| cfg.clock.seconds = v;
+    if (parsed.clock_date) |v| cfg.clock.date = v;
+    if (parsed.system_style) |v| {
+        cfg.system_style = widgets_mod.SystemStyle.parse(v) orelse blk: {
+            logging.warn("config: system_style \"{s}\" unknown (bars|rings) — using bars", .{v});
+            break :blk .bars;
+        };
+    }
+    if (parsed.processes_sort) |v| {
+        cfg.processes_sort = procs_service.Sort.parse(v) orelse blk: {
+            logging.warn("config: processes_sort \"{s}\" unknown (cpu|memory) — using cpu", .{v});
+            break :blk .cpu;
+        };
+    }
+    if (parsed.processes_count) |v| cfg.processes_count = @intCast(std.math.clamp(@as(usize, v), procs_service.MIN_SHOWN, procs_service.MAX_SHOWN));
+    if (parsed.processes_interval_seconds) |v| cfg.processes_interval_seconds = std.math.clamp(v, 1, 60);
+    if (parsed.processes_group) |v| cfg.processes_group = v;
+    if (parsed.notes_tabs) |v| cfg.notes.tabs = v;
+    if (parsed.notes_checklists) |v| cfg.notes.checklists = v;
+    if (parsed.notes_lines) |v| cfg.notes.lines = std.math.clamp(@as(i64, v), 3, 30);
+    if (parsed.notes_dir) |v| cfg.notes_dir = v;
+    if (parsed.notes_page) |v| cfg.notes_page = @intCast(std.math.clamp(v, 1, widgets_mod.NoteWidget.MAX_PAGES));
     if (parsed.overview_favorites) |fs| {
         // An explicit list replaces the defaults entirely (including an
         // explicit empty list = no dash). Strings are alloc_always, so they
@@ -446,6 +618,9 @@ fn tryApplyMatugenColors(gpa: std.mem.Allocator, theme: *widgets_mod.Theme) bool
     }
     if (colors.holiday_color) |hex| {
         theme.holiday_color = parseHexColor(hex) catch theme.holiday_color;
+    }
+    if (colors.matrix_color) |hex| {
+        theme.accent2_color = parseHexColor(hex) catch theme.accent2_color;
     }
     if (colors.card_bg_opacity) |a| theme.card_alpha = @min(a, 100);
     return true;
@@ -598,6 +773,8 @@ const Host = struct {
     // compositor's on_demand keyboard grab. The host owns the slot (the
     // widget owns text/caret) and the key-repeat clock.
     edit_index: ?usize = null,
+    /// Wheel motion not yet turned into whole lines (onWheel).
+    wheel_accum: f64 = 0,
     repeat_key: ?u32 = null,
     repeat_next_ms: i64 = 0,
     kb_rate: i32 = 0, // key auto-repeat from wl_keyboard.repeat_info (0 = off)
@@ -639,7 +816,120 @@ const Host = struct {
     pointer_over_ov: bool = false,
 };
 
+/// The pre-Open-Meteo card read a city or ZIP from the first line of
+/// ~/.config/perihelionbar/weather-location; keep honouring it when
+/// shell.json names no weather_city, so upgrades keep their place.
+fn legacyWeatherLocation(gpa: std.mem.Allocator, out: []u8) []const u8 {
+    const home = std.mem.span(getenv("HOME") orelse return "");
+    var pbuf: [512]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelionbar/weather-location", .{home}) catch return "";
+    const text = readFileAlloc(gpa, path) catch return "";
+    defer gpa.free(text);
+    const first = if (std.mem.indexOfScalar(u8, text, '\n')) |i| text[0..i] else text;
+    const line = std.mem.trim(u8, first, " \t\r");
+    const n = @min(line.len, out.len);
+    @memcpy(out[0..n], line[0..n]);
+    return out[0..n];
+}
+
+/// Owns the system_gpu string after a click: the widget's own buffer
+/// changes on the next click, so g_shell_cfg must not point into it.
+var g_system_gpu_buf: [32]u8 = undefined;
+
+/// After a °C/°F click: SIGUSR2 to the bar, if its pidfile names a live
+/// bar process (perihelion-bar, or the perihelionbar link older configs
+/// start it by). Saved before this runs, so the bar reads the new value.
+const BAR_WEATHER_RELOAD_CMD =
+    "p=$(cat \"$HOME/.config/perihelionbar/perihelionbar.pid\" 2>/dev/null); " ++
+    "case \"$p\" in ''|*[!0-9]*) exit 0;; esac; " ++
+    "case \"$(cat /proc/$p/comm 2>/dev/null)\" in perihelionbar|perihelion-bar) kill -USR2 \"$p\";; esac";
+
+fn configureWeather(w: *widgets_mod.WeatherWidget, gpa: std.mem.Allocator, cfg: *const ShellConfig) void {
+    var legacy_buf: [96]u8 = undefined;
+    const city = if (cfg.weather_city.len > 0) cfg.weather_city else legacyWeatherLocation(gpa, &legacy_buf);
+    var cache_buf: [400]u8 = undefined;
+    // Service.init copies every string, so the stack buffer may go.
+    w.configure(.{
+        .latitude = cfg.weather_latitude,
+        .longitude = cfg.weather_longitude,
+        .city = city,
+        .auto_location = cfg.weather_auto_location,
+        .units = cfg.weather_units,
+        .units_auto = cfg.weather_units_auto,
+        .refresh_ms = @as(i64, cfg.weather_refresh_minutes) * 60_000,
+        .ip_url = cfg.weather_ip_url,
+        // Shared with the top bar: whichever process fetched last, the
+        // other adopts that answer instead of asking Open-Meteo again.
+        .cache_path = weather_service.defaultCachePath(&cache_buf),
+    });
+}
+
+/// The Fastfetch card's service, set up before initWidgets measures cards:
+/// its size depends on the configured rows and on the logo it found.
+var g_ff_service: ff_service.Service = .{};
+
+fn prepareFastfetch(cfg: *const ShellConfig) void {
+    for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
+        if (wc.id != .fastfetch) continue;
+        g_ff_service = ff_service.Service.init(.{
+            .config = cfg.fastfetch_config,
+            .fields = if (cfg.fastfetch_field_count > 0) cfg.fastfetch_fields[0..cfg.fastfetch_field_count] else &ff_service.DEFAULT_FIELDS,
+            .refresh_ms = @as(i64, cfg.fastfetch_refresh_minutes) * 60_000,
+            .binary = cfg.fastfetch_binary,
+            .logo = cfg.fastfetch_logo,
+        });
+        if (cfg.fastfetch_binary.len > 0 and !std.ascii.eqlIgnoreCase(cfg.fastfetch_binary, "none") and
+            g_ff_service.source != .custom)
+        {
+            logging.warn("fastfetch: fastfetch_binary \"{s}\" is not an executable — auto-detecting", .{cfg.fastfetch_binary});
+        }
+        if (g_ff_service.layout == .config) {
+            logging.step("fastfetch: card follows {s} ({d} rows)", .{ g_ff_service.config_path.slice(), g_ff_service.row_count });
+        } else if (cfg.fastfetch_config.len > 0 and !std.ascii.eqlIgnoreCase(cfg.fastfetch_config, "none")) {
+            logging.warn("fastfetch: fastfetch_config \"{s}\" is missing or has no modules — using fastfetch_fields", .{cfg.fastfetch_config});
+        }
+        logging.step("fastfetch: using {s}{s}{s}; logo: {s}", .{
+            g_ff_service.source.describe(),
+            if (g_ff_service.bin.len > 0 and g_ff_service.source != .native) " at " else "",
+            if (g_ff_service.source != .native) g_ff_service.bin.slice() else "",
+            if (g_ff_service.logo_off) "off" else if (g_ff_service.logo_count > 0) "fastfetch config text logo" else "distro glyph",
+        });
+        widgets_mod.setFastfetchLayout(&g_ff_service);
+        return;
+    }
+}
+
+var notes_custom_dir_buf: [300]u8 = undefined;
+
+/// The notes folder: shell.json notes_dir ("~/" = $HOME, trailing slashes
+/// dropped, created if missing), else ~/.config/perihelionbar/notes.
+fn resolveNotesDir(want: []const u8) []const u8 {
+    const d = std.mem.trimEnd(u8, want, "/");
+    if (d.len == 0) return notes_dir_path;
+    const path = if (std.mem.startsWith(u8, d, "~/"))
+        std.fmt.bufPrintZ(&notes_custom_dir_buf, "{s}{s}", .{ std.mem.span(getenv("HOME") orelse ""), d[1..] })
+    else
+        std.fmt.bufPrintZ(&notes_custom_dir_buf, "{s}", .{d});
+    const z = path catch {
+        logging.warn("config: notes_dir is too long — using the default folder", .{});
+        return notes_dir_path;
+    };
+    _ = posix.system.mkdir(z.ptr, 0o755); // EEXIST is the normal case
+    return z;
+}
+
+fn jsonBool(v: bool) []const u8 {
+    return if (v) "true" else "false";
+}
+
 fn initWidgets(host: *Host, cfg: ShellConfig) void {
+    prepareFastfetch(&cfg);
+    // Card sizes depend on these, so they're set before anything is measured.
+    widgets_mod.clock_layout = cfg.clock;
+    widgets_mod.system_style = cfg.system_style;
+    widgets_mod.processes_rows = cfg.processes_count;
+    widgets_mod.notes_layout = cfg.notes;
+    widgets_mod.weather_click = cfg.weather_click;
     for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
         // Base size for the type, overridden by a persisted corner resize
         // (clamped: never below the designed base, never absurd — a
@@ -659,6 +949,8 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
             .note1 => .{ .note1 = .{} },
             .watch => .{ .watch = .{} },
             .icons => .{ .icons = .{} },
+            .fastfetch => .{ .fastfetch = .{} },
+            .processes => .{ .processes = .{} },
         };
         if (wc.id == .calendar) {
             host.widgets[host.widget_count].calendar.configure(
@@ -668,10 +960,24 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
             );
         } else switch (wc.id) {
             // Sticky note loads its text (possibly empty) from disk.
-            .note1 => host.widgets[host.widget_count].note1.configure(notes_dir_path, 1),
+            .note1 => host.widgets[host.widget_count].note1.configure(resolveNotesDir(cfg.notes_dir), cfg.notes_page),
             // Desktop icons arm the inotify watch and take their first
             // scan right away; sizing waits for the first paintDesktop.
             .icons => host.widgets[host.widget_count].icons.configure(host.gpa, desktop_dir_path),
+            // Location, units and refresh cadence from shell.json.
+            .weather => configureWeather(&host.widgets[host.widget_count].weather, host.gpa, &cfg),
+            .system => host.widgets[host.widget_count].system.configure(.{
+                .interval_ms = @as(i64, cfg.system_temp_interval_seconds) * 1000,
+                .gpu = cfg.system_gpu,
+                .nvidia_smi = cfg.system_nvidia_smi,
+            }, cfg.system_temp_units),
+            .fastfetch => host.widgets[host.widget_count].fastfetch.configure(&g_ff_service),
+            .processes => host.widgets[host.widget_count].processes.configure(.{
+                .sort = cfg.processes_sort,
+                .count = cfg.processes_count,
+                .interval_ms = @as(i64, cfg.processes_interval_seconds) * 1000,
+                .group = cfg.processes_group,
+            }),
             else => {},
         }
         host.widget_rects[host.widget_count] = .{
@@ -767,6 +1073,64 @@ fn saveConfig(host: *Host) void {
     if (!w.appendFmt("  \"holiday_country\": \"{s}\",\n", .{country_esc})) return;
     const region_esc = jsonEscape(g_shell_cfg.holiday_region, &esc) orelse return;
     if (!w.appendFmt("  \"holiday_region\": \"{s}\",\n", .{region_esc})) return;
+    // Weather keys are always written (null coordinates = unset) so they
+    // are discoverable in the file; weather_units also changes on click.
+    const wcity_esc = jsonEscape(g_shell_cfg.weather_city, &esc) orelse return;
+    if (!w.appendFmt("  \"weather_city\": \"{s}\",\n", .{wcity_esc})) return;
+    if (g_shell_cfg.weather_latitude) |lat| {
+        if (!w.appendFmt("  \"weather_latitude\": {d},\n", .{lat})) return;
+    } else {
+        if (!w.append("  \"weather_latitude\": null,\n")) return;
+    }
+    if (g_shell_cfg.weather_longitude) |lon| {
+        if (!w.appendFmt("  \"weather_longitude\": {d},\n", .{lon})) return;
+    } else {
+        if (!w.append("  \"weather_longitude\": null,\n")) return;
+    }
+    const auto_loc: []const u8 = if (g_shell_cfg.weather_auto_location) "true" else "false";
+    if (!w.appendFmt(
+        "  \"weather_units\": \"{s}\",\n  \"weather_click\": \"{s}\",\n  \"weather_auto_location\": {s},\n  \"weather_refresh_minutes\": {d},\n",
+        .{ if (g_shell_cfg.weather_units_auto) "auto" else g_shell_cfg.weather_units.tag(), @tagName(g_shell_cfg.weather_click), auto_loc, g_shell_cfg.weather_refresh_minutes },
+    )) return;
+    const wip_esc = jsonEscape(g_shell_cfg.weather_ip_url, &esc) orelse return;
+    if (!w.appendFmt("  \"weather_ip_url\": \"{s}\",\n", .{wip_esc})) return;
+    const sgpu_esc = jsonEscape(g_shell_cfg.system_gpu, &esc) orelse return;
+    const smi: []const u8 = if (g_shell_cfg.system_nvidia_smi) "true" else "false";
+    if (!w.appendFmt(
+        "  \"system_gpu\": \"{s}\",\n  \"system_temp_units\": \"{s}\",\n  \"system_temp_interval_seconds\": {d},\n  \"system_nvidia_smi\": {s},\n",
+        .{ sgpu_esc, g_shell_cfg.system_temp_units.tag(), g_shell_cfg.system_temp_interval_seconds, smi },
+    )) return;
+    // fastfetch_fields as the names fastfetch.zig accepts, in row order.
+    if (!w.append("  \"fastfetch_fields\": [")) return;
+    const ff_fields: []const ff_service.Field = if (g_shell_cfg.fastfetch_field_count > 0)
+        g_shell_cfg.fastfetch_fields[0..g_shell_cfg.fastfetch_field_count]
+    else
+        &ff_service.DEFAULT_FIELDS;
+    for (ff_fields, 0..) |f, fi| {
+        if (!w.appendFmt("{s}\"{s}\"", .{ if (fi > 0) ", " else "", @tagName(f) })) return;
+    }
+    if (!w.append("],\n")) return;
+    const ffbin_esc = jsonEscape(g_shell_cfg.fastfetch_binary, &esc) orelse return;
+    if (!w.appendFmt("  \"fastfetch_refresh_minutes\": {d},\n  \"fastfetch_binary\": \"{s}\",\n", .{ g_shell_cfg.fastfetch_refresh_minutes, ffbin_esc })) return;
+    const fflogo_esc = jsonEscape(g_shell_cfg.fastfetch_logo, &esc) orelse return;
+    if (!w.appendFmt("  \"fastfetch_logo\": \"{s}\",\n", .{fflogo_esc})) return;
+    const ffcfg_esc = jsonEscape(g_shell_cfg.fastfetch_config, &esc) orelse return;
+    if (!w.appendFmt("  \"fastfetch_config\": \"{s}\",\n", .{ffcfg_esc})) return;
+    const clk = g_shell_cfg.clock;
+    if (!w.appendFmt(
+        "  \"clock_style\": \"{s}\",\n  \"clock_24h\": {s},\n  \"clock_seconds\": {s},\n  \"clock_date\": {s},\n  \"system_style\": \"{s}\",\n",
+        .{ @tagName(clk.style), jsonBool(clk.h24), jsonBool(clk.seconds), jsonBool(clk.date), @tagName(g_shell_cfg.system_style) },
+    )) return;
+    if (!w.appendFmt(
+        "  \"processes_sort\": \"{s}\",\n  \"processes_count\": {d},\n  \"processes_interval_seconds\": {d},\n  \"processes_group\": {s},\n",
+        .{ g_shell_cfg.processes_sort.tag(), g_shell_cfg.processes_count, g_shell_cfg.processes_interval_seconds, jsonBool(g_shell_cfg.processes_group) },
+    )) return;
+    const nd_esc = jsonEscape(g_shell_cfg.notes_dir, &esc) orelse return;
+    const nl = g_shell_cfg.notes;
+    if (!w.appendFmt(
+        "  \"notes_tabs\": {s},\n  \"notes_checklists\": {s},\n  \"notes_lines\": {d},\n  \"notes_dir\": \"{s}\",\n  \"notes_page\": {d},\n",
+        .{ jsonBool(nl.tabs), jsonBool(nl.checklists), nl.lines, nd_esc, g_shell_cfg.notes_page },
+    )) return;
     // overview_favorites round-trips too — saveConfig must not drop keys it
     // didn't just write (that's the whole round-trip contract here).
     if (!w.append("  \"overview_favorites\": [")) return;
@@ -1255,12 +1619,35 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
             pointerButton(host, e.button, e.state == .pressed);
         },
         .frame => {},
-        .axis => {},
+        // Wheel over the notes card scrolls its text (the other cards
+        // have nothing to scroll).
+        .axis => |e| {
+            if (host.pointer_over_ov or e.axis != .vertical_scroll) return;
+            onWheel(host, e.value.toDouble());
+        },
         .axis_source => {},
         .axis_stop => {},
         .axis_discrete => {},
     }
 }
+
+/// Accumulates wheel/touchpad motion into whole lines (about one line per
+/// wheel notch) and scrolls the notes card under the pointer.
+fn onWheel(host: *Host, value: f64) void {
+    const i = host.hovered_index orelse {
+        host.wheel_accum = 0;
+        return;
+    };
+    if (host.widgets[i] != .note1) return;
+    host.wheel_accum += value;
+    const lines: i32 = @intFromFloat(@trunc(host.wheel_accum / WHEEL_UNITS_PER_LINE));
+    if (lines == 0) return;
+    host.wheel_accum -= @as(f64, @floatFromInt(lines)) * WHEEL_UNITS_PER_LINE;
+    if (host.widgets[i].note1.scrollBy(host.widget_rects[i], host.font, lines)) markDirty(host, i);
+}
+
+/// Wayland axis units per text line: a wheel notch is 10-15 units.
+const WHEEL_UNITS_PER_LINE: f64 = 12.0;
 
 /// Left-button press/release over a widget — the body of the pointer
 /// listener's button arm, split out so the self-test can drive the exact
@@ -1309,12 +1696,54 @@ fn pointerButton(host: *Host, btn: u32, pressed: bool) void {
             // A click is press + release over the same widget.
             if (host.widget_rects[i].contains(host.pointer_x, host.pointer_y)) {
                 host.widgets[i].click(zoomFontFor(host, i, widgetZoom(host, i)), widgetZoom(host, i), host.widget_rects[i], host.pointer_x, host.pointer_y);
-                // Clicking a note opens the single-edit slot: the card took
-                // on_demand keyboard focus, so the compositor will route key
-                // events here. The widget owns text/caret; the host owns the
-                // slot, the repeat clock, and the edit cadence.
-                if (widgets_mod.noteSlot(&host.widgets[i]) != null) {
-                    host.edit_index = i;
+                // A weather click flips °C/°F; keep the choice across restarts.
+                if (host.widgets[i] == .weather and host.widgets[i].weather.units_changed) {
+                    host.widgets[i].weather.units_changed = false;
+                    g_shell_cfg.weather_units = host.widgets[i].weather.svc.units;
+                    g_shell_cfg.weather_units_auto = false; // a chosen unit, kept
+                    saveConfig(host);
+                    // Tell the top bar to re-read shell.json's weather keys
+                    // (SIGUSR2 = weather-only reload, no full config reload).
+                    // Only signal a pid that really is the bar: a stale
+                    // pidfile may name an unrelated process, which SIGUSR2's
+                    // default action would kill.
+                    widgets_mod.spawnDetached(BAR_WEATHER_RELOAD_CMD);
+                }
+                // A System card click that switched GPUs: remember which.
+                if (host.widgets[i] == .system and host.widgets[i].system.gpu_changed) {
+                    host.widgets[i].system.gpu_changed = false;
+                    const pref = host.widgets[i].system.temps.gpuPref();
+                    const n = @min(pref.len, g_system_gpu_buf.len);
+                    @memcpy(g_system_gpu_buf[0..n], pref[0..n]);
+                    g_shell_cfg.system_gpu = g_system_gpu_buf[0..n];
+                    saveConfig(host);
+                }
+                // A Processes card click that flipped CPU/memory order.
+                if (host.widgets[i] == .processes and host.widgets[i].processes.sort_changed) {
+                    host.widgets[i].processes.sort_changed = false;
+                    g_shell_cfg.processes_sort = host.widgets[i].processes.svc.sort;
+                    saveConfig(host);
+                }
+                // A click that left the notes card editing opens the
+                // single-edit slot: the card took on_demand keyboard focus,
+                // so the compositor routes key events here. The widget owns
+                // text/caret; the host owns the slot, the repeat clock, and
+                // the edit cadence. Header buttons and checkbox ticks don't
+                // edit, so they hand the slot back.
+                if (host.widgets[i] == .note1) {
+                    const n = &host.widgets[i].note1;
+                    if (n.editing) {
+                        host.edit_index = i;
+                    } else if (host.edit_index == i) {
+                        host.edit_index = null;
+                        host.repeat_key = null;
+                        host.repeat_next_ms = 0;
+                    }
+                    if (n.page_changed) {
+                        n.page_changed = false;
+                        g_shell_cfg.notes_page = n.slot;
+                        saveConfig(host);
+                    }
                     reschedule(host, i);
                 }
                 logging.step("ptr: click idx={d} edit={?}", .{ i, host.edit_index });
@@ -1772,8 +2201,9 @@ fn runSelfTest(host: *Host) void {
     // Click into the note's first text line (question mark placement: the
     // card rect is known, the pointer is fake).
     const r = host.widget_rects[i];
+    const lh = widgets_mod.lineH(host.font);
     host.pointer_x = r.x + 40;
-    host.pointer_y = r.y + 30;
+    host.pointer_y = r.y + @as(i32, @intCast(widgets_mod.CARD_PAD + widgets_mod.noteHeaderH(lh) + @divTrunc(lh, 2)));
     _ = updateHover(host);
     pointerButton(host, BTN_LEFT, true);
     pointerButton(host, BTN_LEFT, false);

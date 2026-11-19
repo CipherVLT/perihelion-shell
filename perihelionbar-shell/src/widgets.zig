@@ -19,8 +19,17 @@ const font_mod = @import("font");
 const art_mod = @import("art");
 const logging = @import("logging");
 const icontheme = @import("icontheme");
+// Weather data service (Open-Meteo), shared with the bar's indicator:
+// ../perihelionbar/src/weather.zig, wired as a module in build.zig.
+const wsvc = @import("weather");
+// CPU/GPU temperature service, shared with the bar: ../perihelionbar/src/temps.zig.
+const tsvc = @import("temps");
+// System-info service for the Fastfetch card: ../perihelionbar/src/fastfetch.zig.
+const ffsvc = @import("fastfetch");
+// Top-processes service for the Processes card: ../perihelionbar/src/procs.zig.
+const psvc = @import("procs");
 
-pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons };
+pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes };
 
 /// Axis-aligned rect in surface coordinates. The host keeps one per widget
 /// (measured from the font at startup, placed from config).
@@ -49,6 +58,10 @@ pub const Theme = struct {
     /// matugen template's `holiday_color` when present, so it follows the
     /// wallpaper theme like the rest.
     holiday_color: u32 = 0xFFF0805C,
+    /// Second accent (matugen tertiary / the palette's accent3; the
+    /// template's `matrix_color`). The Fastfetch card's logo uses it for
+    /// its $2 parts, the way the terminal logo uses a second colour.
+    accent2_color: u32 = 0xFF94E2D5,
     card_alpha: u32 = 55,
     radius_px: u32 = 12,
 };
@@ -80,6 +93,16 @@ const CAL_HEAD_GAP: i64 = 6;
 const CAL_WD_GAP: i64 = 4;
 const CAL_FOOT_GAP: i64 = 6;
 const CAL_ARROW_ZONE: i64 = 20; // clickable width of the < / > header zones
+
+// Weather-card geometry: a four-line header (big temperature across lines
+// 1-2, condition, place) over a forecast strip of day columns (label, icon
+// + rain chance, high, low). cardSizeFor and WeatherWidget.paint share these.
+const WX_W: i64 = 284;
+const WX_HEAD_LINES: i64 = 4;
+const WX_STRIP_LINES: i64 = 4;
+const WX_STRIP_GAP: i64 = 12; // header → hairline → strip
+const WX_STRIP_ROW_GAP: i64 = 2;
+const WX_COL_MIN: i64 = 50; // 284 wide at 1x → five day columns
 
 // Analog watch (Seiko diver style) geometry: a compact tile whose content
 // IS the widget — the host skips its frosted card for this one, the steel
@@ -131,19 +154,188 @@ pub fn lineH(font: *const font_mod.Font) i64 {
 pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
     const lh: i64 = lineH(font);
     return switch (id) {
-        .clock => .{ 190, @intCast(2 * CARD_PAD + 2 * lh + ROW_GAP) },
-        .weather => .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP) },
+        .clock => clockCardSize(font),
+        .weather => .{ @intCast(WX_W), @intCast(2 * CARD_PAD + WX_HEAD_LINES * lh + (WX_HEAD_LINES - 1) * ROW_GAP + WX_STRIP_GAP + WX_STRIP_LINES * lh + (WX_STRIP_LINES - 1) * WX_STRIP_ROW_GAP) },
         .media => .{ @intCast(MEDIA_W), @intCast(2 * CARD_PAD + MEDIA_COVER + MEDIA_HEAD_GAP + MEDIA_PROG_H + MEDIA_TIME_GAP + lh + MEDIA_CTRL_GAP + lh) },
-        .system => .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP + 2 * BAR_H) },
+        // Bars: CPU, MEM and GPU rows, each a label line over a 4px-gapped
+        // bar. Rings: four gauges in a row with a label under each.
+        .system => if (system_style == .rings)
+            .{ @intCast(2 * CARD_PAD + 4 * RING_D + 3 * RING_GAP), @intCast(2 * CARD_PAD + RING_D + RING_LABEL_GAP + lh) }
+        else
+            .{ 190, @intCast(2 * CARD_PAD + 3 * lh + 2 * ROW_GAP + 3 * BAR_H + 2 * 4) },
         .calendar => .{ @intCast(CAL_W), @intCast(2 * CARD_PAD + 3 * lh + CAL_HEAD_GAP + CAL_WD_GAP + CAL_ROWS * CAL_CELL_H + CAL_FOOT_GAP) },
         // Sticky note: a text card, tall enough for six wrapped lines.
-        .note1 => .{ @intCast(NoteWidget.NOTE_W), @intCast(2 * CARD_PAD + NoteWidget.VISIBLE_LINES * lh) },
+        // Header strip (tabs, +, ×) over notes_lines lines of text.
+        .note1 => .{ @intCast(NoteWidget.NOTE_W), @intCast(2 * CARD_PAD + noteHeaderH(lh) + notes_layout.lines * lh) },
         // Fixed-size: the watch is drawn from its own geometry, not the font.
         .watch => .{ @intCast(WATCH_W), @intCast(WATCH_H) },
         // Desktop icons: the real size is content-driven (rescan count =>
         // applyIconsSize); the base is just the empty-state minimum so the
         // first frame has a tile to paint into.
         .icons => .{ @intCast(2 * ICON_TILE_PAD + ICON_COLS * ICON_CELL_W + (ICON_COLS - 1) * ICON_GAP), @intCast(2 * ICON_TILE_PAD + ICON_CELL_H) },
+        .fastfetch => fastfetchCardSize(font),
+        // Header line, then one name/value line over a thin bar per row.
+        .processes => .{ @intCast(PROC_W), @intCast(2 * CARD_PAD + lh + PROC_HEAD_GAP + @as(i64, @intCast(processes_rows)) * (lh + PROC_ROW_GAP + PROC_BAR_H + 2)) },
+    };
+}
+
+/// Monospace cell width estimate for sizing before any glyph is measured
+/// (JetBrains Mono's advance is 0.6 em, rounded up a little).
+fn monoCell(font: *const font_mod.Font) i64 {
+    return @divTrunc(@as(i64, font.pixel_size) * 62 + 99, 100);
+}
+
+// --- clock styles ---------------------------------------------------------
+
+pub const ClockStyle = enum {
+    /// Large HH:MM, small seconds/AM-PM beside it, the date under it.
+    digital,
+    /// Split-flap tiles in the accent colour.
+    flip,
+    /// macOS-style: hours over minutes, big, with the date beside them.
+    stacked,
+    /// The original two-line text clock.
+    classic,
+
+    pub fn parse(s: []const u8) ?ClockStyle {
+        if (std.meta.stringToEnum(ClockStyle, s)) |v| return v;
+        if (std.ascii.eqlIgnoreCase(s, "macos")) return .stacked;
+        return null;
+    }
+};
+
+/// Clock options (shell.json clock_*), set by the host before any card is
+/// measured; the card's size depends on them.
+pub const ClockLayout = struct {
+    style: ClockStyle = .digital,
+    seconds: bool = false,
+    date: bool = true,
+    h24: bool = true,
+};
+pub var clock_layout: ClockLayout = .{};
+
+const CLOCK_W: i64 = 190;
+const FLIP_TILE_GAP: i64 = 4;
+const FLIP_COLON_W: i64 = 12;
+const FLIP_SIDE_GAP: i64 = 8;
+const STACK_GAP: i64 = 6;
+const STACK_COL_GAP: i64 = 16;
+
+fn clockCardSize(font: *const font_mod.Font) [2]u32 {
+    const lh = lineH(font);
+    const asc: i64 = font.ascentPx();
+    const cell = monoCell(font);
+    const L = clock_layout;
+    const date_h: i64 = if (L.date) ROW_GAP + lh else 0;
+    const side_w: i64 = (if (L.seconds) 3 * cell else 0) + (if (!L.h24) 3 * cell else 0);
+    return switch (L.style) {
+        .classic => .{ @intCast(CLOCK_W), @intCast(2 * CARD_PAD + lh + date_h) },
+        .digital => .{
+            @intCast(@max(CLOCK_W, 2 * CARD_PAD + 5 * 2 * cell + side_w + FLIP_SIDE_GAP)),
+            // Digits have no descenders: the 2x line is 2 * ascent tall.
+            @intCast(2 * CARD_PAD + 2 * asc + date_h),
+        },
+        .flip => blk: {
+            const tile_w = 2 * cell + 12;
+            const tile_h = 2 * asc + 8;
+            const side = if (side_w > 0) FLIP_SIDE_GAP + 2 * cell else 0;
+            break :blk .{
+                @intCast(@max(CLOCK_W, 2 * CARD_PAD + 4 * tile_w + 2 * FLIP_TILE_GAP + FLIP_COLON_W + side)),
+                @intCast(2 * CARD_PAD + tile_h + date_h),
+            };
+        },
+        .stacked => .{
+            @intCast(@max(CLOCK_W, 2 * CARD_PAD + 6 * cell + STACK_COL_GAP + 10 * cell)),
+            @intCast(2 * CARD_PAD + 6 * asc + STACK_GAP),
+        },
+    };
+}
+
+// --- system card ring style ------------------------------------------------
+
+pub const SystemStyle = enum {
+    bars,
+    rings,
+
+    pub fn parse(s: []const u8) ?SystemStyle {
+        if (std.ascii.eqlIgnoreCase(s, "bars") or std.ascii.eqlIgnoreCase(s, "rows")) return .bars;
+        if (std.ascii.eqlIgnoreCase(s, "rings") or std.ascii.eqlIgnoreCase(s, "gauges")) return .rings;
+        return null;
+    }
+};
+/// shell.json system_style, set by the host before cards are measured.
+pub var system_style: SystemStyle = .bars;
+const RING_D: i64 = 58;
+const RING_GAP: i64 = 14;
+const RING_W: i64 = 6;
+const RING_LABEL_GAP: i64 = 6;
+
+// --- processes card geometry -------------------------------------------------
+
+/// shell.json processes_count, set by the host before cards are measured.
+pub var processes_rows: usize = 6;
+const PROC_W: i64 = 250;
+const PROC_HEAD_GAP: i64 = 8;
+const PROC_ROW_GAP: i64 = 3;
+const PROC_BAR_H: i64 = 2;
+
+// Fastfetch-card geometry: logo column (text logo or distro glyph), then
+// the title, a rule, one row per field and a palette row.
+const FF_TEXT_W: i64 = 340;
+const FF_LOGO_GAP: i64 = 18;
+const FF_ROW_GAP: i64 = 2;
+const FF_GLYPH_W: i64 = 96;
+const FF_LABEL_GAP: i64 = 10;
+
+/// What the Fastfetch card's size depends on, known before the widget is
+/// built (the host sets it from the configured service before initWidgets
+/// measures any card, and it never changes while the shell runs, so every
+/// cardSizeFor call — startup, zoom, resize — agrees).
+pub const FastfetchLayout = struct {
+    /// Full-height lines: rows and section headers.
+    rows: i64 = ffsvc.DEFAULT_FIELDS.len,
+    /// Half-height gaps (the config's "break" modules).
+    spacers: i64 = 0,
+    palette: bool = true,
+    logo_cols: i64 = 0,
+    logo_lines: i64 = 0,
+    logo_off: bool = false,
+};
+pub var fastfetch_layout: FastfetchLayout = .{};
+
+pub fn setFastfetchLayout(svc: *const ffsvc.Service) void {
+    var lines: i64 = @intCast(svc.field_count);
+    var spacers: i64 = 0;
+    if (svc.layout == .config) {
+        lines = 0;
+        for (svc.cardRows()) |*r| {
+            if (r.kind == .spacer) spacers += 1 else lines += 1;
+        }
+    }
+    fastfetch_layout = .{
+        .rows = lines,
+        .spacers = spacers,
+        .palette = svc.palette,
+        .logo_cols = @intCast(svc.logo_cols),
+        .logo_lines = @intCast(svc.logo_count),
+        .logo_off = svc.logo_off,
+    };
+}
+
+fn fastfetchCardSize(font: *const font_mod.Font) [2]u32 {
+    const lh = lineH(font);
+    const L = fastfetch_layout;
+    // Monospace cell (JetBrains Mono's advance is 0.6 em); a little over so
+    // block-drawn logos never clip. Paint measures for real.
+    const cell = @divTrunc(@as(i64, font.pixel_size) * 62 + 99, 100);
+    const logo_w: i64 = if (L.logo_off) 0 else if (L.logo_cols > 0) L.logo_cols * cell else FF_GLYPH_W;
+    const gap: i64 = if (logo_w > 0) FF_LOGO_GAP else 0;
+    const text_rows = L.rows + 2 + @as(i64, if (L.palette) 1 else 0); // title, rule, rows, palette
+    const rows_h = text_rows * lh + (text_rows - 1) * FF_ROW_GAP + L.spacers * @divTrunc(lh, 2);
+    const logo_h = L.logo_lines * lh;
+    return .{
+        @intCast(2 * CARD_PAD + logo_w + gap + FF_TEXT_W),
+        @intCast(2 * CARD_PAD + @max(rows_h, logo_h, FF_GLYPH_W)),
     };
 }
 
@@ -411,6 +603,42 @@ pub const Canvas = struct {
         }
     }
 
+    /// AA-filled arc of a ring, clockwise from 12 o'clock over `frac` of a
+    /// full turn, with round caps — the System card's gauges. The angular
+    /// edge is cut hard, but each end sits under its cap disc, so the
+    /// visible outline is AA everywhere. Meant for an opaque `color` (caps
+    /// overlap the arc).
+    pub fn fillArcAA(self: Canvas, cx: f64, cy: f64, rad_in: f64, rad_out: f64, frac: f64, color: u32) void {
+        const f = std.math.clamp(frac, 0.0, 1.0);
+        if (f <= 0.0) return;
+        if (f >= 0.999) return self.fillRingAA(cx, cy, rad_in, rad_out, color);
+        const tau = 2.0 * std.math.pi;
+        const sweep = f * tau;
+        const x0: i64 = @intFromFloat(@floor(cx - rad_out - 1.0));
+        const x1: i64 = @intFromFloat(@ceil(cx + rad_out + 1.0));
+        const y0: i64 = @intFromFloat(@floor(cy - rad_out - 1.0));
+        const y1: i64 = @intFromFloat(@ceil(cy + rad_out + 1.0));
+        var y = @max(y0, 0);
+        while (y <= y1) : (y += 1) {
+            var x = @max(x0, 0);
+            while (x <= x1) : (x += 1) {
+                const dx = @as(f64, @floatFromInt(x)) + 0.5 - cx;
+                const dy = @as(f64, @floatFromInt(y)) + 0.5 - cy;
+                const dist = @sqrt(dx * dx + dy * dy);
+                const cov = @min(rad_out + 0.5 - dist, dist - (rad_in - 0.5));
+                if (cov <= 0.0) continue;
+                var a = std.math.atan2(dx, -dy); // 0 at the top, clockwise
+                if (a < 0.0) a += tau;
+                if (a > sweep) continue;
+                self.blendCov(x, y, color, cov);
+            }
+        }
+        const mid = (rad_in + rad_out) / 2.0;
+        const half = (rad_out - rad_in) / 2.0;
+        self.fillCircleAA(cx, cy - mid, half, color);
+        self.fillCircleAA(cx + @sin(sweep) * mid, cy - @cos(sweep) * mid, half, color);
+    }
+
     /// AA-filled convex polygon (either winding): per-pixel coverage from
     /// the distance to the nearest edge. This is how rotated index batons
     /// and the sweeping hands stay smooth at any angle.
@@ -510,49 +738,6 @@ fn utf8Encode(cp: u32, out: []u8) usize {
     }
 }
 
-/// Maps wttr.in's emoji (Miscellaneous Symbols / Emoji blocks — mostly *not*
-/// covered by the Nerd Font) to an equivalent icon from the Nerd Font's
-/// weather-icons pack (U+E300-U+E3E3, verified present).
-fn wttrIconFor(cp: u32) ?u32 {
-    return switch (cp) {
-        0x2600 => 0xE30D, // ☀ sunny/clear
-        0x26C5 => 0xE302, // ⛅ partly cloudy
-        0x2601 => 0xE335, // ☁ cloudy
-        0x1F326 => 0xE304, // 🌦 partly cloudy w/ rain
-        0x1F324 => 0xE304, // 🌤 sun behind small cloud
-        0x1F325 => 0xE302, // 🌥 sun behind cloud (wttr.in uses this too)
-        0x1F327 => 0xE319, // 🌧 rain
-        0x26C8 => 0xE31D, // ⛈ thunderstorm
-        0x1F329 => 0xE31D, // 🌩 lightning
-        0x1F328 => 0xE31A, // 🌨 snow shower
-        0x2744 => 0xE31A, // ❄ snowflake
-        0x1F32B => 0xE313, // 🌫 fog
-        0x1F4A8 => 0xE34B, // 💨 windy
-        0x1F32A => 0xE351, // 🌪 tornado
-        0x1F32C => 0xE34B, // 🌬 wind blowing face
-        else => null,
-    };
-}
-
-/// Condition tint for the weather icon, keyed on wttr.in's emoji exactly
-/// like wttrIconFor above. Same semantic colors as the bar's weatherIconTint
-/// (which keys on the shaped icon instead) — keep the two tables in sync.
-/// Null when the emoji is unmapped (caller falls back to the text color).
-fn wttrColorFor(cp: u32) ?u32 {
-    return switch (cp) {
-        0x2600 => 0xFFFFD60A, // ☀ clear gold
-        0x26C5, 0x1F324, 0x1F325 => 0xFFFFB340, // ⛅🌤🌥 partly amber
-        0x2601 => 0xFF9AA7B8, // ☁ overcast slate
-        0x1F326, 0x1F327 => 0xFF4AA8FF, // 🌦🌧 rain blue
-        0x26C8, 0x1F329 => 0xFFB48CFF, // ⛈🌩 storm violet
-        0x1F328, 0x2744 => 0xFFA8E6FF, // 🌨❄ snow ice
-        0x1F32B => 0xFF8E9AAF, // 🌫 fog gray
-        0x1F4A8, 0x1F32C => 0xFF7DE3D0, // 💨🌬 wind teal
-        0x1F32A => 0xFFFF8A8A, // 🌪 tornado red
-        else => null,
-    };
-}
-
 /// Blits an uncached oversized glyph (shared font_mod.glyphScaled) with its
 /// top-left at (`x0`, `y0`), coverage-blended via blendOver so translucent
 /// card edges composite instead of punching holes. Returns the advance.
@@ -574,33 +759,21 @@ fn drawBigIcon(c: Canvas, x0: i64, y0: i64, big: *const font_mod.BigGlyph, color
     return big.advance_x;
 }
 
-/// Condition effect kinds for the weather hover animation — mirrors the
-/// bar's WeatherFx table (the shell can't import main.zig, same as the
-/// wttr tables above).
+/// Condition effect kinds for the weather card animation — mirrors the
+/// bar's WeatherFx table (the shell can't import the bar's main.zig).
 const WeatherFx = enum { none, rain, snow, storm, clear, cloud, fog, wind };
 
-/// Maps a shaped weather icon (U+E3xx) to its hover effect. Keep in sync
-/// with the bar's weatherFxKind.
-fn weatherFxKind(nf: u32) WeatherFx {
-    return switch (nf) {
-        0xE30D => .clear,
-        0xE302, 0xE304 => .cloud,
-        0xE335 => .cloud,
-        0xE319 => .rain,
-        0xE31D => .storm,
-        0xE31A => .snow,
-        0xE313 => .fog,
-        0xE34B => .wind,
-        0xE351 => .wind,
-        else => .none,
+/// Card animation for a condition family (weather.zig Kind).
+fn fxForKind(kind: wsvc.Kind) WeatherFx {
+    return switch (kind) {
+        .clear => .clear,
+        .partly_cloudy, .overcast => .cloud,
+        .fog => .fog,
+        .drizzle, .freezing, .rain, .showers => .rain,
+        .snow, .snow_showers => .snow,
+        .thunderstorm => .storm,
+        .unknown => .none,
     };
-}
-
-/// Condition-aware resolver (mirrors the bar's weatherFxFor): showers wear
-/// the partly-rainy icon but must RAIN.
-fn weatherFxFor(wttr: u32, nf: u32) WeatherFx {
-    if (wttr == 0x1F326) return .rain;
-    return weatherFxKind(nf);
 }
 
 /// Deterministic 0..1 scatter for particle `i` — same stateless clock as
@@ -665,8 +838,7 @@ fn putCardFx(c: Canvas, r: Rect, x: i64, y: i64, rgb: u32, alpha: u8) void {
 /// Hover overlay for the weather card: condition particles over the whole
 /// card rect, driven by the widget's 60ms anim_frame (see the union tick).
 /// Drawn after the content at low alpha — weather that moves when watched.
-fn drawWeatherFxCard(c: Canvas, r: Rect, wttr: u32, nf: u32, frame: u32, tint: u32) void {
-    const kind = weatherFxFor(wttr, nf);
+fn drawWeatherFxCard(c: Canvas, r: Rect, kind: WeatherFx, frame: u32, tint: u32) void {
     if (kind == .none) return;
     const w: i64 = @intCast(r.w);
     const h: i64 = @intCast(r.h);
@@ -759,24 +931,6 @@ fn drawWeatherFxCard(c: Canvas, r: Rect, wttr: u32, nf: u32, frame: u32, tint: u
             }
         },
     }
-}
-
-/// Plain-language condition for the emoji (wttr.in's pipe format carries no
-/// text description, only the symbol). Shown under the temperature.
-fn wttrConditionFor(cp: u32) []const u8 {
-    return switch (cp) {
-        0x2600 => "Clear",
-        0x26C5, 0x1F324, 0x1F325 => "Partly cloudy",
-        0x2601 => "Cloudy",
-        0x1F326 => "Showers",
-        0x1F327 => "Rain",
-        0x26C8, 0x1F329 => "Thunderstorm",
-        0x1F328, 0x2744 => "Snow",
-        0x1F32B => "Fog",
-        0x1F4A8, 0x1F32C => "Windy",
-        0x1F32A => "Tornado",
-        else => "",
-    };
 }
 
 // --- spawn helper (ported from the bar's spawnDetached) -------------------
@@ -970,39 +1124,209 @@ fn daysInMonth(y: i32, m: u8) u8 {
     };
 }
 
+const WEEKDAYS_FULL = [_][]const u8{ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+
+/// Desktop clock. Style, 12/24-hour, seconds and date come from
+/// clock_layout (shell.json clock_*). update() reports whether anything
+/// shown changed, so without seconds the card repaints once a minute.
 pub const ClockWidget = struct {
-    main_buf: [24]u8 = undefined,
-    main_len: usize = 0,
-    sub_buf: [24]u8 = undefined,
-    sub_len: usize = 0,
+    hour: u8 = 0, // as shown: 0-23, or 1-12 in 12-hour mode
+    min: u8 = 0,
+    sec: u8 = 0,
+    pm: bool = false,
+    wday: u8 = 0,
+    mday: u8 = 1,
+    mon: u8 = 0,
+    shown_key: u64 = 0,
+    ready: bool = false,
 
     pub const interval_ms: i64 = 1000;
 
-    pub fn update(self: *ClockWidget) void {
+    /// Reads the time; true when the face would look different.
+    pub fn update(self: *ClockWidget) bool {
+        const L = clock_layout;
         const now = libc_time.time(null);
         var tm: libc_time.Tm = undefined;
         _ = libc_time.localtime_r(&now, &tm);
-        const mday: u32 = @intCast(tm.mday);
-        const hour24: u32 = @intCast(tm.hour);
-        const min: u32 = @intCast(tm.min);
-        const sec: u32 = @intCast(tm.sec);
-        const wday: usize = @intCast(tm.wday);
-        const mon: usize = @intCast(tm.mon);
-        const main = std.fmt.bufPrint(&self.main_buf, "{d:0>2}:{d:0>2}:{d:0>2}", .{ hour24, min, sec }) catch self.main_buf[0..0];
-        const sub = std.fmt.bufPrint(&self.sub_buf, "{s} {d} {s}", .{ DAYS[wday % 7], mday, MONTHS[mon % 12] }) catch self.sub_buf[0..0];
-        self.main_len = main.len;
-        self.sub_len = sub.len;
+        var h: u8 = @intCast(tm.hour);
+        var pm = false;
+        if (!L.h24) {
+            pm = h >= 12;
+            h %= 12;
+            if (h == 0) h = 12;
+        }
+        self.hour = h;
+        self.min = @intCast(tm.min);
+        self.sec = @intCast(@min(tm.sec, 59)); // leap second shows as :59
+        self.pm = pm;
+        self.wday = @intCast(@mod(tm.wday, 7));
+        self.mday = @intCast(tm.mday);
+        self.mon = @intCast(@mod(tm.mon, 12));
+        var key: u64 = @as(u64, h) * 60 + self.min;
+        key = key * 60 + (if (L.seconds) @as(u64, self.sec) else 0);
+        key = key * 2 + @intFromBool(pm);
+        key = ((key * 7 + self.wday) * 32 + self.mday) * 12 + self.mon;
+        const changed = !self.ready or key != self.shown_key;
+        self.shown_key = key;
+        self.ready = true;
+        return changed;
+    }
+
+    fn timeText(self: *const ClockWidget, out: []u8) []const u8 {
+        return if (clock_layout.h24)
+            std.fmt.bufPrint(out, "{d:0>2}:{d:0>2}", .{ self.hour, self.min }) catch ""
+        else
+            std.fmt.bufPrint(out, "{d}:{d:0>2}", .{ self.hour, self.min }) catch "";
+    }
+
+    fn ampm(self: *const ClockWidget) []const u8 {
+        return if (self.pm) "PM" else "AM";
     }
 
     pub fn paint(self: *const ClockWidget, c: Canvas, r: Rect) void {
-        const lh = lineH(c.font);
+        switch (clock_layout.style) {
+            .classic => self.paintClassic(c, r),
+            .digital => self.paintDigital(c, r),
+            .flip => self.paintFlip(c, r),
+            .stacked => self.paintStacked(c, r),
+        }
+    }
+
+    /// Weekday in the accent, then the rest dimmed: "Wednesday, Nov 18".
+    fn drawDate(self: *const ClockWidget, c: Canvas, x: i64, baseline: i64, full_weekday: bool) void {
+        const text_col = c.theme.text_color;
+        const wd = if (full_weekday) WEEKDAYS_FULL[self.wday] else DAYS[self.wday];
+        const w = c.drawText(x, baseline, wd, c.theme.border_color);
+        var db: [24]u8 = undefined;
+        const rest = std.fmt.bufPrint(&db, ", {s} {d}", .{ MONTHS[self.mon], self.mday }) catch "";
+        _ = c.drawText(x + w, baseline, rest, dim(text_col, 0xBB));
+    }
+
+    fn paintClassic(self: *const ClockWidget, c: Canvas, r: Rect) void {
+        const L = clock_layout;
         const pad = c.zx(CARD_PAD);
-        const rg = c.zx(ROW_GAP);
         const padx: i64 = r.x + pad;
         const b1 = r.y + pad + c.font.ascentPx();
-        const b2 = b1 + lh + rg;
-        _ = c.drawText(padx, b1, self.main_buf[0..self.main_len], c.theme.text_color);
-        _ = c.drawText(padx, b2, self.sub_buf[0..self.sub_len], dim(c.theme.text_color, 0xCC));
+        var tb: [16]u8 = undefined;
+        var mb: [32]u8 = undefined;
+        var sb: [4]u8 = undefined;
+        const secs = if (L.seconds) (std.fmt.bufPrint(&sb, ":{d:0>2}", .{self.sec}) catch "") else "";
+        const t = std.fmt.bufPrint(&mb, "{s}{s}{s}{s}", .{
+            self.timeText(&tb),
+            secs,
+            if (L.h24) "" else " ",
+            if (L.h24) "" else self.ampm(),
+        }) catch "";
+        _ = c.drawText(padx, b1, t, c.theme.text_color);
+        if (L.date) {
+            var db: [24]u8 = undefined;
+            const sub = std.fmt.bufPrint(&db, "{s} {d} {s}", .{ DAYS[self.wday], self.mday, MONTHS[self.mon] }) catch "";
+            _ = c.drawText(padx, b1 + lineH(c.font) + c.zx(ROW_GAP), sub, dim(c.theme.text_color, 0xCC));
+        }
+    }
+
+    fn paintDigital(self: *const ClockWidget, c: Canvas, r: Rect) void {
+        const L = clock_layout;
+        const pad = c.zx(CARD_PAD);
+        const left: i64 = r.x + pad;
+        const top: i64 = r.y + pad;
+        const asc: i64 = c.font.ascentPx();
+        const text_col = c.theme.text_color;
+        var tb: [16]u8 = undefined;
+        const b_big = top + 2 * asc;
+        var x = left + drawScaledText(c, left, b_big, self.timeText(&tb), 2, text_col);
+        if (L.seconds) {
+            var sb: [8]u8 = undefined;
+            x += c.zx(4) + c.drawText(x + c.zx(4), b_big, std.fmt.bufPrint(&sb, ":{d:0>2}", .{self.sec}) catch "", dim(text_col, 0x99));
+        }
+        if (!L.h24) _ = c.drawText(x + c.zx(6), b_big, self.ampm(), c.theme.border_color);
+        if (L.date) self.drawDate(c, left, b_big + c.zx(ROW_GAP) + asc, true);
+    }
+
+    fn paintFlip(self: *const ClockWidget, c: Canvas, r: Rect) void {
+        const L = clock_layout;
+        const pad = c.zx(CARD_PAD);
+        const left: i64 = r.x + pad;
+        const top: i64 = r.y + pad;
+        const asc: i64 = c.font.ascentPx();
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const cell = c.textWidth("0");
+        const tile_w = 2 * cell + c.zx(12);
+        const tile_h = 2 * asc + c.zx(8);
+        const fill = (c.theme.hover_color & 0x00FFFFFF) | 0xC0000000;
+        const edge = dim(text_col, 0x22);
+        const split = dim(c.theme.bg_color, 0x99);
+        var digits: [4]u8 = undefined;
+        digits[0] = '0' + self.hour / 10;
+        digits[1] = '0' + self.hour % 10;
+        digits[2] = '0' + self.min / 10;
+        digits[3] = '0' + self.min % 10;
+        var x = left;
+        for (digits, 0..) |d, i| {
+            if (i == 2) {
+                // Colon: two dots between the hour and minute pairs.
+                const ccx: f64 = @floatFromInt(x + @divTrunc(c.zx(FLIP_COLON_W), 2));
+                const rad: f64 = @floatFromInt(@max(c.zx(2), 1));
+                c.fillCircleAA(ccx, @as(f64, @floatFromInt(top)) + @as(f64, @floatFromInt(tile_h)) * 0.35, rad, accent);
+                c.fillCircleAA(ccx, @as(f64, @floatFromInt(top)) + @as(f64, @floatFromInt(tile_h)) * 0.65, rad, accent);
+                x += c.zx(FLIP_COLON_W);
+            }
+            // 12-hour times have no leading zero: an empty first tile.
+            const blank = i == 0 and !L.h24 and d == '0';
+            c.card(.{ .x = @intCast(x), .y = @intCast(top), .w = @intCast(tile_w), .h = @intCast(tile_h) }, fill, edge);
+            if (!blank) {
+                const one = [1]u8{d};
+                _ = drawScaledText(c, x + @divTrunc(tile_w - 2 * cell, 2), top + c.zx(4) + 2 * asc, &one, 2, accent);
+            }
+            c.fillRect(x, top + @divTrunc(tile_h, 2), @intCast(tile_w), 1, split);
+            x += tile_w + (if (i == 1) 0 else c.zx(FLIP_TILE_GAP));
+        }
+        // Seconds (small, bottom) and AM/PM (top) beside the tiles.
+        const sx = x + c.zx(FLIP_SIDE_GAP);
+        if (!L.h24) _ = c.drawText(sx, top + asc + c.zx(2), self.ampm(), accent);
+        if (L.seconds) {
+            var sb: [4]u8 = undefined;
+            _ = c.drawText(sx, top + tile_h - c.zx(4), std.fmt.bufPrint(&sb, "{d:0>2}", .{self.sec}) catch "", dim(text_col, 0x99));
+        }
+        if (L.date) self.drawDate(c, left, top + tile_h + c.zx(ROW_GAP) + asc, true);
+    }
+
+    fn paintStacked(self: *const ClockWidget, c: Canvas, r: Rect) void {
+        const L = clock_layout;
+        const pad = c.zx(CARD_PAD);
+        const left: i64 = r.x + pad;
+        const top: i64 = r.y + pad;
+        const lh = lineH(c.font);
+        const asc: i64 = c.font.ascentPx();
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+        var hb: [4]u8 = undefined;
+        var mb: [4]u8 = undefined;
+        const hs = (if (L.h24) std.fmt.bufPrint(&hb, "{d:0>2}", .{self.hour}) else std.fmt.bufPrint(&hb, "{d}", .{self.hour})) catch "";
+        const ms = std.fmt.bufPrint(&mb, "{d:0>2}", .{self.min}) catch "";
+        const b1 = top + 3 * asc;
+        const b2 = b1 + 3 * asc + c.zx(STACK_GAP);
+        const w1 = drawScaledText(c, left, b1, hs, 3, accent);
+        const w2 = drawScaledText(c, left, b2, ms, 3, text_col);
+        // The side column: weekday, month/day, then seconds and AM/PM.
+        const col = left + @max(w1, w2) + c.zx(STACK_COL_GAP);
+        var y = top + asc + c.zx(2);
+        if (L.date) {
+            _ = c.drawText(col, y, WEEKDAYS_FULL[self.wday], accent);
+            y += lh + c.zx(ROW_GAP);
+            var db: [16]u8 = undefined;
+            _ = c.drawText(col, y, std.fmt.bufPrint(&db, "{s} {d}", .{ MONTHS_FULL[self.mon], self.mday }) catch "", dim(text_col, 0xBB));
+            y += lh + c.zx(ROW_GAP);
+        }
+        var sb: [4]u8 = undefined;
+        var eb: [12]u8 = undefined;
+        const extra = std.fmt.bufPrint(&eb, "{s}{s}{s}", .{
+            if (L.seconds) (std.fmt.bufPrint(&sb, ":{d:0>2}", .{self.sec}) catch "") else "",
+            if (L.seconds and !L.h24) " " else "",
+            if (!L.h24) self.ampm() else "",
+        }) catch "";
+        if (extra.len > 0) _ = c.drawText(col, y, extra, dim(text_col, 0x99));
     }
 
     pub fn click(self: *const ClockWidget) void {
@@ -1011,225 +1335,571 @@ pub const ClockWidget = struct {
 };
 
 // --- weather --------------------------------------------------------------
+//
+// The data side lives in weather.zig (Open-Meteo, location resolution,
+// refresh/retry schedule, the answer cache shared with the bar's weather
+// indicator); this is just the card. Same fetch plumbing as the
+// other cards: one curl child at a time over a Fetcher pipe in the host's
+// poll set.
 
-// Rich pipe format (not format=1): emoji, temp, humidity and wind as four
-// |-separated fields, so the card can show condition + details and not just
-// a number. The bar keeps format=1 (it only ever draws icon + temp).
-const WEATHER_URL = "https://wttr.in/?format=%c|%t|%h|%w";
-// Perihelion: wttr.in guesses the place from the internet address, which a VPN
-// or ISP routing can put in another city. A city or ZIP code on the first line
-// of ~/.config/perihelionbar/weather-location pins it. Sunrise, sunset and local time
-// (%S|%s|%T) come along so clear nights show a moon instead of the sun.
-// A perihelion-weather on PATH (Open-Meteo, more accurate) is used when present.
-const WEATHER_CMD =
-    "if command -v perihelion-weather >/dev/null 2>&1; then exec perihelion-weather; fi; " ++
-    "loc=$(head -n 1 \"$HOME/.config/perihelionbar/weather-location\" 2>/dev/null | tr -d '\\r' | sed 's/^ *//; s/ *$//; s/ /+/g'); " ++
-    "exec curl -s \"https://wttr.in/${loc}?format=%c|%t|%h|%w|%S|%s|%T\"";
+/// Text drawn at an integer multiple of the font size, baseline-aligned —
+/// the big temperature. Each glyph is rasterized uncached (glyphScaled), so
+/// keep it to a few characters.
+fn drawScaledText(c: Canvas, x: i64, baseline: i64, text: []const u8, scale: u32, color: u32) i64 {
+    if (scale <= 1) return c.drawText(x, baseline, text, color);
+    var pen = x;
+    var i: usize = 0;
+    while (nextUtf8Codepoint(text, &i)) |cp| {
+        const g = c.font.glyphScaled(cp, scale) catch continue;
+        defer c.font.gpa.free(g.pixels);
+        _ = drawBigIcon(c, pen, baseline - g.bitmap_top, &g, color);
+        pen += g.advance_x;
+    }
+    return pen - x;
+}
+
+fn drawRight(c: Canvas, right_x: i64, baseline: i64, text: []const u8, color: u32) void {
+    _ = c.drawText(right_x - c.textWidth(text), baseline, text, color);
+}
+
+fn drawCentered(c: Canvas, center_x: i64, baseline: i64, text: []const u8, color: u32) void {
+    _ = c.drawText(center_x - @divTrunc(c.textWidth(text), 2), baseline, text, color);
+}
+
+/// Non-blocking readiness check for one fetch pipe. The host calls every
+/// widget's onPipe when *any* pipe is ready, and Fetcher.onReadable does a
+/// blocking read — without this a slow curl would stall the whole loop.
+fn fdReadable(fd: posix.fd_t) bool {
+    if (fd < 0) return false;
+    var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+    const n = posix.poll(&pfd, 0) catch return false;
+    return n > 0 and (pfd[0].revents & (posix.POLL.IN | posix.POLL.HUP)) != 0;
+}
+
+const RAIN_BLUE: u32 = 0xFF4AA8FF;
+
+/// What a click on the Weather card does (shell.json weather_click).
+pub const WeatherClick = enum {
+    /// Open the full forecast for the place in the browser: weather.gov in
+    /// the US, Windy elsewhere.
+    forecast,
+    /// Switch °C/°F (saved as weather_units; the bar follows).
+    units,
+
+    pub fn parse(s: []const u8) ?WeatherClick {
+        if (std.ascii.eqlIgnoreCase(s, "forecast")) return .forecast;
+        if (std.ascii.eqlIgnoreCase(s, "units")) return .units;
+        return null;
+    }
+};
+/// Set by the host from shell.json before the cards start.
+pub var weather_click: WeatherClick = .forecast;
 
 pub const WeatherWidget = struct {
-    icon_buf: [8]u8 = undefined,
-    icon_len: usize = 0,
-    /// Shaped icon codepoint for the 2x raster (0 when unmapped).
-    icon_cp: u32 = 0,
-    /// Raw wttr.in emoji codepoint (0 when unmapped): disambiguates icons
-    /// shared by two conditions (showers vs sun-behind-cloud) for the fx
-    /// resolver and the sunny glow.
-    wttr_cp: u32 = 0,
-    /// Condition tint for the icon (0 = fall back to the text color).
-    icon_color: u32 = 0,
-    /// Last fetch start (mono ms): the tick repaints at 60ms for the
-    /// ambient animation, and past the 20-minute cadence it refetches.
-    last_fetch_ms: i64 = 0,
-    anim_frame: u32 = 0,
-    temp_buf: [24]u8 = undefined,
-    temp_len: usize = 0,
-    cond_buf: [32]u8 = undefined,
-    cond_len: usize = 0,
-    det_buf: [48]u8 = undefined,
-    det_len: usize = 0,
+    svc: wsvc.Service = .{},
     fetch: Fetcher = .{},
-    fetched: bool = false,
+    anim_frame: u32 = 0,
+    /// Set by a click (°C/°F toggle); the host persists the new unit to
+    /// shell.json and clears it.
+    units_changed: bool = false,
 
-    pub const interval_ms: i64 = 1200_000; // 20 min, matching the bar
+    /// curl through sh so PATH finds it. The URL arrives as $1 and is never
+    /// spliced into the script, so no character in it can break quoting.
+    /// --fail keeps HTTP error pages off stdout: an empty answer is a failed
+    /// attempt, which weather.zig's retry schedule handles.
+    const CURL_CMD =
+        "exec curl -sS --fail --compressed --connect-timeout 5 --max-time 10 " ++
+        "-A perihelion-shell -H 'Accept: application/json' --url \"$1\"";
 
-    pub fn refresh(self: *WeatherWidget) void {
-        if (self.fetch.busy()) return;
-        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", WEATHER_CMD, null };
-        self.fetch.start("/bin/sh", &argv);
+    pub fn configure(self: *WeatherWidget, cfg: wsvc.Config) void {
+        self.svc = wsvc.Service.init(cfg);
     }
 
-    /// Call when the fetch pipe is readable. Returns true when the fetch
-    /// finished (state may have changed).
+    fn fxKind(self: *const WeatherWidget) WeatherFx {
+        if (!self.svc.data.available) return .none;
+        return fxForKind(wsvc.kindFor(self.svc.data.w_code));
+    }
+
+    /// Moving conditions repaint at 60 ms; clear skies (a static glow),
+    /// unknown codes and the no-data states settle at 1 s, which is still
+    /// plenty for the fetch schedule.
+    pub fn animating(self: *const WeatherWidget) bool {
+        const k = self.fxKind();
+        return k != .none and k != .clear;
+    }
+
+    /// Starts the next request weather.zig asks for, if any is due.
+    pub fn pump(self: *WeatherWidget, now: i64) void {
+        if (self.fetch.busy()) return;
+        const url = self.svc.poll(now) orelse return;
+        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", CURL_CMD, "perihelion-weather", url.ptr, null };
+        self.fetch.start("/bin/sh", &argv);
+        // pipe()/fork() failed: count it as a failed attempt so the retry
+        // schedule runs instead of a request stuck "in flight" forever.
+        if (!self.fetch.busy()) self.svc.complete("", now);
+    }
+
+    /// Call when a fetch pipe may be readable. Returns true when a fetch
+    /// finished (the snapshot or status may have changed).
     pub fn onPipe(self: *WeatherWidget) bool {
-        var out: [160]u8 = undefined;
+        if (!self.fetch.busy() or !fdReadable(self.fetch.fd())) return false;
+        var out: [10240]u8 = undefined;
         const n = self.fetch.onReadable(&out);
-        // Perihelion: an empty answer at EOF must still close the fetch, or
-        // it stays busy and the card never fetches again.
         if (n == 0 and !self.fetch.eof) return false;
         self.fetch.closeFd();
-        const trimmed = std.mem.trim(u8, out[0..n], " \t\r\n");
-        // Perihelion: an empty answer (offline at login, a slow service)
-        // keeps the last reading on the card and retries in 30 s instead of
-        // waiting out the 20-minute cadence.
-        if (trimmed.len == 0) {
-            self.last_fetch_ms -= interval_ms - 30_000;
-            return self.fetched;
-        }
-        self.fetched = true;
-
-        // Four |-separated fields (see WEATHER_URL): emoji, temp, humidity,
-        // wind. Any field may be missing on a weird response — parse resolve
-        // what's there and leave the rest blank rather than failing.
-        var fields: [7][]const u8 = .{ "", "", "", "", "", "", "" };
-        var fi: usize = 0;
-        var it = std.mem.splitScalar(u8, trimmed, '|');
-        while (it.next()) |f| {
-            if (fi >= fields.len) break;
-            fields[fi] = std.mem.trim(u8, f, " \t");
-            fi += 1;
-        }
-
-        var i: usize = 0;
-        const cp = nextUtf8Codepoint(fields[0], &i) orelse 0;
-        self.wttr_cp = cp;
-        // Skip variation-selector/ZWJ codepoints attached to the same emoji
-        // cluster before the plain text begins — even when the lead emoji is
-        // unmapped, so a stray U+FE0F can't leak into the temp text (it has
-        // no glyph and would render as tofu).
-        while (i < fields[0].len) {
-            const save = i;
-            const nc = nextUtf8Codepoint(fields[0], &i) orelse break;
-            if (nc == 0xFE0F or nc == 0x200D) continue;
-            i = save;
-            break;
-        }
-        if (wttrIconFor(cp)) |ic| {
-            self.icon_len = utf8Encode(ic, &self.icon_buf);
-            self.icon_cp = ic;
-        } else {
-            self.icon_len = 0;
-            self.icon_cp = 0;
-        }
-        if (wttrColorFor(cp)) |cc| {
-            self.icon_color = cc;
-        } else {
-            self.icon_color = 0;
-        }
-        // Perihelion: after sunset (or before sunrise) a clear sky is a moon,
-        // not a glowing sun. "HH:MM" strings compare correctly as text.
-        if (cp == 0x2600 and fields[4].len >= 5 and fields[5].len >= 5 and fields[6].len >= 5) {
-            const now = fields[6][0..5];
-            if (std.mem.order(u8, now, fields[4][0..5]) == .lt or std.mem.order(u8, now, fields[5][0..5]) != .lt) {
-                self.wttr_cp = 0x1F319; // crescent moon: no sun glow, no sun fx
-                self.icon_cp = 0xE32B; // nf-weather-night_clear
-                self.icon_len = utf8Encode(0xE32B, &self.icon_buf);
-                self.icon_color = 0xFFB7BDF8; // Catppuccin lavender
-            }
-        }
-        const cl = wttrConditionFor(cp);
-        @memcpy(self.cond_buf[0..cl.len], cl);
-        self.cond_len = cl.len;
-        // wttr.in prefixes non-negative temperatures with "+" — noise next
-        // to an icon, so drop it (a leading "-" stays).
-        var tf = fields[1];
-        if (tf.len > 0 and tf[0] == '+') tf = tf[1..];
-        const t = tf[0..@min(tf.len, self.temp_buf.len)];
-        @memcpy(self.temp_buf[0..t.len], t);
-        self.temp_len = t.len;
-        // Details line: "69% · → 24km/h", either half optional.
-        self.det_len = 0;
-        if (fields[2].len > 0) {
-            const h = fields[2][0..@min(fields[2].len, self.det_buf.len)];
-            @memcpy(self.det_buf[0..h.len], h);
-            self.det_len = h.len;
-        }
-        if (fields[3].len > 0) {
-            const sep = " · ";
-            var w = fields[3];
-            if (w.len + sep.len + self.det_len <= self.det_buf.len) {
-                if (self.det_len > 0) {
-                    @memcpy(self.det_buf[self.det_len..][0..sep.len], sep);
-                    self.det_len += sep.len;
-                }
-            } else {
-                w = w[0..0];
-            }
-            const rest = @min(w.len, self.det_buf.len - self.det_len);
-            @memcpy(self.det_buf[self.det_len..][0..rest], w[0..rest]);
-            self.det_len += rest;
-        }
+        self.svc.complete(out[0..n], monoMs());
         return true;
+    }
+
+    /// A click opens the forecast page, or (weather_click "units") toggles
+    /// °C/°F, which the host saves as shell.json weather_units.
+    pub fn click(self: *WeatherWidget) void {
+        switch (weather_click) {
+            .units => {
+                self.svc.units = self.svc.units.toggled();
+                self.units_changed = true;
+            },
+            .forecast => {
+                var ub: [160]u8 = undefined;
+                const url = self.svc.forecastUrl(&ub) orelse return; // place not known yet
+                var cb: [200]u8 = undefined;
+                // The URL is digits, letters and URL punctuation only (no
+                // quote), so single quotes keep it one argument.
+                const cmd = std.fmt.bufPrintZ(&cb, "exec xdg-open '{s}'", .{url}) catch return;
+                spawnDetached(cmd);
+            },
+        }
     }
 
     pub fn paint(self: *const WeatherWidget, c: Canvas, r: Rect) void {
         const lh = lineH(c.font);
-        const b1 = r.y + c.zx(CARD_PAD) + c.font.ascentPx();
-        const b2 = b1 + lh + c.zx(ROW_GAP);
-        const b3 = b2 + lh + c.zx(ROW_GAP);
-        const padx: i64 = r.x + c.zx(CARD_PAD);
-        if (!self.fetched) {
-            _ = c.drawText(padx, b1, "…", c.theme.text_color);
+        const pad = c.zx(CARD_PAD);
+        const rg = c.zx(ROW_GAP);
+        const asc: i64 = c.font.ascentPx();
+        const left: i64 = r.x + pad;
+        const right: i64 = r.x + @as(i64, @intCast(r.w)) - pad;
+        const top: i64 = r.y + pad;
+        const text_col = c.theme.text_color;
+        // One baseline per header line; the big temperature spans 1-2.
+        const b1 = top + asc;
+        const b2 = b1 + lh + rg;
+        const b3 = b2 + lh + rg;
+        const b4 = b3 + lh + rg;
+        const d = &self.svc.data;
+        const units = self.svc.units;
+
+        if (!d.available) {
+            const msg: [2][]const u8 = switch (self.svc.status()) {
+                .locating => .{ "Weather", "Finding your location\u{2026}" },
+                .no_location => .{ "Weather", "Set a location in shell.json" },
+                .city_not_found => .{ "Weather", "City not found" },
+                .fetching, .waiting, .ready => if (d.loading)
+                    .{ "Weather", "Loading forecast\u{2026}" }
+                else
+                    .{ "Weather unavailable", "Retrying shortly" },
+            };
+            var fit_buf: [72]u8 = undefined;
+            _ = c.drawText(left, b1, msg[0], text_col);
+            _ = c.drawText(left, b2, fitText(c, msg[1], right - left, &fit_buf), dim(text_col, 0xAA));
             return;
         }
-        // Line 1: large tinted icon (left, spanning all three rows) plus
-        // bright temperature; condition and details stack right of the
-        // icon. Raster steps down (3x → 2x → 1x text) so an oversized
-        // glyph never breaks the card.
-        const icon_col = if (self.icon_color != 0) self.icon_color else c.theme.text_color;
-        const bg_rgb = c.theme.bg_color & 0x00FFFFFF;
-        const band3 = 3 * lh + 2 * c.zx(ROW_GAP);
-        var text_x = padx;
-        if (self.icon_cp != 0) {
-            // Ambient backdrop, under everything: the condition glyph blown
-            // up to a barely-there watermark on the card's right side (may
-            // bleed past the edges — the blit clips silently), so the card
-            // carries its weather even at a glance. Scales with the zoom.
-            const wm_scale: u32 = @max(2, @as(u32, @intFromFloat(@round(4.0 * c.zoom))));
-            if (c.font.glyphScaled(self.icon_cp, wm_scale)) |wm| {
-                defer c.font.gpa.free(wm.pixels);
-                const wx = r.x + @as(i64, @intCast(r.w)) - c.zx(CARD_PAD) - wm.advance_x;
-                const wy = r.y + c.zx(CARD_PAD) + @divTrunc(band3 - @as(i64, wm.height), 2);
-                _ = drawBigIcon(c, wx, wy, &wm, mixRgb(icon_col, bg_rgb, 0.88));
-            } else |_| {}
-            // Content icon steps down so an oversized glyph never breaks
-            // the card; the ladder starts at the zoomed size.
-            var si: u32 = @max(3, @as(u32, @intFromFloat(@round(3.0 * c.zoom))));
-            var drew_big = false;
-            while (si >= 2 and !drew_big) : (si -= 1) {
-                const big = c.font.glyphScaled(self.icon_cp, si) catch continue;
-                defer c.font.gpa.free(big.pixels);
-                if (@as(i64, big.height) > band3 + c.zx(ROW_GAP)) continue;
-                const iy = r.y + c.zx(CARD_PAD) + @divTrunc(band3 - @as(i64, big.height), 2);
-                // Clear skies get a warm halo behind the sun so fair
-                // weather reads sunny, not just empty.
-                if (self.wttr_cp == 0x2600) {
-                    const ir: i64 = @max(@as(i64, big.width), @as(i64, big.height));
-                    drawSunGlow(c, r, padx + @divTrunc(@as(i64, big.width), 2), iy + @divTrunc(@as(i64, big.height), 2), @divTrunc(ir, 2) + 10);
+
+        const kind = wsvc.kindFor(d.w_code);
+        const tint_raw = wsvc.tintFor(d.w_code, d.is_day);
+        const tint = if (tint_raw != 0) tint_raw else text_col;
+        const icon_cp = wsvc.iconFor(d.w_code, d.is_day);
+        const head_h = 4 * lh + 3 * rg;
+
+        // Condition icon: the left column, centered on the header. The
+        // raster steps down from 4x until it fits, then 1x text as a last
+        // resort, so an oversized glyph never breaks the card.
+        var text_x = left;
+        var si: u32 = @max(2, @as(u32, @intFromFloat(@round(4.0 * c.zoom))));
+        var drew = false;
+        while (si >= 2 and !drew) : (si -= 1) {
+            const big = c.font.glyphScaled(icon_cp, si) catch continue;
+            defer c.font.gpa.free(big.pixels);
+            if (@as(i64, big.height) > head_h) continue;
+            const iy = top + @divTrunc(head_h - @as(i64, big.height), 2);
+            // Clear days get the warm halo behind the sun.
+            if (kind == .clear and d.is_day) {
+                const ir: i64 = @max(@as(i64, big.width), @as(i64, big.height));
+                drawSunGlow(c, r, left + @divTrunc(@as(i64, big.width), 2), iy + @divTrunc(@as(i64, big.height), 2), @divTrunc(ir, 2) + c.zx(10));
+            }
+            text_x += drawBigIcon(c, left, iy, &big, tint) + c.zx(10);
+            drew = true;
+        }
+        if (!drew) {
+            var ib: [4]u8 = undefined;
+            const il = utf8Encode(icon_cp, &ib);
+            text_x += c.drawText(left, b2, ib[0..il], tint) + c.zx(8);
+        }
+
+        // Lines 1-2: big temperature; feels-like and humidity · wind
+        // right-aligned beside it when there's room.
+        var tbuf: [16]u8 = undefined;
+        const temp_s = std.fmt.bufPrint(&tbuf, "{d}\u{00B0}", .{wsvc.roundi(d.temp(units))}) catch "";
+        const temp_w = drawScaledText(c, text_x, b2, temp_s, 2, text_col);
+        var lb: [80]u8 = undefined;
+        var fb: [96]u8 = undefined;
+        const avail = right - (text_x + temp_w + c.zx(10));
+        if (avail > c.zx(30)) {
+            const feels = std.fmt.bufPrint(&lb, "Feels {d}\u{00B0}", .{wsvc.roundi(d.feelsLike(units))}) catch "";
+            drawRight(c, right, b1, fitText(c, feels, avail, &fb), dim(text_col, 0xCC));
+            var wb: [16]u8 = undefined;
+            const wind_s = d.windText(units, &wb);
+            const hw = std.fmt.bufPrint(&lb, "{d}% \u{00B7} {s}", .{ d.humidity, wind_s }) catch "";
+            drawRight(c, right, b2, fitText(c, hw, avail, &fb), dim(text_col, 0x99));
+        }
+
+        // Line 3: condition; chance of rain (or "offline" when the last
+        // refresh failed) on the right.
+        var right3_w: i64 = 0;
+        if (d.stale) {
+            const s = "offline";
+            right3_w = c.textWidth(s);
+            drawRight(c, right, b3, s, dim(text_col, 0x88));
+        } else if (d.precip_prob > 0) {
+            var pb: [16]u8 = undefined;
+            const p = std.fmt.bufPrint(&pb, "\u{E371} {d}%", .{d.precip_prob}) catch "";
+            right3_w = c.textWidth(p);
+            drawRight(c, right, b3, p, dim(RAIN_BLUE, 0xDD));
+        }
+        var cb: [64]u8 = undefined;
+        const cond = wsvc.conditionText(d.w_code);
+        _ = c.drawText(text_x, b3, fitText(c, cond, right - text_x - right3_w - c.zx(8), &cb), dim(text_col, 0xDD));
+
+        // Line 4: place; next sunset (day) or sunrise (night) on the right.
+        var sb: [24]u8 = undefined;
+        var sun_w: i64 = 0;
+        if (d.nextSunEvent()) |ev| {
+            const glyph: []const u8 = if (ev.sunrise) "\u{E34C}" else "\u{E34D}";
+            const s = std.fmt.bufPrint(&sb, "{s} {s}", .{ glyph, ev.at }) catch "";
+            sun_w = c.textWidth(s);
+            drawRight(c, right, b4, s, dim(text_col, 0x99));
+        }
+        var pl: [64]u8 = undefined;
+        const place: []const u8 = if (d.city.len > 0) d.city.slice() else "\u{2014}";
+        _ = c.drawText(text_x, b4, fitText(c, place, right - text_x - sun_w - c.zx(8), &pl), dim(text_col, 0xBB));
+
+        // Forecast strip under a hairline: day, icon (+ rain chance), high, low.
+        const head_bottom = top + head_h;
+        const strip_gap = c.zx(WX_STRIP_GAP);
+        const inner_w = right - left;
+        if (inner_w > 0) {
+            c.fillRect(left, head_bottom + @divTrunc(strip_gap, 2), @intCast(inner_w), 1, dim(text_col, 0x26));
+        }
+        const days = d.days();
+        if (days.len > 0 and inner_w > 0) {
+            const col_min = @max(c.zx(WX_COL_MIN), 1);
+            const fit_cols: usize = @intCast(std.math.clamp(@divTrunc(inner_w, col_min), 1, @as(i64, wsvc.FORECAST_DAYS)));
+            const ncols = @min(fit_cols, days.len);
+            const col_w = @divTrunc(inner_w, @as(i64, @intCast(ncols)));
+            const srg = c.zx(WX_STRIP_ROW_GAP);
+            const s1 = head_bottom + strip_gap + asc;
+            const s2 = s1 + lh + srg;
+            const s3 = s2 + lh + srg;
+            const s4 = s3 + lh + srg;
+            const gap = c.zx(4);
+            for (days[0..ncols], 0..) |*day, i| {
+                const cx = left + col_w * @as(i64, @intCast(i)) + @divTrunc(col_w, 2);
+                const label: []const u8 = if (i == 0) "Today" else day.day_name.slice();
+                drawCentered(c, cx, s1, label, if (i == 0) text_col else dim(text_col, 0xAA));
+
+                var ib: [4]u8 = undefined;
+                const il = utf8Encode(wsvc.iconFor(day.w_code, true), &ib);
+                const dtint_raw = wsvc.tintFor(day.w_code, true);
+                const dtint = if (dtint_raw != 0) dtint_raw else text_col;
+                if (day.precip_prob >= 10) {
+                    var pb: [8]u8 = undefined;
+                    const p = std.fmt.bufPrint(&pb, "{d}%", .{day.precip_prob}) catch "";
+                    const iw = c.textWidth(ib[0..il]);
+                    const x0 = cx - @divTrunc(iw + gap + c.textWidth(p), 2);
+                    _ = c.drawText(x0, s2, ib[0..il], dtint);
+                    _ = c.drawText(x0 + iw + gap, s2, p, dim(RAIN_BLUE, 0xCC));
+                } else {
+                    drawCentered(c, cx, s2, ib[0..il], dtint);
                 }
-                text_x += drawBigIcon(c, padx, iy, &big, icon_col) + 8;
-                drew_big = true;
-            }
-            if (!drew_big) {
-                text_x += c.drawText(padx, b1, self.icon_buf[0..self.icon_len], icon_col) + 8;
+
+                var hb: [12]u8 = undefined;
+                var lob: [12]u8 = undefined;
+                const hi = std.fmt.bufPrint(&hb, "{d}\u{00B0}", .{wsvc.roundi(day.max(units))}) catch "";
+                const lo = std.fmt.bufPrint(&lob, "{d}\u{00B0}", .{wsvc.roundi(day.min(units))}) catch "";
+                drawCentered(c, cx, s3, hi, text_col);
+                drawCentered(c, cx, s4, lo, dim(text_col, 0x88));
             }
         }
-        _ = c.drawText(text_x, b1, self.temp_buf[0..self.temp_len], c.theme.text_color);
-        // Line 2: condition label, dimmed. Line 3: humidity · wind, dimmer.
-        // Both align under the temperature, right of the icon.
-        _ = c.drawText(text_x, b2, self.cond_buf[0..self.cond_len], dim(c.theme.text_color, 0xCC));
-        _ = c.drawText(text_x, b3, self.det_buf[0..self.det_len], dim(c.theme.text_color, 0x99));
-        // Condition animation: particles over the card, driven by the
-        // union tick's 60ms anim_frame — ambient now, not hover-gated.
-        if (self.icon_cp != 0) {
-            const tint = if (self.icon_color != 0) self.icon_color else c.theme.text_color;
-            drawWeatherFxCard(c, r, self.wttr_cp, self.icon_cp, self.anim_frame, tint);
+
+        // Condition animation over the whole card, driven by the union
+        // tick's anim_frame.
+        const fx = fxForKind(kind);
+        if (fx != .none) drawWeatherFxCard(c, r, fx, self.anim_frame, tint);
+    }
+};
+
+// --- fastfetch ---------------------------------------------------------------
+//
+// The data side is fastfetch.zig (which binary, if any; native fallback;
+// logo). The card draws fastfetch's classic shape: logo on the left, then
+// "user@host", a rule, Key: value rows and a row of palette dots — all in
+// matugen colours (logo $1 = accent, $2 = second accent; keys in the accent).
+
+/// One fastfetch logo line with its $N colour markers; returns its width.
+fn drawLogoLine(c: Canvas, x: i64, baseline: i64, line: []const u8, palette: [4]u32) i64 {
+    var pen = x;
+    var color = palette[0]; // fastfetch starts in colour 1
+    var seg_start: usize = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        if (line[i] == '$' and i + 1 < line.len and std.ascii.isDigit(line[i + 1])) {
+            if (i > seg_start) pen += c.drawText(pen, baseline, line[seg_start..i], color);
+            const n: usize = line[i + 1] - '0'; // '0'..'9'
+            color = if (n >= 1 and n <= palette.len) palette[n - 1] else palette[palette.len - 1];
+            i += 2;
+            seg_start = i;
+            continue;
         }
+        i += 1;
+    }
+    if (line.len > seg_start) pen += c.drawText(pen, baseline, line[seg_start..], color);
+    return pen - x;
+}
+
+pub const FastfetchWidget = struct {
+    svc: ffsvc.Service = .{},
+    /// The fastfetch child, when a binary is in use (one run per refresh).
+    fetch: Fetcher = .{},
+
+    /// Due checks only; the card repaints when tick() reports a change.
+    pub const interval_ms: i64 = 1000;
+
+    pub fn configure(self: *FastfetchWidget, svc: *const ffsvc.Service) void {
+        self.svc = svc.*;
     }
 
-    pub fn click(self: *const WeatherWidget) void {
-        _ = self;
-        // Perihelion: the forecast page for the same place the card shows.
-        spawnDetached("if command -v perihelion-weather >/dev/null 2>&1; then exec perihelion-weather --open; fi; exec xdg-open https://wttr.in/");
+    pub fn tick(self: *FastfetchWidget) bool {
+        const now = monoMs();
+        const changed = self.svc.tick(now);
+        self.pump(now);
+        return changed;
+    }
+
+    fn pump(self: *FastfetchWidget, now: i64) void {
+        if (self.fetch.busy() or !self.svc.wantRun(now)) return;
+        // Config layout: $1 = the derived copy of the user's config;
+        // fields layout: $1 = the module list (see fastfetch.zig).
+        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", self.svc.runScript().ptr, self.svc.binZ().ptr, self.svc.runArgZ().ptr, null };
+        self.fetch.start("/bin/sh", &argv);
+        if (!self.fetch.busy()) _ = self.svc.runComplete("", now);
+    }
+
+    pub fn onPipe(self: *FastfetchWidget) bool {
+        if (!self.fetch.busy() or !fdReadable(self.fetch.fd())) return false;
+        var out: [10240]u8 = undefined;
+        const n = self.fetch.onReadable(&out);
+        if (n == 0 and !self.fetch.eof) return false;
+        self.fetch.closeFd();
+        return self.svc.runComplete(out[0..n], monoMs());
+    }
+
+    pub fn paint(self: *const FastfetchWidget, c: Canvas, r: Rect) void {
+        const s = &self.svc;
+        const lh = lineH(c.font);
+        const pad = c.zx(CARD_PAD);
+        const rg = c.zx(FF_ROW_GAP);
+        const asc: i64 = c.font.ascentPx();
+        const top: i64 = r.y + pad;
+        const left: i64 = r.x + pad;
+        const right: i64 = r.x + @as(i64, @intCast(r.w)) - pad;
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const accent2 = c.theme.accent2_color;
+
+        // Logo column.
+        var text_x = left;
+        if (!s.logo_off) {
+            if (s.logo_count > 0) {
+                const palette = [4]u32{ accent, accent2, c.theme.holiday_color, text_col };
+                var widest: i64 = 0;
+                var y = top + asc;
+                for (s.logoLines()) |*line| {
+                    widest = @max(widest, drawLogoLine(c, left, y, line.slice(), palette));
+                    y += lh;
+                }
+                text_x = left + widest + c.zx(FF_LOGO_GAP);
+            } else {
+                // No text logo: the distro's glyph, as large as fits.
+                const box = c.zx(FF_GLYPH_W);
+                const cp = ffsvc.distroGlyph(s.distro_id.slice());
+                var si: u32 = @max(2, @as(u32, @intFromFloat(@round(6.0 * c.zoom))));
+                while (si >= 2) : (si -= 1) {
+                    const big = c.font.glyphScaled(cp, si) catch continue;
+                    defer c.font.gpa.free(big.pixels);
+                    if (@as(i64, big.width) > box or @as(i64, big.height) > box) continue;
+                    const gx = left + @divTrunc(box - @as(i64, big.width), 2) - big.bitmap_left;
+                    _ = drawBigIcon(c, gx, top + @divTrunc(box - @as(i64, big.height), 2), &big, accent);
+                    break;
+                }
+                text_x = left + box + c.zx(FF_LOGO_GAP);
+            }
+        }
+        const avail = right - text_x;
+        if (avail <= 0) return;
+
+        // "user@host", with the rule fastfetch draws under it.
+        var b = top + asc;
+        const title = s.title.slice();
+        var tw: i64 = 0;
+        if (std.mem.indexOfScalar(u8, title, '@')) |at| {
+            tw += c.drawText(text_x, b, title[0..at], accent);
+            tw += c.drawText(text_x + tw, b, "@", text_col);
+            tw += c.drawText(text_x + tw, b, title[at + 1 ..], accent);
+        } else {
+            tw = c.drawText(text_x, b, title, accent);
+        }
+        b += lh + rg;
+        c.fillRect(text_x, b - asc + @divTrunc(lh, 2), @intCast(@max(@min(tw, avail), 1)), 1, dim(text_col, 0x55));
+        b += lh + rg;
+
+        var fit_buf: [140]u8 = undefined;
+        if (s.layout == .config) {
+            // The user's fastfetch config: its sections as headers with a
+            // hairline (the terminal's boxes), its keys (icon + words, no
+            // tree prefix) aligned in one column, "break" as a half gap.
+            var label_w: i64 = 0;
+            for (s.cardRows()) |*row| {
+                if (row.kind == .row) label_w = @max(label_w, c.textWidth(row.label.slice()));
+            }
+            const val_x = text_x + label_w + c.zx(FF_LABEL_GAP);
+            for (s.cardRows()) |*row| {
+                switch (row.kind) {
+                    .spacer => b += @divTrunc(lh, 2),
+                    .header => {
+                        const hw = c.drawText(text_x, b, fitText(c, row.label.slice(), avail, &fit_buf), accent2);
+                        const lx = text_x + hw + c.zx(8);
+                        if (right - lx > c.zx(8)) {
+                            c.fillRect(lx, b - @divTrunc(asc, 3), @intCast(right - lx), 1, dim(accent2, 0x66));
+                        }
+                        b += lh + rg;
+                    },
+                    .row => {
+                        _ = c.drawText(text_x, b, row.label.slice(), accent);
+                        if (row.value.len > 0) {
+                            _ = c.drawText(val_x, b, fitText(c, row.value.slice(), right - val_x, &fit_buf), text_col);
+                        } else {
+                            _ = c.drawText(val_x, b, "\u{2014}", dim(text_col, 0x66));
+                        }
+                        b += lh + rg;
+                    },
+                }
+            }
+        } else {
+            // Fields layout: fastfetch's default keys, aligned.
+            var label_w: i64 = 0;
+            for (s.shownFields()) |f| label_w = @max(label_w, c.textWidth(f.label()));
+            const val_x = text_x + label_w + c.zx(FF_LABEL_GAP);
+            for (s.shownFields()) |f| {
+                _ = c.drawText(text_x, b, f.label(), accent);
+                const v = s.value(f);
+                if (v.len > 0) {
+                    _ = c.drawText(val_x, b, fitText(c, v, right - val_x, &fit_buf), text_col);
+                } else {
+                    _ = c.drawText(val_x, b, "\u{2014}", dim(text_col, 0x66));
+                }
+                b += lh + rg;
+            }
+        }
+
+        // Palette dots, where the config ends on its colours module
+        // (Perihelion's does); always in the fields layout.
+        if (s.palette) {
+            const dots = [_]u32{ accent, accent2, c.theme.holiday_color, c.theme.hover_color, dim(text_col, 0x99), text_col };
+            var dx = text_x;
+            for (dots) |col| {
+                dx += c.drawText(dx, b, "\u{25CF}", col) + c.zx(6);
+            }
+        }
+    }
+};
+
+// --- processes -----------------------------------------------------------------
+//
+// The data side is procs.zig (one /proc pass per interval, CPU from tick
+// deltas, resident memory). Read-only: the card lists, it never acts on a
+// process. A click switches between CPU and memory order (saved as
+// processes_sort).
+
+pub const ProcessesWidget = struct {
+    svc: psvc.Service = .{},
+    /// Set by a click; the host saves processes_sort and clears it.
+    sort_changed: bool = false,
+
+    /// Due checks only; procs.zig samples on its own interval and the
+    /// card repaints when tick() reports a change.
+    pub const interval_ms: i64 = 1000;
+
+    pub fn configure(self: *ProcessesWidget, cfg: psvc.Config) void {
+        self.svc = psvc.Service.init(cfg);
+    }
+
+    pub fn tick(self: *ProcessesWidget) bool {
+        return self.svc.tick(monoMs());
+    }
+
+    pub fn click(self: *ProcessesWidget) void {
+        self.svc.toggleSort();
+        self.sort_changed = true;
+        _ = self.svc.tick(monoMs()); // re-rank now (CPU needs its next sample)
+    }
+
+    pub fn paint(self: *const ProcessesWidget, c: Canvas, r: Rect) void {
+        const s = &self.svc;
+        const lh = lineH(c.font);
+        const pad = c.zx(CARD_PAD);
+        const asc: i64 = c.font.ascentPx();
+        const left: i64 = r.x + pad;
+        const right: i64 = r.x + @as(i64, @intCast(r.w)) - pad;
+        const top: i64 = r.y + pad;
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+
+        var b = top + asc;
+        _ = c.drawText(left, b, "Processes", text_col);
+        drawRight(c, right, b, if (s.sort == .cpu) "by CPU" else "by memory", accent);
+        b += lh + c.zx(PROC_HEAD_GAP);
+        if (!s.ready()) {
+            _ = c.drawText(left, b, "Measuring\u{2026}", dim(text_col, 0x88));
+            return;
+        }
+        const row_pitch = lh + c.zx(PROC_ROW_GAP) + c.zx(PROC_BAR_H) + c.zx(2);
+        const track = dim(text_col, 0x18);
+        const fill = dim(accent, 0xCC);
+        var vb: [24]u8 = undefined;
+        var nb: [72]u8 = undefined;
+        var fit_buf: [80]u8 = undefined;
+        for (s.shown()) |*p| {
+            const v = if (s.sort == .cpu) psvc.fmtCpu(&vb, p.cpu_x10) else psvc.fmtMem(&vb, p.rss);
+            const vw = c.textWidth(v);
+            drawRight(c, right, b, v, dim(text_col, 0xCC));
+            const name = if (p.count > 1)
+                (std.fmt.bufPrint(&nb, "{s} \u{00D7}{d}", .{ p.name.slice(), p.count }) catch p.name.slice())
+            else
+                p.name.slice();
+            _ = c.drawText(left, b, fitText(c, name, right - left - vw - c.zx(10), &fit_buf), text_col);
+            // Thin bar: share of one CPU, or of total memory.
+            const frac: f64 = if (s.sort == .cpu)
+                @min(@as(f64, @floatFromInt(p.cpu_x10)) / 1000.0, 1.0)
+            else if (s.mem_total > 0)
+                @min(@as(f64, @floatFromInt(p.rss)) / @as(f64, @floatFromInt(s.mem_total)), 1.0)
+            else
+                0.0;
+            const by = b + c.zx(PROC_ROW_GAP) + @max(lh - asc, 0) - c.zx(1);
+            const bw = right - left;
+            c.fillRect(left, by, @intCast(@max(bw, 0)), @intCast(c.zx(PROC_BAR_H)), track);
+            const fw: i64 = @intFromFloat(@round(@as(f64, @floatFromInt(bw)) * frac));
+            if (fw > 0) c.fillRect(left, by, @intCast(fw), @intCast(c.zx(PROC_BAR_H)), fill);
+            b += row_pitch;
+        }
     }
 };
 
@@ -1734,6 +2404,11 @@ fn readFileInto(path: [:0]const u8, buf: []u8) usize {
     return total;
 }
 
+/// CPU / memory / GPU card. Usage comes from /proc; temperatures from the
+/// shared temps.zig service (hwmon, thermal zones, nvidia-smi for the
+/// proprietary NVIDIA driver). The third row is the selected GPU; on a
+/// machine with no GPU sensor (or system_gpu "none") it falls back to the
+/// load average instead.
 pub const SystemWidget = struct {
     cpu_pct: u8 = 0,
     mem_pct: u8 = 0,
@@ -1742,8 +2417,20 @@ pub const SystemWidget = struct {
     prev_total: u64 = 0,
     prev_idle: u64 = 0,
     have_prev: bool = false,
+    temps: tsvc.Service = .{},
+    units: tsvc.Units = .celsius,
+    /// The nvidia-smi child (only ever started for a proprietary-driver
+    /// NVIDIA GPU that is selected and awake).
+    fetch: Fetcher = .{},
+    /// Set by a click that switched GPUs; the host saves system_gpu.
+    gpu_changed: bool = false,
 
     pub const interval_ms: i64 = 2000;
+
+    pub fn configure(self: *SystemWidget, cfg: tsvc.Config, units: tsvc.Units) void {
+        self.temps = tsvc.Service.init(cfg);
+        self.units = units;
+    }
 
     fn updateCpu(self: *SystemWidget) void {
         var buf: [1024]u8 = undefined;
@@ -1815,10 +2502,42 @@ pub const SystemWidget = struct {
         self.load_len = s.len;
     }
 
-    pub fn refresh(self: *SystemWidget) void {
+    /// Samples everything that's due. True when the card would look
+    /// different, so the host only repaints on a real change.
+    pub fn refresh(self: *SystemWidget) bool {
+        const old_cpu = self.cpu_pct;
+        const old_mem = self.mem_pct;
+        var old_load: [12]u8 = undefined;
+        const old_load_len = self.load_len;
+        @memcpy(old_load[0..old_load_len], self.load_buf[0..old_load_len]);
         self.updateCpu();
         self.updateMem();
-        self.updateLoad();
+        const now = monoMs();
+        var changed = self.temps.tick(now);
+        // The load row only shows when there is no GPU row.
+        if (self.temps.selectedGpu() == null) self.updateLoad();
+        self.pumpSmi(now);
+        changed = changed or old_cpu != self.cpu_pct or old_mem != self.mem_pct or
+            !std.mem.eql(u8, old_load[0..old_load_len], self.load_buf[0..self.load_len]);
+        return changed;
+    }
+
+    fn pumpSmi(self: *SystemWidget, now: i64) void {
+        if (self.fetch.busy() or !self.temps.wantSmi(now)) return;
+        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", tsvc.SMI_CMD, null };
+        self.fetch.start("/bin/sh", &argv);
+        if (!self.fetch.busy()) _ = self.temps.smiComplete("", now);
+    }
+
+    /// The nvidia-smi pipe may be readable. True when its answer changed
+    /// what the card shows.
+    pub fn onPipe(self: *SystemWidget) bool {
+        if (!self.fetch.busy() or !fdReadable(self.fetch.fd())) return false;
+        var out: [2048]u8 = undefined;
+        const n = self.fetch.onReadable(&out);
+        if (n == 0 and !self.fetch.eof) return false;
+        self.fetch.closeFd();
+        return self.temps.smiComplete(out[0..n], monoMs());
     }
 
     fn drawBar(c: Canvas, x: i64, y: i64, w: i64, h: i64, pct: u8) void {
@@ -1828,6 +2547,7 @@ pub const SystemWidget = struct {
     }
 
     pub fn paint(self: *const SystemWidget, c: Canvas, r: Rect) void {
+        if (system_style == .rings) return self.paintRings(c, r);
         const pad = c.zx(CARD_PAD);
         const rg = c.zx(ROW_GAP);
         const barh = c.zx(BAR_H);
@@ -1835,28 +2555,140 @@ pub const SystemWidget = struct {
         const gap6 = c.zx(6);
         const padx: i64 = r.x + pad;
         const inner_w: i64 = @as(i64, @intCast(r.w)) - 2 * pad;
+        const right: i64 = padx + inner_w;
         const ascent: i64 = c.font.ascentPx();
-        const b1 = r.y + pad + ascent;
-        _ = c.drawText(padx, b1, "CPU", c.theme.text_color);
+        const text_col = c.theme.text_color;
+        const value_col = dim(text_col, 0xCC);
+        const gpu = self.temps.selectedGpu();
+        // With several GPUs the row names the vendor, so a click that
+        // cycles them visibly changes something.
+        const gpu_label: []const u8 = if (gpu) |g| (if (self.temps.gpuList().len > 1) g.vendor.label() else "GPU") else "LOAD";
+        const label_w = @max(c.textWidth("CPU"), @max(c.textWidth("MEM"), c.textWidth(gpu_label)));
+        const val_x = padx + label_w + gap6;
         var pct_buf: [16]u8 = undefined;
-        const pct_str = std.fmt.bufPrint(&pct_buf, " {d}%", .{self.cpu_pct}) catch "";
-        const cpu_x = padx + c.textWidth("CPU") + gap6;
-        _ = c.drawText(cpu_x, b1, pct_str, dim(c.theme.text_color, 0xCC));
+        var temp_buf: [16]u8 = undefined;
+
+        // CPU: usage, temperature on the right (warm/hot tint past 70/85 °C).
+        const b1 = r.y + pad + ascent;
+        _ = c.drawText(padx, b1, "CPU", text_col);
+        _ = c.drawText(val_x, b1, std.fmt.bufPrint(&pct_buf, "{d}%", .{self.cpu_pct}) catch "", value_col);
+        if (self.temps.cpuMc()) |mc| {
+            const tint = tsvc.heatTint(mc);
+            drawRight(c, right, b1, tsvc.fmtTemp(mc, self.units, &temp_buf), if (tint != 0) tint else value_col);
+        }
         drawBar(c, padx, b1 + gap4, inner_w, barh, self.cpu_pct);
 
+        // MEM.
         const b2 = b1 + barh + rg + gap4 + lineH(c.font);
-        _ = c.drawText(padx, b2, "MEM", c.theme.text_color);
-        const mem_str = std.fmt.bufPrint(&pct_buf, " {d}%", .{self.mem_pct}) catch "";
-        _ = c.drawText(cpu_x, b2, mem_str, dim(c.theme.text_color, 0xCC));
+        _ = c.drawText(padx, b2, "MEM", text_col);
+        _ = c.drawText(val_x, b2, std.fmt.bufPrint(&pct_buf, "{d}%", .{self.mem_pct}) catch "", value_col);
         drawBar(c, padx, b2 + gap4, inner_w, barh, self.mem_pct);
 
+        // GPU (busy % when the driver reports it), or the load average.
         const b3 = b2 + barh + rg + gap4 + lineH(c.font);
-        _ = c.drawText(padx, b3, "LOAD", c.theme.text_color);
-        _ = c.drawText(padx + c.textWidth("LOAD") + gap6, b3, self.load_buf[0..self.load_len], dim(c.theme.text_color, 0xCC));
+        _ = c.drawText(padx, b3, gpu_label, text_col);
+        if (gpu) |g| {
+            if (g.busy_pct) |bp| {
+                _ = c.drawText(val_x, b3, std.fmt.bufPrint(&pct_buf, "{d}%", .{bp}) catch "", value_col);
+            }
+            if (g.asleep) {
+                // Runtime-suspended dGPU: not read, so it stays asleep.
+                drawRight(c, right, b3, "asleep", dim(text_col, 0x88));
+            } else {
+                const tint = tsvc.heatTint(g.temp_mc);
+                drawRight(c, right, b3, tsvc.fmtTemp(g.temp_mc, self.units, &temp_buf), if (tint != 0) tint else value_col);
+            }
+            if (g.busy_pct) |bp| drawBar(c, padx, b3 + gap4, inner_w, barh, bp);
+        } else {
+            _ = c.drawText(val_x, b3, self.load_buf[0..self.load_len], value_col);
+        }
     }
 
-    pub fn click(self: *const SystemWidget) void {
-        _ = self;
+    /// "62°" from a temperature (the ring's centre has no room for the unit).
+    fn shortTemp(mc: i32, units: tsvc.Units, out: []u8) []const u8 {
+        const t = tsvc.fmtTemp(mc, units, out);
+        if (t.len > 0 and (t[t.len - 1] == 'C' or t[t.len - 1] == 'F')) return t[0 .. t.len - 1];
+        return t;
+    }
+
+    /// Ring style: CPU, memory, GPU (busy %, else its temperature) and CPU
+    /// temperature as gauges. Same data as the bars; accent when normal,
+    /// amber past the warning mark, the theme's error colour past the
+    /// critical one (CPU/GPU 60/80 %, memory 75/90 %, temperatures 70/85 °C).
+    fn paintRings(self: *const SystemWidget, c: Canvas, r: Rect) void {
+        const pad = c.zx(CARD_PAD);
+        const left: i64 = r.x + pad;
+        const top: i64 = r.y + pad;
+        const inner_w: i64 = @as(i64, @intCast(r.w)) - 2 * pad;
+        const asc: i64 = c.font.ascentPx();
+        const desc: i64 = c.font.descentPx();
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const warn: u32 = 0xFFFFB340;
+        const crit = c.theme.holiday_color;
+        const idle = dim(text_col, 0x66);
+
+        const Gauge = struct { label: []const u8, frac: f64, text: []const u8, color: u32 };
+        const level = struct {
+            fn of(v: u32, warn_at: u32, crit_at: u32, a: u32, w: u32, cr: u32) u32 {
+                if (v >= crit_at) return cr;
+                if (v >= warn_at) return w;
+                return a;
+            }
+        }.of;
+        var bufs: [4][16]u8 = undefined;
+        var gauges: [4]Gauge = undefined;
+        var n: usize = 0;
+
+        gauges[n] = .{ .label = "CPU", .frac = @as(f64, @floatFromInt(self.cpu_pct)) / 100.0, .text = std.fmt.bufPrint(&bufs[n], "{d}%", .{self.cpu_pct}) catch "", .color = level(self.cpu_pct, 60, 80, accent, warn, crit) };
+        n += 1;
+        gauges[n] = .{ .label = "MEM", .frac = @as(f64, @floatFromInt(self.mem_pct)) / 100.0, .text = std.fmt.bufPrint(&bufs[n], "{d}%", .{self.mem_pct}) catch "", .color = level(self.mem_pct, 75, 90, accent, warn, crit) };
+        n += 1;
+        if (self.temps.selectedGpu()) |g| {
+            if (g.asleep) {
+                gauges[n] = .{ .label = "GPU", .frac = 0, .text = "zz", .color = idle };
+            } else if (g.busy_pct) |bp| {
+                gauges[n] = .{ .label = "GPU", .frac = @as(f64, @floatFromInt(bp)) / 100.0, .text = std.fmt.bufPrint(&bufs[n], "{d}%", .{bp}) catch "", .color = level(bp, 60, 80, accent, warn, crit) };
+            } else if (g.temp_mc) |mc| {
+                const tint = tsvc.heatTint(mc);
+                gauges[n] = .{ .label = "GPU", .frac = @as(f64, @floatFromInt(mc)) / 100_000.0, .text = shortTemp(mc, self.units, &bufs[n]), .color = if (tint != 0) tint else accent };
+            } else {
+                gauges[n] = .{ .label = "GPU", .frac = 0, .text = "\u{2014}", .color = idle };
+            }
+            n += 1;
+        }
+        if (self.temps.cpuMc()) |mc| {
+            const tint = tsvc.heatTint(mc);
+            gauges[n] = .{ .label = "TEMP", .frac = @as(f64, @floatFromInt(mc)) / 100_000.0, .text = shortTemp(mc, self.units, &bufs[n]), .color = if (tint != 0) tint else accent };
+        } else {
+            gauges[n] = .{ .label = "TEMP", .frac = 0, .text = "\u{2014}", .color = idle };
+        }
+        n += 1;
+
+        const slot = @divTrunc(inner_w, @as(i64, @intCast(n)));
+        const d = @max(@min(c.zx(RING_D), slot - c.zx(6)), c.zx(16));
+        const ro: f64 = @as(f64, @floatFromInt(d)) / 2.0;
+        const ri: f64 = ro - @as(f64, @floatFromInt(c.zx(RING_W)));
+        const track = dim(text_col, 0x26);
+        for (gauges[0..n], 0..) |*gg, i| {
+            const cx_i = left + slot * @as(i64, @intCast(i)) + @divTrunc(slot, 2);
+            const cx: f64 = @floatFromInt(cx_i);
+            const cy: f64 = @as(f64, @floatFromInt(top)) + ro;
+            c.fillRingAA(cx, cy, ri, ro, track);
+            c.fillArcAA(cx, cy, ri, ro, gg.frac, gg.color);
+            const tw = c.textWidth(gg.text);
+            _ = c.drawText(cx_i - @divTrunc(tw, 2), top + @divTrunc(d, 2) + @divTrunc(asc - desc, 2), gg.text, text_col);
+            const lw = c.textWidth(gg.label);
+            _ = c.drawText(cx_i - @divTrunc(lw, 2), top + d + c.zx(RING_LABEL_GAP) + asc, gg.label, dim(text_col, 0xAA));
+        }
+    }
+
+    /// Click: next GPU when there are several (saved as system_gpu).
+    pub fn click(self: *SystemWidget) void {
+        if (self.temps.cycleGpu()) {
+            self.gpu_changed = true;
+            _ = self.temps.tick(monoMs()); // show the new GPU's reading now
+        }
     }
 };
 
@@ -3007,23 +3839,58 @@ pub const WatchWidget = struct {
     }
 };
 
-// --- sticky notes (KDE-Plasma style) --------------------------------------
+// --- notes (sticky notes with tabs) -------------------------------------------
 
-/// A note card holds plain text you type straight into the desktop widget.
-/// The slot persists to ~/.config/perihelionbar/notes/note1.txt and reloads at
-/// startup, so a note lives until you erase its text — empty text is an
-/// empty note, never a missing one. There are no add/delete buttons: the
-/// note is an ordinary config widget, and "deleting" is clearing the buffer.
-///
-/// Editing is whole-process single-slot: the host sets `edit_index` when a
-/// note card is clicked ([on_demand] keyboard interactivity grants focus),
-/// routes compositor key events here through xkb (UTF-32 decode), and
-/// releases the slot on Esc, focus-leave, or a click elsewhere. Edits save
-/// atomically (tmp + rename) on release and autosave after a quiet typing
-/// pause, so a crash can't eat recent keystrokes.
-///
-/// Text is capped at NOTE_MAX *bytes* so the fixed wrap-line array always
-/// fits the worst case (every byte a newline ⇒ text.len + 1 lines).
+// The Notes card: plain-text notes you type straight into the desktop card.
+// Each note is one file, ~/.config/perihelionbar/notes/noteN.txt (N = 1-9),
+// so the original single note1.txt is simply note 1. A header holds one tab
+// per note, + for a new note and × to delete the open one (a second click
+// confirms; the deleted text is kept in notes/.last-deleted.txt).
+//
+// The folder is watched with inotify: notes changed by another editor or a
+// sync tool reload on their own, and new noteN.txt files appear as tabs. An
+// edit in progress always wins over the file — its next save replaces it.
+//
+// While not editing, "- [ ] " / "- [x] " lines draw as checkboxes (click
+// the box to tick it), "- " lines as bullets and "# " lines as headings.
+// The decoration takes exactly the width of the characters it replaces, so
+// editing (which shows the raw text) never reflows the note.
+//
+// Editing is whole-process single-slot: the host sets `edit_index` when a
+// click leaves the card `editing` ([on_demand] keyboard interactivity grants
+// focus), routes compositor key events here through xkb (UTF-32 decode), and
+// releases the slot on Esc, focus-leave, or a click elsewhere. Edits save
+// atomically (tmp + rename) on release and after a quiet typing pause, so a
+// crash can't eat recent keystrokes.
+//
+// Text is capped at NOTE_MAX *bytes* so the fixed wrap-line array always
+// fits the worst case (every byte a newline ⇒ text.len + 1 lines). A file
+// bigger than that is shown cut off and never written back (read-only), so
+// the card can't truncate a long note someone wrote elsewhere.
+
+/// Notes options (shell.json notes_*), set by the host before cards are
+/// measured: the header and the base line count change the card's size.
+pub const NotesLayout = struct {
+    /// Header with note tabs, + and ×. Off = one plain note (the open one).
+    tabs: bool = true,
+    /// Checkboxes, bullets and headings while not editing.
+    checklists: bool = true,
+    /// Text lines the card shows at its base size (3-30).
+    lines: i64 = 6,
+};
+pub var notes_layout: NotesLayout = .{};
+
+const NOTE_HEADER_GAP: i64 = 8;
+const NOTE_TAB_PADX: i64 = 6;
+const NOTE_TAB_GAP: i64 = 4;
+const NOTE_DELETE_ARM_MS: i64 = 3000;
+const NOTE_AUTOSAVE_MS: i64 = 1500;
+
+/// Height of the header strip above the text (0 with notes_tabs off).
+pub fn noteHeaderH(lh: i64) i64 {
+    return if (notes_layout.tabs) lh + NOTE_HEADER_GAP else 0;
+}
+
 /// Scale a layout constant by a zoom factor (corner-resize content zoom).
 /// Canvas.zx is the method form for paints; this covers layout/hit-test
 /// helpers without a canvas in scope.
@@ -3031,23 +3898,30 @@ fn zf(base: i64, zoom: f32) i64 {
     return @intFromFloat(@round(@as(f32, @floatFromInt(base)) * zoom));
 }
 
-/// Visible note lines for a card height: the base 6 at base size, growing
-/// with the rect (corner resize reflows the note instead of just padding
-/// it). Min 1 so a clamped card still edits line one.
+/// Visible text lines for a card height, below the header: notes_lines at
+/// base size, growing with the rect (corner resize reflows the note instead
+/// of just padding it). Min 1 so a clamped card still edits line one.
 pub fn noteVisLines(card_h: i64, lh: i64) usize {
     if (lh <= 0) return 1;
-    const v = @divTrunc(card_h - 2 * CARD_PAD, lh);
+    const v = @divTrunc(card_h - 2 * CARD_PAD - noteHeaderH(lh), lh);
     return @max(1, @as(usize, @intCast(@max(v, 0))));
 }
 
 test "notes: visible lines follow card height" {
     const t = std.testing;
-    // Base card (2*14 pads + 6 lines at lh 20) shows 6; grown cards show
-    // more; degenerate inputs still edit line one.
+    const saved = notes_layout;
+    defer notes_layout = saved;
+    // No header: base card (2*14 pads + 6 lines at lh 20) shows 6; grown
+    // cards show more; degenerate inputs still edit line one.
+    notes_layout.tabs = false;
     try t.expectEqual(@as(usize, 6), noteVisLines(2 * CARD_PAD + 6 * 20, 20));
     try t.expectEqual(@as(usize, 12), noteVisLines(2 * CARD_PAD + 12 * 20, 20));
     try t.expectEqual(@as(usize, 1), noteVisLines(30, 20));
     try t.expectEqual(@as(usize, 1), noteVisLines(148, 0));
+    // With the header, its strip comes off the top first.
+    notes_layout.tabs = true;
+    try t.expectEqual(@as(usize, 6), noteVisLines(2 * CARD_PAD + noteHeaderH(20) + 6 * 20, 20));
+    try t.expectEqual(@as(usize, 4), noteVisLines(2 * CARD_PAD + 6 * 20, 20));
 }
 
 test "zoom scales layout constants" {
@@ -3059,32 +3933,251 @@ test "zoom scales layout constants" {
     try t.expectEqual(@as(i64, 0), zf(0, 3.0));
 }
 
+/// Where the header's controls sit, relative to the card's inner left edge.
+/// Paint and click both use it, so they can't disagree. Tabs sit on the
+/// left, + and × on the right; when the tabs don't fit, a compact
+/// "‹ 3/9 ›" pager takes their place.
+pub const NoteHeader = struct {
+    btn_w: i64,
+    /// Tabs mode: tab i starts at i * (btn_w + NOTE_TAB_GAP).
+    tabs: bool = true,
+    /// Pager mode: ‹ and › around the "n/N" label.
+    prev_x: i64 = 0,
+    label_x: i64 = 0,
+    label_w: i64 = 0,
+    next_x: i64 = 0,
+    /// null = not shown.
+    plus_x: ?i64 = null,
+    del_x: ?i64 = null,
+};
+
+pub const NoteHit = union(enum) { none, tab: usize, prev, next, plus, delete };
+
+fn noteHeaderLayout(measure: anytype, inner_w: i64, page_count: usize, can_add: bool, can_delete: bool) NoteHeader {
+    const btn_w = measure.advance('0') + 2 * NOTE_TAB_PADX;
+    const step = btn_w + NOTE_TAB_GAP;
+    var h = NoteHeader{ .btn_w = btn_w };
+    var right = inner_w;
+    if (can_delete) {
+        h.del_x = right - btn_w;
+        right -= step;
+    }
+    if (can_add) {
+        h.plus_x = right - btn_w;
+        right -= step;
+    }
+    const n: i64 = @intCast(page_count);
+    if (n * step - NOTE_TAB_GAP > right) {
+        h.tabs = false;
+        h.prev_x = 0;
+        h.label_x = btn_w + NOTE_TAB_GAP;
+        h.label_w = advSlice(measure, "9/9");
+        h.next_x = h.label_x + h.label_w + NOTE_TAB_GAP;
+    }
+    return h;
+}
+
+fn inSpan(x: i64, at: i64, w: i64) bool {
+    return x >= at and x < at + w;
+}
+
+fn noteHeaderHit(h: NoteHeader, page_count: usize, rel_x: i64) NoteHit {
+    if (h.del_x) |dx| {
+        if (inSpan(rel_x, dx, h.btn_w)) return .delete;
+    }
+    if (h.plus_x) |px| {
+        if (inSpan(rel_x, px, h.btn_w)) return .plus;
+    }
+    if (page_count <= 1 or rel_x < 0) return .none;
+    if (h.tabs) {
+        const step = h.btn_w + NOTE_TAB_GAP;
+        const i: usize = @intCast(@divTrunc(rel_x, step));
+        if (i < page_count and inSpan(rel_x, @as(i64, @intCast(i)) * step, h.btn_w)) return .{ .tab = i };
+        return .none;
+    }
+    if (inSpan(rel_x, h.prev_x, h.btn_w)) return .prev;
+    if (inSpan(rel_x, h.next_x, h.btn_w)) return .next;
+    return .none;
+}
+
+test "notes: header layout and hit-testing agree" {
+    const t = std.testing;
+    const m = FixedAdv{}; // 8px advance → 20px buttons, 24px steps
+    // Three notes in 222px: tabs on the left, + and × on the right.
+    const h = noteHeaderLayout(m, 222, 3, true, true);
+    try t.expect(h.tabs);
+    try t.expectEqual(@as(?i64, 202), h.del_x);
+    try t.expectEqual(@as(?i64, 178), h.plus_x);
+    try t.expectEqual(NoteHit{ .tab = 0 }, noteHeaderHit(h, 3, 5));
+    try t.expectEqual(NoteHit{ .tab = 2 }, noteHeaderHit(h, 3, 48 + 19));
+    try t.expectEqual(@as(NoteHit, .none), noteHeaderHit(h, 3, 48 + 21)); // the gap after tab 3
+    try t.expectEqual(@as(NoteHit, .none), noteHeaderHit(h, 3, 100));
+    try t.expectEqual(@as(NoteHit, .plus), noteHeaderHit(h, 3, 180));
+    try t.expectEqual(@as(NoteHit, .delete), noteHeaderHit(h, 3, 210));
+    // Nine notes don't fit: the pager replaces the tabs.
+    const p = noteHeaderLayout(m, 222, 9, false, true);
+    try t.expect(!p.tabs);
+    try t.expectEqual(p.plus_x, null);
+    try t.expectEqual(@as(NoteHit, .prev), noteHeaderHit(p, 9, 3));
+    try t.expectEqual(@as(NoteHit, .next), noteHeaderHit(p, 9, p.next_x + 1));
+    // One note: no tabs to hit, only the buttons.
+    const one = noteHeaderLayout(m, 222, 1, true, false);
+    try t.expectEqual(one.del_x, null);
+    try t.expectEqual(@as(NoteHit, .none), noteHeaderHit(one, 1, 5));
+}
+
+/// How a line of a note is decorated while not editing. `prefix` is the
+/// byte length of the marker the decoration replaces.
+const NoteLineKind = enum { plain, todo, done, bullet, heading };
+const NoteLine = struct { kind: NoteLineKind, prefix: usize };
+
+fn noteLineKind(line: []const u8) NoteLine {
+    if (line.len >= 5 and (line[0] == '-' or line[0] == '*') and line[1] == ' ' and
+        line[2] == '[' and line[4] == ']' and (line.len == 5 or line[5] == ' '))
+    {
+        const prefix = @min(line.len, 6);
+        if (line[3] == ' ') return .{ .kind = .todo, .prefix = prefix };
+        if (line[3] == 'x' or line[3] == 'X') return .{ .kind = .done, .prefix = prefix };
+    }
+    if (line.len >= 2 and (line[0] == '-' or line[0] == '*') and line[1] == ' ') return .{ .kind = .bullet, .prefix = 2 };
+    if (line.len >= 2 and line[0] == '#' and line[1] == ' ') return .{ .kind = .heading, .prefix = 2 };
+    return .{ .kind = .plain, .prefix = 0 };
+}
+
+/// Start of the hard (newline-separated) line holding byte `pos`.
+fn logicalStart(text_: []const u8, pos: usize) usize {
+    var p = @min(pos, text_.len);
+    while (p > 0 and text_[p - 1] != '\n') p -= 1;
+    return p;
+}
+
+/// End (exclusive, before the newline) of the hard line starting at `start`.
+fn logicalEnd(text_: []const u8, start: usize) usize {
+    return std.mem.indexOfScalarPos(u8, text_, start, '\n') orelse text_.len;
+}
+
+test "notes: checklist, bullet and heading markers" {
+    const t = std.testing;
+    try t.expectEqual(NoteLine{ .kind = .todo, .prefix = 6 }, noteLineKind("- [ ] milk"));
+    try t.expectEqual(NoteLine{ .kind = .done, .prefix = 6 }, noteLineKind("* [X] eggs"));
+    try t.expectEqual(NoteLine{ .kind = .todo, .prefix = 5 }, noteLineKind("- [ ]"));
+    try t.expectEqual(NoteLine{ .kind = .bullet, .prefix = 2 }, noteLineKind("- [y] not a box"));
+    try t.expectEqual(NoteLine{ .kind = .bullet, .prefix = 2 }, noteLineKind("* item"));
+    try t.expectEqual(NoteLine{ .kind = .heading, .prefix = 2 }, noteLineKind("# Today"));
+    try t.expectEqual(NoteLine{ .kind = .plain, .prefix = 0 }, noteLineKind("#hashtag"));
+    try t.expectEqual(NoteLine{ .kind = .plain, .prefix = 0 }, noteLineKind("-dash"));
+    const txt = "one\n- [ ] two\nthree";
+    try t.expectEqual(@as(usize, 4), logicalStart(txt, 9));
+    try t.expectEqual(@as(usize, 13), logicalEnd(txt, 4));
+    try t.expectEqual(@as(usize, 14), logicalStart(txt, txt.len));
+}
+
+const NoteBtnStyle = enum { normal, active, danger };
+
+/// One header pill: rounded fill, label centred on the text baseline.
+fn drawNoteButton(c: Canvas, x: i64, y: i64, w: i64, h: i64, label: []const u8, style: NoteBtnStyle) void {
+    const t = c.theme.text_color;
+    const fill: u32 = switch (style) {
+        .normal => dim(t, 0x16),
+        .active => c.theme.border_color,
+        .danger => c.theme.holiday_color,
+    };
+    const fg: u32 = switch (style) {
+        .normal => dim(t, 0xBB),
+        .active => c.theme.bg_color | 0xFF000000,
+        .danger => 0xFFFFFFFF,
+    };
+    c.card(.{ .x = @intCast(x), .y = @intCast(y), .w = @intCast(@max(w, 1)), .h = @intCast(@max(h, 1)) }, fill, 0);
+    const lw = c.textWidth(label);
+    _ = c.drawText(x + @divTrunc(w - lw, 2), y + c.font.ascentPx(), label, fg);
+}
+
+/// A thick AA line segment (the checkbox tick).
+fn strokeAA(c: Canvas, x0: f64, y0: f64, x1: f64, y1: f64, width: f64, color: u32) void {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len = @sqrt(dx * dx + dy * dy);
+    if (len <= 0.0) return;
+    const nx = -dy / len * width / 2.0;
+    const ny = dx / len * width / 2.0;
+    const pts = [4]Canvas.FPt{
+        .{ .x = x0 + nx, .y = y0 + ny },
+        .{ .x = x1 + nx, .y = y1 + ny },
+        .{ .x = x1 - nx, .y = y1 - ny },
+        .{ .x = x0 - nx, .y = y0 - ny },
+    };
+    c.fillConvex(&pts, color);
+}
+
+/// Checkbox in a text row: an outlined box, or an accent box with a tick.
+fn drawCheckbox(c: Canvas, x: i64, row_top: i64, lh: i64, checked: bool) void {
+    const s = @max(@divTrunc(lh * 6, 10), 8);
+    const bx = x + 1;
+    const by = row_top + @divTrunc(lh - s, 2);
+    const accent = c.theme.border_color;
+    const box = Rect{ .x = @intCast(bx), .y = @intCast(by), .w = @intCast(s), .h = @intCast(s) };
+    if (!checked) {
+        c.card(box, 0, dim(c.theme.text_color, 0x99));
+        return;
+    }
+    c.card(box, accent, accent);
+    const fx: f64 = @floatFromInt(bx);
+    const fy: f64 = @floatFromInt(by);
+    const fs: f64 = @floatFromInt(s);
+    const ink = c.theme.bg_color | 0xFF000000;
+    strokeAA(c, fx + fs * 0.22, fy + fs * 0.52, fx + fs * 0.43, fy + fs * 0.73, fs * 0.15, ink);
+    strokeAA(c, fx + fs * 0.40, fy + fs * 0.73, fx + fs * 0.79, fy + fs * 0.30, fs * 0.15, ink);
+}
+
+extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
+extern "c" fn rmdir(path: [*:0]const u8) c_int;
+
 pub const NoteWidget = struct {
-    pub const NOTE_MAX: usize = 1023;
-    pub const MAX_WRAP_LINES: usize = 1025;
+    pub const NOTE_MAX: usize = 4095;
+    pub const MAX_WRAP_LINES: usize = NOTE_MAX + 2;
+    pub const MAX_PAGES: u8 = 9;
     /// Public — cardSizeFor measures the card from these.
-    pub const NOTE_W: i64 = 230;
-    pub const VISIBLE_LINES: i64 = 6;
-    /// Cadence while editing: caret blink + autosave check. Idle notes have
-    /// nothing to repaint, so Widget.intervalMs drops them to 60 s.
+    pub const NOTE_W: i64 = 250;
+    /// Cadence while editing (caret blink + autosave) or while × waits for
+    /// its confirming click. Otherwise nothing changes on its own — the
+    /// folder watch wakes the card — so Widget.intervalMs drops it to 60 s.
     pub const interval_ms: i64 = 500;
     pub const idle_interval_ms: i64 = 60_000;
 
-    text_buf: [NOTE_MAX]u8 = undefined,
+    /// +1: reads take one byte past the cap to spot an oversized file.
+    text_buf: [NOTE_MAX + 1]u8 = undefined,
     text_len: usize = 0,
+    /// The open note's file (NUL-terminated).
     path_buf: [320]u8 = undefined,
     path_len: usize = 0,
+    /// The notes folder.
+    dir_buf: [300]u8 = undefined,
+    dir_len: usize = 0,
+    /// File numbers (noteN.txt) of the notes there are, ascending.
+    pages: [MAX_PAGES]u8 = undefined,
+    page_count: usize = 0,
+    /// File number of the open note.
+    slot: u8 = 1,
+    /// The open note's file is bigger than NOTE_MAX: shown cut off, never
+    /// edited or saved.
+    read_only: bool = false,
     /// Byte offset of the caret while editing.
     caret: usize = 0,
     editing: bool = false,
     dirty: bool = false,
-    /// First wrapped line shown at the top of the card.
+    /// First wrapped line shown at the top of the text area.
     scroll: usize = 0,
     /// Horizontal goal kept across Up/Down (like a normal editor).
     desired_x: i64 = 0,
     blink_on: bool = true,
     /// monoMs() of the last keyed change — autosave cadence source.
     last_change_ms: i64 = 0,
+    /// inotify watch on the folder (-1 = none yet; tick retries).
+    notify_fd: posix.fd_t = -1,
+    /// monoMs() deadline for the confirming click on × (0 = not armed).
+    delete_armed_until: i64 = 0,
+    /// Set when the open note changed; the host saves notes_page.
+    page_changed: bool = false,
 
     pub fn path(self: *const NoteWidget) [:0]const u8 {
         return self.path_buf[0..self.path_len :0];
@@ -3094,22 +4187,187 @@ pub const NoteWidget = struct {
         return self.text_buf[0..self.text_len];
     }
 
-    /// Stores the slot file path and loads whatever it currently holds.
+    fn dir(self: *const NoteWidget) []const u8 {
+        return self.dir_buf[0..self.dir_len];
+    }
+
+    pub fn armed(self: *const NoteWidget) bool {
+        return self.delete_armed_until != 0;
+    }
+
+    fn disarm(self: *NoteWidget) void {
+        self.delete_armed_until = 0;
+    }
+
+    fn canAdd(self: *const NoteWidget) bool {
+        return self.page_count < MAX_PAGES;
+    }
+
+    /// × shows when there's something to delete: another note, or text.
+    fn canDelete(self: *const NoteWidget) bool {
+        return self.page_count > 1 or self.text_len > 0;
+    }
+
+    fn slotPath(self: *const NoteWidget, slot: u8, buf: []u8) ?[:0]const u8 {
+        return std.fmt.bufPrintZ(buf, "{s}/note{d}.txt", .{ self.dir(), slot }) catch null;
+    }
+
+    fn hasPage(self: *const NoteWidget, slot: u8) bool {
+        return std.mem.indexOfScalar(u8, self.pages[0..self.page_count], slot) != null;
+    }
+
+    fn pageIndex(self: *const NoteWidget) usize {
+        return std.mem.indexOfScalar(u8, self.pages[0..self.page_count], self.slot) orelse 0;
+    }
+
+    /// Points the card at the notes folder, opens note `slot` (the one
+    /// that was open last time; the first note there is if it's gone) and
+    /// starts watching the folder.
     pub fn configure(self: *NoteWidget, notes_dir: []const u8, slot: u8) void {
-        const s = std.fmt.bufPrint(self.path_buf[0..], "{s}/note{d}.txt", .{ notes_dir, slot }) catch return;
-        self.path_len = s.len;
-        self.path_buf[self.path_len] = 0; // NUL-terminate for [:0] slices
-        self.text_len = readFileInto(self.path(), &self.text_buf);
-        self.caret = self.text_len;
-        self.scroll = 0;
+        if (notes_dir.len == 0 or notes_dir.len > self.dir_buf.len) return;
+        @memcpy(self.dir_buf[0..notes_dir.len], notes_dir);
+        self.dir_len = notes_dir.len;
+        const want: u8 = if (slot >= 1 and slot <= MAX_PAGES) slot else 1;
+        _ = self.scanPages(null);
+        const first = if (self.hasPage(want) or self.page_count == 0) want else self.pages[0];
+        self.loadPage(first);
+        _ = self.scanPages(first);
         self.editing = false;
+        self.armWatch();
+        logging.step("notes: {d} note(s) in {s}, note{d} open ({d} bytes{s})", .{
+            self.page_count, self.dir(), self.slot, self.text_len, if (self.read_only) ", read-only" else "",
+        });
+    }
+
+    /// Rebuilds the note list from the noteN.txt files in the folder, plus
+    /// `keep` (the open note, which may not be saved yet). True when the
+    /// list changed.
+    fn scanPages(self: *NoteWidget, keep: ?u8) bool {
+        var mask: u16 = 0;
+        var pb: [340]u8 = undefined;
+        var s: u8 = 1;
+        while (s <= MAX_PAGES) : (s += 1) {
+            const p = self.slotPath(s, &pb) orelse continue;
+            if (access(p.ptr, 0) == 0) mask |= @as(u16, 1) << @intCast(s);
+        }
+        if (keep) |k| mask |= @as(u16, 1) << @intCast(k);
+        var fresh: [MAX_PAGES]u8 = undefined;
+        var n: usize = 0;
+        s = 1;
+        while (s <= MAX_PAGES) : (s += 1) {
+            if (mask & (@as(u16, 1) << @intCast(s)) != 0) {
+                fresh[n] = s;
+                n += 1;
+            }
+        }
+        const changed = n != self.page_count or !std.mem.eql(u8, fresh[0..n], self.pages[0..self.page_count]);
+        @memcpy(self.pages[0..n], fresh[0..n]);
+        self.page_count = n;
+        return changed;
+    }
+
+    /// Opens note `slot`: its path, and its text from disk (empty when the
+    /// file doesn't exist yet).
+    fn loadPage(self: *NoteWidget, slot: u8) void {
+        self.slot = slot;
+        self.caret = 0;
+        self.scroll = 0;
         self.dirty = false;
         self.last_change_ms = 0;
-        logging.step("notes: note{d} holds {d} bytes from {s}", .{ slot, self.text_len, self.path() });
+        self.desired_x = 0;
+        const p = self.slotPath(slot, &self.path_buf) orelse {
+            self.path_len = 0;
+            self.text_len = 0;
+            self.read_only = false;
+            return;
+        };
+        self.path_len = p.len;
+        const n = readFileInto(self.path(), &self.text_buf);
+        self.read_only = n > NOTE_MAX;
+        self.text_len = @min(n, NOTE_MAX);
+        self.caret = self.text_len;
+    }
+
+    /// Save, stop editing and drop a pending delete — before the open note
+    /// changes.
+    fn leavePage(self: *NoteWidget) void {
+        self.commit();
+        self.endEditing();
+        self.disarm();
+    }
+
+    /// Opens the note at tab position `idx`.
+    fn switchToIndex(self: *NoteWidget, idx: usize) void {
+        if (idx >= self.page_count) return;
+        const target = self.pages[idx];
+        if (target == self.slot) return;
+        self.leavePage();
+        self.loadPage(target);
+        // An empty note that was never saved has no file: it drops out here.
+        _ = self.scanPages(self.slot);
+        self.page_changed = true;
+    }
+
+    /// Opens a new, empty note and starts editing it. Its file appears with
+    /// the first save, so a new note left empty simply goes away.
+    fn newPage(self: *NoteWidget) bool {
+        if (!self.canAdd()) return false;
+        var top: u8 = 0;
+        for (self.pages[0..self.page_count]) |p| top = @max(top, p);
+        var slot: u8 = top + 1;
+        if (slot > MAX_PAGES) {
+            slot = 1;
+            while (slot <= MAX_PAGES and self.hasPage(slot)) slot += 1;
+            if (slot > MAX_PAGES) return false;
+        }
+        self.leavePage();
+        self.loadPage(slot);
+        _ = self.scanPages(self.slot);
+        self.editing = true;
+        self.blink_on = true;
+        self.page_changed = true;
+        return true;
+    }
+
+    /// Deletes the open note: saves it, moves its file to .last-deleted.txt
+    /// (one level of undo, by hand), and opens a neighbour. The last note
+    /// left just becomes empty.
+    fn deletePage(self: *NoteWidget) void {
+        self.leavePage();
+        if (self.path_len > 0) {
+            var bb: [340]u8 = undefined;
+            if (std.fmt.bufPrintZ(&bb, "{s}/.last-deleted.txt", .{self.dir()})) |bak| {
+                // Fails harmlessly for a note that was never saved.
+                _ = std.c.rename(self.path().ptr, bak.ptr);
+            } else |_| {}
+        }
+        const idx = self.pageIndex();
+        if (self.page_count > 1) {
+            const next_idx = if (idx + 1 < self.page_count) idx + 1 else idx - 1;
+            self.loadPage(self.pages[next_idx]);
+        } else {
+            self.loadPage(self.slot); // file moved away: reads empty
+        }
+        _ = self.scanPages(self.slot);
+        self.page_changed = true;
+        logging.step("notes: deleted a note, note{d} open", .{self.slot});
+    }
+
+    /// Ticks or unticks the checkbox of the hard line starting at `ls`
+    /// (same length either way, so the caret and layout don't move) and
+    /// saves right away.
+    fn toggleCheck(self: *NoteWidget, ls: usize) bool {
+        if (self.read_only) return false;
+        const k = noteLineKind(self.text()[ls..logicalEnd(self.text(), ls)]);
+        if (k.kind != .todo and k.kind != .done) return false;
+        self.text_buf[ls + 3] = if (k.kind == .todo) 'x' else ' ';
+        self.dirty = true;
+        self.commit();
+        return true;
     }
 
     /// Persist the text if it changed (tmp file + rename). Called on edit
-    /// release — Esc, focus leave, click elsewhere, delete.
+    /// release — Esc, focus leave, click elsewhere, a note switch.
     pub fn commit(self: *NoteWidget) void {
         if (self.write()) {
             logging.step("notes: saved {d} bytes to {s}", .{ self.text_len, self.path() });
@@ -3123,13 +4381,72 @@ pub const NoteWidget = struct {
         self.scroll = 0;
     }
 
-    /// Editor cadence tick: flip the caret blink and quietly autosave a
-    /// typing pause. Always asks for a repaint while editing (the blink).
+    /// Cadence tick: expire an unconfirmed ×, retry a missing folder watch,
+    /// and while editing flip the caret blink and autosave a typing pause.
     pub fn tick(self: *NoteWidget) bool {
-        if (!self.editing) return false;
+        var changed = false;
+        const now = monoMs();
+        if (self.delete_armed_until != 0 and now >= self.delete_armed_until) {
+            self.delete_armed_until = 0;
+            changed = true;
+        }
+        if (self.notify_fd < 0 and self.dir_len > 0) {
+            self.armWatch();
+            if (self.notify_fd >= 0 and self.refresh()) changed = true;
+        }
+        if (!self.editing) return changed;
         self.blink_on = !self.blink_on;
-        if (monoMs() - self.last_change_ms > 1500) _ = self.write();
+        if (now - self.last_change_ms > NOTE_AUTOSAVE_MS) _ = self.write();
         return true;
+    }
+
+    /// One nonblocking cloexec inotify watch on the notes folder.
+    fn armWatch(self: *NoteWidget) void {
+        if (self.notify_fd >= 0 or self.dir_len == 0) return;
+        var zb: [301]u8 = undefined;
+        const z = std.fmt.bufPrintZ(&zb, "{s}", .{self.dir()}) catch return;
+        const fd: posix.fd_t = @intCast(inotify_init1(INOTIFY_FLAGS));
+        if (fd < 0) return;
+        if (inotify_add_watch(fd, z.ptr, IN_WATCH_MASK) < 0) {
+            _ = posix.system.close(fd);
+            return;
+        }
+        self.notify_fd = fd;
+    }
+
+    /// The folder changed: drain the events, then refresh. True when the
+    /// card looks different.
+    pub fn onNotify(self: *NoteWidget) bool {
+        var any = false;
+        var buf: [4096]u8 align(4) = undefined;
+        while (true) {
+            const n = posix.read(self.notify_fd, &buf) catch break;
+            if (n == 0) break;
+            any = true;
+        }
+        if (!any) return false;
+        return self.refresh();
+    }
+
+    /// Re-reads the note list, and the open note when its file changed on
+    /// disk. Never while editing or holding unsaved text: the edit wins and
+    /// its next save replaces the file. (Our own saves land here too and
+    /// compare equal, so they don't repaint.)
+    fn refresh(self: *NoteWidget) bool {
+        var changed = self.scanPages(self.slot);
+        if (self.editing or self.dirty or self.path_len == 0) return changed;
+        var fresh: [NOTE_MAX + 1]u8 = undefined;
+        const n = readFileInto(self.path(), &fresh);
+        const len = @min(n, NOTE_MAX);
+        const ro = n > NOTE_MAX;
+        if (len != self.text_len or ro != self.read_only or !std.mem.eql(u8, fresh[0..len], self.text())) {
+            @memcpy(self.text_buf[0..len], fresh[0..len]);
+            self.text_len = len;
+            self.read_only = ro;
+            self.caret = len;
+            changed = true;
+        }
+        return changed;
     }
 
     /// Every keyed change re-adds the dirty flag and wakes the fence.
@@ -3144,6 +4461,7 @@ pub const NoteWidget = struct {
         if (!self.dirty) return false;
         self.dirty = false;
         if (self.path_len == 0) return false; // unconfigured (unit tests) — nothing to persist
+        if (self.read_only) return false; // never truncate an oversized file
         return writeFileAtomicZ(self.path(), self.text());
     }
 
@@ -3258,8 +4576,11 @@ pub const NoteWidget = struct {
         if (keycode == KEY_ESC) {
             self.commit();
             self.endEditing();
+            self.disarm();
             return .exited;
         }
+        if (self.read_only) return .ignored;
+        self.disarm();
         var lines_arr: [MAX_WRAP_LINES]LayoutLine = undefined;
         const lines = &lines_arr;
         const count = wrapLines(measure, self.text(), max_w, lines);
@@ -3296,27 +4617,174 @@ pub const NoteWidget = struct {
         return .handled;
     }
 
-    /// A click anywhere inside the card starts (or continues) editing and
-    /// drops the caret onto the wrapped line nearest the click point.
+    /// The text's first shown wrapped line for `count` lines in `vis` rows.
+    fn shownScroll(self: *const NoteWidget, count: usize, vis: usize) usize {
+        if (count <= vis) return 0;
+        return @min(self.scroll, count - vis);
+    }
+
+    /// A click inside the card. Header controls act on notes; a checkbox
+    /// (while not editing) ticks; anywhere else in the text starts editing
+    /// or moves the caret to the click. The host reads `editing` afterwards
+    /// to take or hand back the keyboard, and `page_changed` to save which
+    /// note is open.
     pub fn clickAt(self: *NoteWidget, r: Rect, font: *font_mod.Font, px: i32, py: i32) void {
-        self.editing = true;
-        self.blink_on = true;
-        const rx: i64 = r.x;
-        const ry: i64 = r.y;
+        const fm = FontMeasure{ .font = font };
         const lh = lineH(font);
-        const max_w: i64 = @as(i64, @intCast(r.w)) - 2 * CARD_PAD;
+        const left: i64 = @as(i64, r.x) + CARD_PAD;
+        const top: i64 = @as(i64, r.y) + CARD_PAD;
+        const inner_w: i64 = @as(i64, @intCast(r.w)) - 2 * CARD_PAD;
+        const head_h = noteHeaderH(lh);
+        const rel_x = @as(i64, px) - left;
+
+        if (notes_layout.tabs and @as(i64, py) < top + head_h) {
+            const h = noteHeaderLayout(fm, inner_w, self.page_count, self.canAdd(), self.canDelete());
+            const hit = noteHeaderHit(h, self.page_count, rel_x);
+            if (self.armed()) {
+                // While × waits, the header only asks "Delete this note?":
+                // × again confirms, anything else cancels.
+                if (hit == .delete) self.deletePage() else self.disarm();
+                return;
+            }
+            switch (hit) {
+                .delete => {
+                    self.commit();
+                    self.endEditing();
+                    self.delete_armed_until = monoMs() + NOTE_DELETE_ARM_MS;
+                },
+                .plus => {
+                    _ = self.newPage();
+                },
+                .tab => |i| self.switchToIndex(i),
+                .prev => self.switchToIndex((self.pageIndex() + self.page_count - 1) % self.page_count),
+                .next => self.switchToIndex((self.pageIndex() + 1) % self.page_count),
+                .none => {},
+            }
+            return;
+        }
+
+        self.disarm();
         const vis = noteVisLines(@as(i64, @intCast(r.h)), lh);
         var lines: [MAX_WRAP_LINES]LayoutLine = undefined;
-        const count = wrapLines(FontMeasure{ .font = font }, self.text(), max_w, &lines);
-        const rel_x = @max(@as(i64, px) - (rx + CARD_PAD), 0);
-        var rel_y = @as(i64, py) - (ry + CARD_PAD);
+        const count = wrapLines(fm, self.text(), inner_w, &lines);
+        const scroll = self.shownScroll(count, vis);
+        var rel_y = @as(i64, py) - (top + head_h);
         rel_y = std.math.clamp(rel_y, 0, @as(i64, @intCast(vis)) * lh - 1); // padding clicks → nearest line
-        var li = self.scroll + @as(usize, @intCast(@divTrunc(rel_y, lh)));
+        var li = scroll + @as(usize, @intCast(@divTrunc(rel_y, lh)));
         if (li >= count) li = count - 1;
         const l = lines[li];
-        self.caret = offsetNear(FontMeasure{ .font = font }, self.text()[l.start..l.end], rel_x) + l.start;
-        const line_w = advSlice(FontMeasure{ .font = font }, self.text()[l.start..l.end]);
-        self.desired_x = @min(rel_x, line_w);
+
+        if (!self.editing and notes_layout.checklists) {
+            const ls = logicalStart(self.text(), l.start);
+            if (ls == l.start) {
+                const k = noteLineKind(self.text()[ls..logicalEnd(self.text(), ls)]);
+                if ((k.kind == .todo or k.kind == .done) and rel_x >= 0 and
+                    rel_x < advSlice(fm, self.text()[ls .. ls + k.prefix]))
+                {
+                    _ = self.toggleCheck(ls);
+                    return;
+                }
+            }
+        }
+        if (self.read_only) return;
+
+        self.editing = true;
+        self.blink_on = true;
+        self.scroll = scroll;
+        const rx = @max(rel_x, 0);
+        self.caret = offsetNear(fm, self.text()[l.start..l.end], rx) + l.start;
+        const line_w = advSlice(fm, self.text()[l.start..l.end]);
+        self.desired_x = @min(rx, line_w);
+    }
+
+    /// Mouse wheel over the card: scroll the text by `delta` lines (positive
+    /// = down). True when the view moved.
+    pub fn scrollBy(self: *NoteWidget, r: Rect, font: *font_mod.Font, delta: i32) bool {
+        const lh = lineH(font);
+        var lines: [MAX_WRAP_LINES]LayoutLine = undefined;
+        const count = wrapLines(FontMeasure{ .font = font }, self.text(), @as(i64, @intCast(r.w)) - 2 * CARD_PAD, &lines);
+        const vis = noteVisLines(@as(i64, @intCast(r.h)), lh);
+        if (count <= vis) return false;
+        const max_scroll: i64 = @intCast(count - vis);
+        const cur: i64 = @intCast(self.shownScroll(count, vis));
+        const want: usize = @intCast(std.math.clamp(cur + delta, 0, max_scroll));
+        if (want == self.scroll) return false;
+        self.scroll = want;
+        return true;
+    }
+
+    fn paintHeader(self: *const NoteWidget, c: Canvas, left: i64, top: i64, inner_w: i64, lh: i64) void {
+        const t = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const baseline = top + c.font.ascentPx();
+        const h = noteHeaderLayout(FontMeasure{ .font = c.font }, inner_w, self.page_count, self.canAdd(), self.canDelete());
+        c.fillRect(left, top + lh + @divTrunc(NOTE_HEADER_GAP, 2), @intCast(@max(inner_w, 0)), 1, dim(t, 0x22));
+        if (self.armed()) {
+            _ = c.drawText(left, baseline, "Delete this note?", c.theme.holiday_color);
+            if (h.del_x) |dx| drawNoteButton(c, left + dx, top, h.btn_w, lh, "\u{00D7}", .danger);
+            return;
+        }
+        if (self.page_count <= 1) {
+            _ = c.drawText(left, baseline, "Notes", accent);
+        } else if (h.tabs) {
+            const cur = self.pageIndex();
+            const step = h.btn_w + NOTE_TAB_GAP;
+            for (0..self.page_count) |i| {
+                var nb: [4]u8 = undefined;
+                const label = std.fmt.bufPrint(&nb, "{d}", .{i + 1}) catch "";
+                drawNoteButton(c, left + @as(i64, @intCast(i)) * step, top, h.btn_w, lh, label, if (i == cur) .active else .normal);
+            }
+        } else {
+            drawNoteButton(c, left + h.prev_x, top, h.btn_w, lh, "\u{2039}", .normal);
+            var lb: [8]u8 = undefined;
+            const label = std.fmt.bufPrint(&lb, "{d}/{d}", .{ self.pageIndex() + 1, self.page_count }) catch "";
+            const lw = c.textWidth(label);
+            _ = c.drawText(left + h.label_x + @divTrunc(h.label_w - lw, 2), baseline, label, accent);
+            drawNoteButton(c, left + h.next_x, top, h.btn_w, lh, "\u{203A}", .normal);
+        }
+        if (h.plus_x) |px| drawNoteButton(c, left + px, top, h.btn_w, lh, "+", .normal);
+        if (h.del_x) |dx| drawNoteButton(c, left + dx, top, h.btn_w, lh, "\u{00D7}", .normal);
+    }
+
+    /// One wrapped row with its line's decoration: a checkbox or bullet in
+    /// place of the marker on the line's first row, struck-through dim
+    /// text for ticked items, the accent colour for headings.
+    fn paintDecoratedRow(self: *const NoteWidget, c: Canvas, x: i64, baseline: i64, row_top: i64, lh: i64, l: LayoutLine) void {
+        const txt = self.text();
+        const fm = FontMeasure{ .font = c.font };
+        const t = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const ls = logicalStart(txt, l.start);
+        const k = noteLineKind(txt[ls..logicalEnd(txt, ls)]);
+        var from = l.start;
+        var tx = x;
+        if (ls == l.start and k.prefix > 0 and l.end >= l.start + k.prefix) {
+            switch (k.kind) {
+                .todo, .done => drawCheckbox(c, x, row_top, lh, k.kind == .done),
+                .bullet => {
+                    const bw = c.textWidth("\u{2022}");
+                    _ = c.drawText(x + @divTrunc(fm.advance('-') - bw, 2), baseline, "\u{2022}", accent);
+                },
+                .heading, .plain => {},
+            }
+            from = l.start + k.prefix;
+            tx = x + advSlice(fm, txt[l.start..from]);
+        }
+        if (l.end <= from) return;
+        const seg = txt[from..l.end];
+        switch (k.kind) {
+            .done => {
+                const ink = dim(t, 0x77);
+                const w = c.drawText(tx, baseline, seg, ink);
+                c.fillRect(tx, baseline - @divTrunc(@as(i64, c.font.ascentPx()) * 3, 10), @intCast(@max(w, 0)), 1, ink);
+            },
+            .heading => {
+                _ = c.drawText(tx, baseline, seg, accent);
+            },
+            else => {
+                _ = c.drawText(tx, baseline, seg, t);
+            },
+        }
     }
 
     pub fn paint(self: *const NoteWidget, c: Canvas, r: Rect) void {
@@ -3324,39 +4792,165 @@ pub const NoteWidget = struct {
         const ry: i64 = r.y;
         const lh = lineH(c.font);
         const ascent: i64 = c.font.ascentPx();
-        const max_w: i64 = @as(i64, @intCast(r.w)) - 2 * CARD_PAD;
-        var lines: [MAX_WRAP_LINES]LayoutLine = undefined;
-        const count = wrapLines(FontMeasure{ .font = c.font }, self.text(), max_w, &lines);
-        const vis = noteVisLines(@as(i64, @intCast(r.h)), lh);
-        var scroll = self.scroll;
-        if (count > vis and scroll > count - vis) scroll = count - vis;
-        if (count <= vis) scroll = 0;
-
+        const left = rx + CARD_PAD;
+        const inner_w: i64 = @as(i64, @intCast(r.w)) - 2 * CARD_PAD;
         const t = c.theme.text_color;
-        const baseline = ry + CARD_PAD + ascent;
+        const accent = c.theme.border_color;
+        if (notes_layout.tabs) self.paintHeader(c, left, ry + CARD_PAD, inner_w, lh);
+        const body_top = ry + CARD_PAD + noteHeaderH(lh);
+
+        var lines: [MAX_WRAP_LINES]LayoutLine = undefined;
+        const count = wrapLines(FontMeasure{ .font = c.font }, self.text(), inner_w, &lines);
+        var vis = noteVisLines(@as(i64, @intCast(r.h)), lh);
+        if (self.read_only and vis > 1) vis -= 1; // last row: the read-only notice
+        const scroll = self.shownScroll(count, vis);
+        const body_h: i64 = @as(i64, @intCast(vis)) * lh;
+
+        const decorate = notes_layout.checklists and !self.editing;
         const rows = @min(vis, count);
         for (0..rows) |row| {
             const l = lines[scroll + row];
-            if (l.end > l.start) {
-                _ = c.drawText(rx + CARD_PAD, baseline + @as(i64, @intCast(row)) * lh, self.text()[l.start..l.end], t);
+            const row_top = body_top + @as(i64, @intCast(row)) * lh;
+            if (decorate) {
+                self.paintDecoratedRow(c, left, row_top + ascent, row_top, lh, l);
+            } else if (l.end > l.start) {
+                _ = c.drawText(left, row_top + ascent, self.text()[l.start..l.end], t);
             }
         }
 
         if (self.text_len == 0 and !self.editing) {
-            _ = c.drawText(rx + CARD_PAD, baseline, "click to type", dim(t, 0x55));
+            const hint = if (self.page_count > 1) "Empty note \u{2014} click to write" else "Click to write a note";
+            _ = c.drawText(left, body_top + ascent, hint, dim(t, 0x66));
+        }
+
+        // Editing: an accent bar down the left margin.
+        const margin = @divTrunc(CARD_PAD, 2);
+        if (self.editing) c.fillRect(rx + margin - 1, body_top, 2, @intCast(body_h), dim(accent, 0xCC));
+
+        // More text than fits: a thin scrollbar in the right margin.
+        if (count > vis) {
+            const sx = rx + @as(i64, @intCast(r.w)) - margin - 1;
+            c.fillRect(sx, body_top, 2, @intCast(body_h), dim(t, 0x18));
+            const thumb_h = @max(@divTrunc(body_h * @as(i64, @intCast(vis)), @as(i64, @intCast(count))), @divTrunc(lh, 2));
+            const travel = body_h - thumb_h;
+            const ty = body_top + @divTrunc(travel * @as(i64, @intCast(scroll)), @as(i64, @intCast(count - vis)));
+            c.fillRect(sx, ty, 2, @intCast(thumb_h), dim(accent, 0xAA));
+        }
+
+        if (self.read_only) {
+            var fit_buf: [96]u8 = undefined;
+            const msg = fitText(c, "Too long to edit here (over 4 KB)", inner_w, &fit_buf);
+            _ = c.drawText(left, body_top + body_h + ascent, msg, dim(c.theme.holiday_color, 0xDD));
         }
 
         // Blinking caret at its byte offset within the visible wrapped line.
         if (self.editing and self.blink_on) {
             const li = caretLine(&lines, count, self.caret);
             if (li >= scroll and li < scroll + vis) {
-                const caret_x = rx + CARD_PAD + advSlice(FontMeasure{ .font = c.font }, self.text()[lines[li].start..self.caret]);
-                const top = ry + CARD_PAD + 1 + @as(i64, @intCast(li - scroll)) * lh;
+                const caret_x = left + advSlice(FontMeasure{ .font = c.font }, self.text()[lines[li].start..self.caret]);
+                const top = body_top + 1 + @as(i64, @intCast(li - scroll)) * lh;
                 c.fillRect(caret_x, top, 2, @intCast(lh - 2), t);
             }
         }
     }
 };
+
+test "notes: pages on disk — new, switch, delete, refresh" {
+    const t = std.testing;
+    var dbuf: [96]u8 = undefined;
+    const d = try std.fmt.bufPrintZ(&dbuf, "/tmp/perihelion-notes-test-{d}", .{std.c.getpid()});
+    _ = posix.system.mkdir(d.ptr, 0o755);
+    defer {
+        var cb: [128]u8 = undefined;
+        for ([_][]const u8{ "note1.txt", "note2.txt", "note3.txt", ".last-deleted.txt" }) |f| {
+            if (std.fmt.bufPrintZ(&cb, "{s}/{s}", .{ d, f })) |cp| {
+                _ = unlink(cp.ptr);
+            } else |_| {}
+        }
+        _ = rmdir(d.ptr);
+    }
+    var pb: [128]u8 = undefined;
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d}), "first"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note3.txt", .{d}), "- [ ] third"));
+
+    var n = NoteWidget{};
+    n.configure(d, 3); // the remembered note is open
+    defer {
+        if (n.notify_fd >= 0) _ = posix.system.close(n.notify_fd);
+    }
+    try t.expectEqualSlices(u8, &[_]u8{ 1, 3 }, n.pages[0..n.page_count]);
+    try t.expectEqual(@as(u8, 3), n.slot);
+    try t.expectEqualSlices(u8, "- [ ] third", n.text());
+
+    // Ticking a checkbox saves straight away.
+    try t.expect(n.toggleCheck(0));
+    var rb: [64]u8 = undefined;
+    try t.expectEqualSlices(u8, "- [x] third", rb[0..readFileInto(n.path(), &rb)]);
+
+    // A new note takes the next number and has no file until it's saved;
+    // left empty, it drops out when another note opens.
+    try t.expect(n.newPage());
+    try t.expectEqual(@as(u8, 4), n.slot);
+    try t.expect(n.editing);
+    try t.expectEqual(@as(usize, 3), n.page_count);
+    n.switchToIndex(0);
+    try t.expectEqual(@as(u8, 1), n.slot);
+    try t.expectEqualSlices(u8, &[_]u8{ 1, 3 }, n.pages[0..n.page_count]);
+    try t.expectEqualSlices(u8, "first", n.text());
+
+    // Another program writes note2.txt and rewrites note1: both show up.
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note2.txt", .{d}), "second"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d}), "first, edited"));
+    try t.expect(n.refresh());
+    try t.expectEqualSlices(u8, &[_]u8{ 1, 2, 3 }, n.pages[0..n.page_count]);
+    try t.expectEqualSlices(u8, "first, edited", n.text());
+    try t.expect(!n.refresh()); // nothing new: no repaint
+
+    // ...but an edit in progress is never overwritten.
+    n.editing = true;
+    n.text_len = 0;
+    n.caret = 0;
+    try t.expect(n.insertCp('z'));
+    n.dirty = true;
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d}), "from elsewhere"));
+    _ = n.refresh();
+    try t.expectEqualSlices(u8, "z", n.text());
+    n.endEditing();
+
+    // Delete saves, keeps a copy, and opens the neighbour.
+    n.deletePage();
+    try t.expectEqualSlices(u8, &[_]u8{ 2, 3 }, n.pages[0..n.page_count]);
+    try t.expectEqual(@as(u8, 2), n.slot);
+    const bak = try std.fmt.bufPrintZ(&pb, "{s}/.last-deleted.txt", .{d});
+    try t.expectEqualSlices(u8, "z", rb[0..readFileInto(bak, &rb)]);
+}
+
+test "notes: an oversized file is read-only and never written" {
+    const t = std.testing;
+    var dbuf: [96]u8 = undefined;
+    const d = try std.fmt.bufPrintZ(&dbuf, "/tmp/perihelion-notes-big-{d}", .{std.c.getpid()});
+    _ = posix.system.mkdir(d.ptr, 0o755);
+    var pb: [128]u8 = undefined;
+    const p = try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d});
+    defer {
+        _ = unlink(p.ptr);
+        _ = rmdir(d.ptr);
+    }
+    const big = [_]u8{'x'} ** (NoteWidget.NOTE_MAX + 10);
+    try t.expect(writeFileAtomicZ(p, &big));
+    var n = NoteWidget{};
+    n.configure(d, 1);
+    defer {
+        if (n.notify_fd >= 0) _ = posix.system.close(n.notify_fd);
+    }
+    try t.expect(n.read_only);
+    try t.expectEqual(NoteWidget.NOTE_MAX, n.text_len);
+    try t.expectEqual(NoteWidget.KeyResult.ignored, n.keyPress(FixedAdv{}, 200, 6, 999, 'a'));
+    n.dirty = true;
+    n.commit();
+    var rb: [NoteWidget.NOTE_MAX + 20]u8 = undefined;
+    try t.expectEqual(@as(usize, big.len), readFileInto(p, &rb));
+}
 
 /// Mode-independent font advance — the layout math reads glyph advances
 /// through this so the same code runs in painting and in tests (tests use a
@@ -4545,21 +6139,27 @@ pub const Widget = union(WidgetId) {
     watch: WatchWidget,
     note1: NoteWidget,
     icons: IconsWidget,
+    fastfetch: FastfetchWidget,
+    processes: ProcessesWidget,
 
-    pub fn intervalMs(self: Widget) i64 {
-        return switch (self) {
+    // By pointer, not by value: the union is as big as its largest card
+    // (the Fastfetch card's rows and logo, ~27 KB), and this runs every tick.
+    pub fn intervalMs(self: *const Widget) i64 {
+        return switch (self.*) {
             .clock => ClockWidget.interval_ms,
-            // Weather animates its condition ambiently at 60ms; it only
-            // sleeps for its 20-minute fetch (kept warm by the tick).
-            .weather => 60,
+            // Moving conditions animate at 60ms; static ones (clear sky,
+            // no data yet) idle at 1s. The fetch schedule rides the tick.
+            .weather => |*w| if (w.animating()) 60 else 1000,
             .media => MediaWidget.interval_ms,
             .system => SystemWidget.interval_ms,
             .calendar => CalendarWidget.interval_ms,
             // Editing notes blink every half second; idle ones never repaint.
-            .note1 => |n| if (n.editing) NoteWidget.interval_ms else NoteWidget.idle_interval_ms,
+            .note1 => |*n| if (n.editing or n.armed()) NoteWidget.interval_ms else NoteWidget.idle_interval_ms,
             .watch => WatchWidget.interval_ms,
             // The icons grid only self-heals a dead inotify watch here.
             .icons => IconsWidget.interval_ms,
+            .fastfetch => FastfetchWidget.interval_ms,
+            .processes => ProcessesWidget.interval_ms,
         };
     }
 
@@ -4567,25 +6167,18 @@ pub const Widget = union(WidgetId) {
     /// widget's pixels need repainting now.
     pub fn tick(self: *Widget) bool {
         return switch (self.*) {
-            .clock => |*c| blk: {
-                c.update();
-                break :blk true;
-            },
-            .system => |*s| blk: {
-                s.refresh();
-                break :blk true;
-            },
+            // Repaints only when the face changes (once a minute without
+            // seconds).
+            .clock => |*c| c.update(),
+            // Repaints only when a shown value changed.
+            .system => |*s| s.refresh(),
             .weather => |*w| blk: {
-                // Ambient condition animation: advance the fx frame and
-                // repaint every tick (intervalMs holds 60ms). Fetch upkeep
-                // lives here too — refetch past the 20-minute cadence only,
-                // never every tick (that would fork curl at 60Hz).
+                // Advance the condition animation, then let weather.zig's
+                // schedule decide whether a fetch is due (it rate-limits
+                // itself: 15 min refresh, 30 s floor, retry backoff), so
+                // this never forks curl per tick.
                 w.anim_frame +%= 1;
-                const now = monoMs();
-                if (now - w.last_fetch_ms >= WeatherWidget.interval_ms and !w.fetch.busy()) {
-                    w.last_fetch_ms = now;
-                    w.refresh();
-                }
+                w.pump(monoMs());
                 break :blk true;
             },
             .media => |*m| blk: {
@@ -4600,6 +6193,9 @@ pub const Widget = union(WidgetId) {
             .watch => |*w| blk: {
                 break :blk w.tick();
             },
+            // Repaints only when a shown row changed.
+            .fastfetch => |*f| f.tick(),
+            .processes => |*p| p.tick(),
             .icons => |*ic| blk: {
                 break :blk ic.tick();
             },
@@ -4608,12 +6204,17 @@ pub const Widget = union(WidgetId) {
 
     /// The fd poll() should watch for this widget, or -1.
     pub fn pollFd(self: *const Widget) posix.fd_t {
+        // Pointer captures: this runs for every widget on every loop pass.
         return switch (self.*) {
-            .weather => |w| w.fetch.fd(),
-            .media => |m| m.fetch.fd(),
-            .calendar => |k| k.fetch.fd(),
+            .weather => |*w| w.fetch.fd(),
+            .system => |*s| s.fetch.fd(),
+            .media => |*m| m.fetch.fd(),
+            .calendar => |*k| k.fetch.fd(),
             // The desktop icons' inotify watch: folder events land here.
-            .icons => |ic| ic.notify_fd,
+            .icons => |*ic| ic.notify_fd,
+            // The notes folder watch: outside edits and new note files.
+            .note1 => |*n| n.notify_fd,
+            .fastfetch => |*f| f.fetch.fd(),
             else => -1,
         };
     }
@@ -4623,9 +6224,12 @@ pub const Widget = union(WidgetId) {
     pub fn onPipe(self: *Widget) bool {
         return switch (self.*) {
             .weather => |*w| w.onPipe(),
+            .system => |*s| s.onPipe(),
             .media => |*m| m.onPipe(),
             .calendar => |*k| k.onPipe(),
             .icons => |*ic| ic.onPipe(),
+            .note1 => |*n| n.onNotify(),
+            .fastfetch => |*f| f.onPipe(),
             else => false,
         };
     }
@@ -4635,27 +6239,32 @@ pub const Widget = union(WidgetId) {
     pub fn click(self: *Widget, font: *font_mod.Font, zoom: f32, r: Rect, x: i32, y: i32) void {
         switch (self.*) {
             .clock => |c| c.click(),
-            .weather => |w| w.click(),
+            .weather => |*w| w.click(),
             .media => |*m| m.clickAt(r, font, zoom, x, y),
-            .system => |s| s.click(),
+            .system => |*s| s.click(),
             .calendar => |*k| k.clickAt(r, font, zoom, x, y),
             .note1 => |*n| n.clickAt(r, font, x, y),
             .watch => |*w| w.click(),
             .icons => |*ic| ic.click(r, x, y),
+            .fastfetch => {},
+            .processes => |*p| p.click(),
         }
     }
 
     /// Draw content inside the already-painted card.
     pub fn paint(self: *const Widget, c: Canvas, r: Rect) void {
+        // Pointer captures: no per-paint copy of a card's whole state.
         switch (self.*) {
-            .clock => |w| w.paint(c, r),
-            .weather => |w| w.paint(c, r),
-            .media => |w| w.paint(c, r),
-            .system => |w| w.paint(c, r),
-            .calendar => |w| w.paint(c, r),
-            .note1 => |n| n.paint(c, r),
-            .watch => |w| w.paint(c, r),
-            .icons => |ic| ic.paint(c, r),
+            .clock => |*w| w.paint(c, r),
+            .weather => |*w| w.paint(c, r),
+            .media => |*w| w.paint(c, r),
+            .system => |*w| w.paint(c, r),
+            .calendar => |*w| w.paint(c, r),
+            .note1 => |*n| n.paint(c, r),
+            .watch => |*w| w.paint(c, r),
+            .icons => |*ic| ic.paint(c, r),
+            .fastfetch => |*f| f.paint(c, r),
+            .processes => |*p| p.paint(c, r),
         }
     }
 };
