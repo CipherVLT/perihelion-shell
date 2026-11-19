@@ -229,8 +229,22 @@ pub fn build(b: *Build) !void {
     const widgets_test_run = b.addRunArtifact(widgets_tests);
     widgets_test_step.dependOn(&widgets_test_run.step);
 
-    // `zig build test`: every unit test in this package (today only the
-    // widgets module has any), so both packages answer the same command.
+    // `zig build test-glance`: src/glance.zig's unit tests — Glance's
+    // command parsing, panel layout, hit-testing and open/close state
+    // machine. Pure std, no display or libraries needed.
+    const glance_mod = b.createModule(.{
+        .root_source_file = b.path("src/glance.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const glance_tests = b.addTest(.{ .root_module = glance_mod, .use_llvm = true, .use_lld = true });
+    const glance_test_step = b.step("test-glance", "Run src/glance.zig unit tests");
+    const glance_test_run = b.addRunArtifact(glance_tests);
+    glance_test_step.dependOn(&glance_test_run.step);
+
+    // `zig build test`: every unit test in this package, so both packages
+    // answer the same command.
     const test_step = b.step("test", "Run all perihelionbar-shell unit tests");
     test_step.dependOn(&widgets_test_run.step);
+    test_step.dependOn(&glance_test_run.step);
 }
