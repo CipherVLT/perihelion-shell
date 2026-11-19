@@ -75,6 +75,9 @@ jobs:
       - name: Unit-test the network-rate service (fake /proc/net/dev)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-netrate
+      - name: Unit-test the user/uptime service (fake passwd and uptime)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-userinfo
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc

@@ -114,6 +114,9 @@ const JsonConfig = struct {
     // Network card (netrate.zig).
     network_graph: ?bool = null,
     network_interval_seconds: ?u32 = null,
+    // User card (userinfo.zig).
+    user_host: ?bool = null,
+    user_uptime_short: ?bool = null,
     // Notes card.
     notes_tabs: ?bool = null,
     notes_checklists: ?bool = null,
@@ -197,6 +200,9 @@ const ShellConfig = struct {
     /// Network card: draw the rate graph, and seconds between samples.
     network_graph: bool = true,
     network_interval_seconds: u32 = 2,
+    /// User card: show login@host, and the short uptime wording.
+    user_host: bool = true,
+    user_uptime_short: bool = false,
     /// Notes card: header with tabs, checklist drawing, base text lines.
     notes: widgets_mod.NotesLayout = .{},
     /// "" = ~/.config/perihelionbar/notes; a leading "~/" means $HOME.
@@ -243,6 +249,9 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // Network rates under the Processes card, same column width (≈ 110px
     // tall with the graph at the 13px font).
     .{ .id = .network, .x = 1636, .y = 930 },
+    // Who and how long, in the gap left of the watch and above the
+    // Fastfetch card (240 x ≈ 88px at the 13px font).
+    .{ .id = .user, .x = 1450, .y = 40 },
 };
 
 var shell_config_path_buf: [512]u8 = undefined;
@@ -357,7 +366,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: [:0]const u8) ![]u8 {
 /// Unknown ids warn and skip rather than failing startup.
 fn disabledMask(allocator: std.mem.Allocator) u16 {
     // The u16 mask (and u4 shifts below) hold at most 16 widgets — today
-    // there are 11. Trip the compiler, not a runtime panic, if a 17th
+    // there are 12. Trip the compiler, not a runtime panic, if a 17th
     // arrives (tile_dirty is a u16 too).
     comptime {
         const n = @typeInfo(widgets_mod.WidgetId).@"enum".fields.len;
@@ -545,6 +554,8 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
     if (parsed.processes_interval_seconds) |v| cfg.processes_interval_seconds = std.math.clamp(v, 1, 60);
     if (parsed.processes_group) |v| cfg.processes_group = v;
     if (parsed.network_graph) |v| cfg.network_graph = v;
+    if (parsed.user_host) |v| cfg.user_host = v;
+    if (parsed.user_uptime_short) |v| cfg.user_uptime_short = v;
     if (parsed.network_interval_seconds) |v| cfg.network_interval_seconds = std.math.clamp(v, netrate_service.MIN_INTERVAL_S, netrate_service.MAX_INTERVAL_S);
     if (parsed.calendar_reminders) |v| cfg.calendar_reminders = @intCast(@min(@as(usize, v), widgets_mod.CAL_REMINDER_ROWS_MAX));
     if (parsed.notes_tabs) |v| cfg.notes.tabs = v;
@@ -948,6 +959,8 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
     widgets_mod.processes_rows = cfg.processes_count;
     widgets_mod.calendar_reminder_rows = cfg.calendar_reminders;
     widgets_mod.network_graph = cfg.network_graph;
+    widgets_mod.user_host = cfg.user_host;
+    widgets_mod.user_uptime_short = cfg.user_uptime_short;
     widgets_mod.notes_layout = cfg.notes;
     widgets_mod.weather_click = cfg.weather_click;
     for (cfg.widget_cfgs[0..cfg.widget_count]) |wc| {
@@ -972,6 +985,7 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
             .fastfetch => .{ .fastfetch = .{} },
             .processes => .{ .processes = .{} },
             .network => .{ .network = .{} },
+            .user => .{ .user = .{} },
         };
         if (wc.id == .calendar) {
             host.widgets[host.widget_count].calendar.configure(
@@ -1153,6 +1167,10 @@ fn saveConfig(host: *Host) void {
     if (!w.appendFmt(
         "  \"network_graph\": {s},\n  \"network_interval_seconds\": {d},\n",
         .{ jsonBool(g_shell_cfg.network_graph), g_shell_cfg.network_interval_seconds },
+    )) return;
+    if (!w.appendFmt(
+        "  \"user_host\": {s},\n  \"user_uptime_short\": {s},\n",
+        .{ jsonBool(g_shell_cfg.user_host), jsonBool(g_shell_cfg.user_uptime_short) },
     )) return;
     const nd_esc = jsonEscape(g_shell_cfg.notes_dir, &esc) orelse return;
     const nl = g_shell_cfg.notes;

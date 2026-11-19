@@ -83,6 +83,14 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    // User/uptime service behind the shell's User card (same
+    // convention: shared source, tests run from this build).
+    const userinfo_mod = b.createModule(.{
+        .root_source_file = b.path("src/userinfo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
     // Network-rate service behind the shell's Network card (same
     // convention: shared source, tests run from this build).
     const netrate_mod = b.createModule(.{
@@ -182,6 +190,12 @@ pub fn build(b: *Build) !void {
     const netrate_tests = b.addTest(.{ .root_module = netrate_mod, .use_llvm = true, .use_lld = true });
     const netrate_test_step = b.step("test-netrate", "Run src/netrate.zig unit tests");
     netrate_test_step.dependOn(&b.addRunArtifact(netrate_tests).step);
+
+    // `zig build test-userinfo`: src/userinfo.zig (passwd and uptime
+    // parsing, uptime wording, fake files in /tmp).
+    const userinfo_tests = b.addTest(.{ .root_module = userinfo_mod, .use_llvm = true, .use_lld = true });
+    const userinfo_test_step = b.step("test-userinfo", "Run src/userinfo.zig unit tests");
+    userinfo_test_step.dependOn(&b.addRunArtifact(userinfo_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.

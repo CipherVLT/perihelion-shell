@@ -32,8 +32,10 @@ const psvc = @import("procs");
 const rsvc = @import("reminders");
 // Network-rate service for the Network card: ../perihelionbar/src/netrate.zig.
 const nsvc = @import("netrate");
+// User/uptime service for the User card: ../perihelionbar/src/userinfo.zig.
+const usvc = @import("userinfo");
 
-pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes, network };
+pub const WidgetId = enum { clock, weather, media, system, calendar, watch, note1, icons, fastfetch, processes, network, user };
 
 /// Axis-aligned rect in surface coordinates. The host keeps one per widget
 /// (measured from the font at startup, placed from config).
@@ -197,6 +199,8 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
         // Header line, then one name/value line over a thin bar per row.
         .processes => .{ @intCast(PROC_W), @intCast(2 * CARD_PAD + lh + PROC_HEAD_GAP + @as(i64, @intCast(processes_rows)) * (lh + PROC_ROW_GAP + PROC_BAR_H + 2)) },
         // Header, optional graph, then the down/up line.
+        // Avatar disc beside the name, user@host and uptime lines.
+        .user => .{ @intCast(USER_W), @intCast(2 * CARD_PAD + @max(USER_AVATAR_D, userLines() * lh)) },
         .network => .{ @intCast(NET_W), @intCast(2 * CARD_PAD + 2 * lh + NET_GAP + (if (network_graph) NET_GRAPH_H + NET_GAP else 0)) },
     };
 }
@@ -308,6 +312,20 @@ pub var network_graph: bool = true;
 const NET_W: i64 = 250; // same column width as the Processes card
 const NET_GAP: i64 = 8;
 const NET_GRAPH_H: i64 = 44;
+
+// --- user card geometry ------------------------------------------------------
+
+/// shell.json user_host / user_uptime_short, set by the host before cards
+/// are measured.
+pub var user_host: bool = true;
+pub var user_uptime_short: bool = false;
+const USER_W: i64 = 240;
+const USER_AVATAR_D: i64 = 44;
+const USER_GAP: i64 = 12; // avatar → text column
+
+fn userLines() i64 {
+    return if (user_host) 3 else 2;
+}
 
 // Fastfetch-card geometry: logo column (text logo or distro glyph), then
 // the title, a rule, one row per field and a palette row.
@@ -2016,6 +2034,72 @@ pub const NetworkWidget = struct {
         const up = std.fmt.bufPrint(&ub, "\u{2191} {s}", .{nsvc.fmtRate(&up_buf, s.tx_rate)}) catch "";
         _ = c.drawText(left, b, down, accent);
         drawRight(c, right, b, up, dim(text_col, 0xCC));
+    }
+};
+
+/// Who is logged in and for how long: an initial-letter disc in the accent
+/// colour, the display name, login@host, and the uptime (the long wording
+/// falls back to the short one when it doesn't fit).
+pub const UserWidget = struct {
+    svc: usvc.Service = .{},
+
+    /// Due checks only; userinfo.zig reads the uptime every 30 s and
+    /// reports a change once a minute.
+    pub const interval_ms: i64 = 5000;
+
+    pub fn tick(self: *UserWidget) bool {
+        return self.svc.tick(monoMs());
+    }
+
+    pub fn paint(self: *const UserWidget, c: Canvas, r: Rect) void {
+        const s = &self.svc;
+        const lh = lineH(c.font);
+        const pad = c.zx(CARD_PAD);
+        const asc: i64 = c.font.ascentPx();
+        const text_col = c.theme.text_color;
+        const accent = c.theme.border_color;
+        const left: i64 = r.x + pad;
+        const right: i64 = r.x + @as(i64, @intCast(r.w)) - pad;
+        const inner_h: i64 = @as(i64, @intCast(r.h)) - 2 * pad;
+
+        // Avatar: the display name's first letter on an accent disc.
+        const d = c.zx(USER_AVATAR_D);
+        const cy: f64 = @floatFromInt(r.y + pad + @divTrunc(inner_h, 2));
+        const cx: f64 = @floatFromInt(left + @divTrunc(d, 2));
+        c.fillCircleAA(cx, cy, @as(f64, @floatFromInt(d)) / 2.0, dim(accent, 0xDD));
+        const name = s.display.slice();
+        if (name.len > 0) {
+            var lb: [8]u8 = undefined;
+            const first_len = std.unicode.utf8ByteSequenceLength(name[0]) catch 1;
+            const first = name[0..@min(first_len, name.len)];
+            @memcpy(lb[0..first.len], first);
+            if (first.len == 1) lb[0] = std.ascii.toUpper(lb[0]);
+            const letter = lb[0..first.len];
+            const lw = c.textWidth(letter);
+            const base: i64 = @as(i64, @intFromFloat(cy)) + @divTrunc(asc, 2) - c.zx(1);
+            _ = c.drawText(@as(i64, @intFromFloat(cx)) - @divTrunc(lw, 2), base, letter, c.theme.bg_color | 0xFF000000);
+        }
+
+        // Text column, centred against the avatar.
+        const tx = left + d + c.zx(USER_GAP);
+        const tw = right - tx;
+        const lines = userLines();
+        var b = r.y + pad + @divTrunc(inner_h - lines * lh, 2) + asc;
+        var fit: [96]u8 = undefined;
+        _ = c.drawText(tx, b, fitText(c, name, tw, &fit), text_col);
+        b += lh;
+        if (user_host) {
+            var hb: [112]u8 = undefined;
+            const uh = std.fmt.bufPrint(&hb, "{s}@{s}", .{ s.login.slice(), s.host.slice() }) catch s.login.slice();
+            var fit2: [120]u8 = undefined;
+            _ = c.drawText(tx, b, fitText(c, uh, tw, &fit2), dim(text_col, 0x99));
+            b += lh;
+        }
+        if (!s.have_uptime) return;
+        var ub: [64]u8 = undefined;
+        var up = if (user_uptime_short) usvc.fmtShort(&ub, s.uptime_s) else usvc.fmtLong(&ub, s.uptime_s);
+        if (!user_uptime_short and c.textWidth(up) > tw) up = usvc.fmtShort(&ub, s.uptime_s);
+        _ = c.drawText(tx, b, up, accent);
     }
 };
 
@@ -6268,6 +6352,7 @@ pub const Widget = union(WidgetId) {
     fastfetch: FastfetchWidget,
     processes: ProcessesWidget,
     network: NetworkWidget,
+    user: UserWidget,
 
     // By pointer, not by value: the union is as big as its largest card
     // (the Fastfetch card's rows and logo, ~27 KB), and this runs every tick.
@@ -6288,6 +6373,7 @@ pub const Widget = union(WidgetId) {
             .fastfetch => FastfetchWidget.interval_ms,
             .processes => ProcessesWidget.interval_ms,
             .network => NetworkWidget.interval_ms,
+            .user => UserWidget.interval_ms,
         };
     }
 
@@ -6326,6 +6412,8 @@ pub const Widget = union(WidgetId) {
             .processes => |*p| p.tick(),
             // Repaints only when a shown rate or the graph changed.
             .network => |*n| n.tick(),
+            // Repaints on first load and when the uptime's minute moves.
+            .user => |*u| u.tick(),
             .icons => |*ic| blk: {
                 break :blk ic.tick();
             },
@@ -6379,6 +6467,7 @@ pub const Widget = union(WidgetId) {
             .fastfetch => {},
             .processes => |*p| p.click(),
             .network => {},
+            .user => {},
         }
     }
 
@@ -6397,6 +6486,7 @@ pub const Widget = union(WidgetId) {
             .fastfetch => |*f| f.paint(c, r),
             .processes => |*p| p.paint(c, r),
             .network => |*n| n.paint(c, r),
+            .user => |*u| u.paint(c, r),
         }
     }
 };

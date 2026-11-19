@@ -21,10 +21,10 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 ## Desktop widgets
 
-`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, network speed, fastfetch, calendar with reminders, analog watch, sticky note.
+`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, network speed, user and uptime, fastfetch, calendar with reminders, analog watch, sticky note.
 
 - Same matugen colors as the bar, translucent cards.
-- Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, Network graph and refresh, calendar reminders, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
+- Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, Network graph and refresh, User card host and uptime wording, calendar reminders, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
 - **Ctrl + drag** any card to move it — position saves to `~/.config/perihelionbar/shell.json`.
 - Calendar reminders live in `~/.config/perihelionbar/reminders.txt` (`YYYY-MM-DD HH:MM text`, or `YYYY-MM-DD HH:MM lead text` to be notified `lead` days early). Click a day to add or remove one.
   - The Calendar card can list today's and upcoming reminders under the month, earliest first, under a **Reminders** header like the Notes card's. Today's are in your accent colour, and today's ones whose time has passed are dimmed. Click a row to open that day's reminders. Pick how many rows in Settings, or set `"calendar_reminders"` in `shell.json` to 0 (off, the default) up to 6. The card grows by one header plus the rows, so you may need to drag a card that sits right under it.
@@ -130,6 +130,15 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
   ```
 
   `network_interval_seconds` can be 1 to 10. With `network_graph: false` the card is just the header and the two speeds.
+
+- The User card shows the first letter of your name on an accent-coloured circle, your name (from your account's full name, or your login name), `user@host`, and how long the computer has been up (`up 3 hours, 5 minutes`, or `up 3h 5m` when the long form doesn't fit). Your name and the host name are read once at startup, and the uptime from `/proc/uptime`. The card redraws once a minute. Settings in `shell.json`:
+
+  ```json
+  "user_host": true,
+  "user_uptime_short": false
+  ```
+
+  `user_host: false` hides the `user@host` line. `user_uptime_short: true` always uses the short form.
 
 **Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `perihelionbar-shell overview toggle` works from scripts too.
 

@@ -93,6 +93,14 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
 
+    // User/uptime service for the User card (same convention).
+    const userinfo_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/userinfo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     // Network-rate service for the Network card (same convention).
     const netrate_mod = b.createModule(.{
         .root_source_file = b.path("../perihelionbar/src/netrate.zig"),
@@ -114,6 +122,7 @@ pub fn build(b: *Build) !void {
     widgets_mod.addImport("procs", procs_mod);
     widgets_mod.addImport("reminders", reminders_mod);
     widgets_mod.addImport("netrate", netrate_mod);
+    widgets_mod.addImport("userinfo", userinfo_mod);
     widgets_mod.addImport("logging", logging_mod);
 
     // Album-art decode for the media card: same gdk-pixbuf shim the bar
