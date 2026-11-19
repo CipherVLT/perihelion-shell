@@ -948,6 +948,8 @@ const nsvc = @import("notifs");
 // Control Center parsers: src/radios.zig, src/powerprof.zig.
 const radiosvc = @import("radios");
 const ppsvc = @import("powerprof");
+// Volume parsing and slider maths, shared with the shell's Glance: src/volume.zig.
+const volmath = @import("volume");
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
@@ -4637,16 +4639,6 @@ fn volUnquote(s: []const u8) []const u8 {
     return t;
 }
 
-/// First `NN%` in `line`, saturated to u8, or null when there is none.
-fn volFirstPercent(line: []const u8) ?u8 {
-    const pct = std.mem.indexOfScalar(u8, line, '%') orelse return null;
-    var s = pct;
-    while (s > 0 and line[s - 1] >= '0' and line[s - 1] <= '9') : (s -= 1) {}
-    if (s == pct) return null;
-    const v = std.fmt.parseInt(u16, line[s..pct], 10) catch return null;
-    return @intCast(@min(v, 255));
-}
-
 /// Parses `pactl get-sink-volume @DEFAULT_SINK@`, `pactl get-sink-mute
 /// @DEFAULT_SINK@`, `pactl get-source-volume @DEFAULT_SOURCE@`, `pactl
 /// get-source-mute @DEFAULT_SOURCE@` and `pactl list sink-inputs`
@@ -4706,7 +4698,7 @@ fn parseVolumeList(text: []const u8, out: *[VOL_MAX_ENTRIES]VolumeEntry) usize {
                 }
             }
         } else if (std.mem.startsWith(u8, line, "Volume:")) {
-            if (volFirstPercent(line)) |pct| {
+            if (volmath.firstPercent(line)) |pct| {
                 if (cur) |c| {
                     out[c].vol_pct = pct;
                 } else if (master_slot == 0) {
@@ -4715,8 +4707,7 @@ fn parseVolumeList(text: []const u8, out: *[VOL_MAX_ENTRIES]VolumeEntry) usize {
                     mic_vol = pct;
                 }
             }
-        } else if (std.mem.startsWith(u8, line, "Mute:")) {
-            const m = std.mem.eql(u8, std.mem.trim(u8, line["Mute:".len..], " \t"), "yes");
+        } else if (volmath.muteLine(line)) |m| {
             if (cur) |c| {
                 out[c].muted = m;
             } else if (master_slot == 0) {
@@ -4750,14 +4741,6 @@ fn parseVolumeList(text: []const u8, out: *[VOL_MAX_ENTRIES]VolumeEntry) usize {
         }
     }
     return base + n_apps;
-}
-
-/// Display value for a row: "muted" or "NN%". Same string the measurer and
-/// the painter use, so widths never drift. Takes the resolved mute/level
-/// (not the entry) so a mid-drag override renders identically.
-fn volValueText(muted: bool, pct: u8, buf: []u8) []const u8 {
-    if (muted) return "muted";
-    return std.fmt.bufPrint(buf, "{d}%", .{pct}) catch "?";
 }
 
 fn drawVolumeRows(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
@@ -4796,7 +4779,7 @@ fn drawVolumeRows(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
         const color = if (e.muted) dim_color else text_color;
         const baseline = y_start + @divTrunc(POPUP_ROW_HEIGHT + bar.font.ascentPx() - bar.font.descentPx(), 2);
         var vbuf: [8]u8 = undefined;
-        const value = volValueText(e.muted, disp_pct, &vbuf);
+        const value = volmath.valueText(e.muted, disp_pct, &vbuf);
         const value_w = textPixelWidth(bar.font, value);
         var ni: usize = 0;
         var x0: i64 = POPUP_PADDING_X;
@@ -4814,7 +4797,7 @@ fn drawVolumeRows(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
         const ty: i64 = @as(i64, y_start + POPUP_ROW_HEIGHT) + @divTrunc(@as(i64, VOL_SLIDER_H) - VOL_TRACK_H, 2);
         const scol = if (e.muted) dim_color else text_color;
         fillRoundedRect(pixels, pm.width, pm.height, tr.x0, ty, tr.x1, ty + VOL_TRACK_H, 3, current_config.appearance.popup_separator_color);
-        const fillx = volSliderValToX(tr.x0, tr.x1, disp_pct);
+        const fillx = volmath.sliderValToX(tr.x0, tr.x1, disp_pct);
         if (fillx > tr.x0) {
             fillRoundedRect(pixels, pm.width, pm.height, tr.x0, ty, fillx, ty + VOL_TRACK_H, 3, scol);
         }
@@ -4837,7 +4820,7 @@ fn openVolumeMixer(bar: *Bar) void {
         const e = &vol_entries[idx];
         if (e.id >= 0) apps += 1;
         var vbuf: [8]u8 = undefined;
-        const value = volValueText(e.muted, e.vol_pct, &vbuf);
+        const value = volmath.valueText(e.muted, e.vol_pct, &vbuf);
         const w: i32 = @intCast(textPixelWidth(bar.font, e.name()) + VOL_NAME_VALUE_GAP + textPixelWidth(bar.font, value) + POPUP_PADDING_X * 2);
         if (w > max_w) max_w = w;
     }
@@ -4867,20 +4850,6 @@ const VOL_DRAG_PX: i32 = 4;
 /// Track x-bounds within a popup of width `pm_width`.
 fn volSliderTrack(pm_width: u32) struct { x0: i64, x1: i64 } {
     return .{ .x0 = POPUP_PADDING_X, .x1 = @as(i64, @intCast(pm_width)) - POPUP_PADDING_X };
-}
-
-/// Thumb center x for a 0-100 value on a track.
-fn volSliderValToX(x0: i64, x1: i64, val: u8) i64 {
-    return x0 + @divTrunc((x1 - x0) * @as(i64, val), 100);
-}
-
-/// 0-100 value for a pointer x on a track (clamped for overshoot).
-fn volSliderXToVal(x0: i64, x1: i64, x: i64) u8 {
-    if (x1 <= x0) return 0;
-    const v = @divTrunc((x - x0) * 100, x1 - x0);
-    if (v < 0) return 0;
-    if (v > 100) return 100;
-    return @intCast(v);
 }
 
 /// True when any bar currently shows the mixer (refreshes go out then).
@@ -5214,7 +5183,7 @@ const VOL_OSD_ALIVE_TICKS: u32 = 34; // ~2s on the 60ms tick
 /// reading, and never over the mixer panel.
 fn showVolumeOSD(bar: *Bar) void {
     var pbuf: [16]u8 = undefined;
-    if (!parseVolumePoll(bar.volume.text(), &pbuf).ok) return;
+    if (!volmath.parsePoll(bar.volume.text(), &pbuf).ok) return;
     if (bar.popup) |pm| {
         if (pm.kind == .volume or pm.kind == .notifications) return;
         if (!isOsd(pm.kind)) closePopup(bar);
@@ -5240,7 +5209,7 @@ fn showVolumeOSD(bar: *Bar) void {
 
 fn drawVolumeOSD(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
     var pbuf: [16]u8 = undefined;
-    const vol = parseVolumePoll(bar.volume.text(), &pbuf);
+    const vol = volmath.parsePoll(bar.volume.text(), &pbuf);
     if (!vol.ok) return;
     // Muted reads dimmed throughout; the bar
     // underneath still shows where it will land on unmute.
@@ -5248,7 +5217,7 @@ fn drawVolumeOSD(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
     var vbuf: [8]u8 = undefined;
     const shown = if (vol.muted) "muted" else std.fmt.bufPrint(&vbuf, "{d}%", .{vol.pct}) catch "?";
     const fill_col = if (vol.muted) current_config.appearance.popup_disabled_color else current_config.appearance.workspace_active_color;
-    drawOsdBody(bar, pm, pixels, volumeIconFor(vol.pct), shown, vol.pct, col, fill_col);
+    drawOsdBody(bar, pm, pixels, volmath.iconFor(vol.pct), shown, vol.pct, col, fill_col);
 }
 
 /// Brightness OSD: the same panel as the volume OSD, a sun icon that grows
@@ -5851,7 +5820,7 @@ fn ccDrawSlider(bar: *Bar, pm: *PopupMenu, pixels: [*]u32, row: i64, icon: []con
     const ty = mid - @divTrunc(th, 2);
     fillRoundedRect(pixels, pm.width, pm.height, tr.x0, ty, tr.x1, ty + th, 3, ap.popup_separator_color);
     if (avail) {
-        const fx = volSliderValToX(tr.x0, tr.x1, pct);
+        const fx = volmath.sliderValToX(tr.x0, tr.x1, pct);
         const fill = if (dimmed_fill) ap.popup_disabled_color else ap.workspace_active_color;
         if (fx > tr.x0) fillRoundedRect(pixels, pm.width, pm.height, tr.x0, ty, fx, ty + th, 3, fill);
         const r: i64 = 7;
@@ -5868,7 +5837,7 @@ fn drawControlCenter(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
     // Volume: the master level from the wpctl poll (the drag shows its
     // own value until released).
     var pbuf: [16]u8 = undefined;
-    const vol = parseVolumePoll(bar.volume.text(), &pbuf);
+    const vol = volmath.parsePoll(bar.volume.text(), &pbuf);
     const dragging_vol = pm.vol_drag_row != null and pm.vol_drag_row.? == 0 and pm.vol_drag_moved;
     const vpct: u8 = if (dragging_vol) pm.vol_drag_val else vol.pct;
     var vb: [8]u8 = undefined;
@@ -5961,7 +5930,7 @@ fn ccPress(bar: *Bar, pm: *PopupMenu) void {
             if (row == 1 and !g_backlight.present()) return;
             const tr = ccTrack(pm.width);
             pm.vol_drag_row = row;
-            pm.vol_drag_val = volSliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
+            pm.vol_drag_val = volmath.sliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
             pm.vol_press_x = pm.pointer_x;
             pm.vol_press_y = pm.pointer_y;
             pm.vol_drag_moved = true; // a click on the track sets that level
@@ -8792,45 +8761,6 @@ fn startVolumeFetch(cmd: *PolledCommand) void {
     const command = std.fmt.bufPrintSentinel(&cbuf, "pactl get-sink-volume {s} 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'; pactl get-sink-mute {s} 2>/dev/null | grep -q yes && echo MUTED", .{ sink, sink }, 0) catch return;
     var argv = [_:null]?[*:0]const u8{ "sh", "-c", command.ptr, null };
     cmd.startFetch("/bin/sh", &argv);
-}
-
-/// Parsed volume poll text ("<digits>[\nMUTED]"): the level, the mute flag,
-/// and the digits slice for labels. `ok` is false on empty/garbled output
-/// (PipeWire down, unknown sink) — callers show nothing rather than stale.
-const VolumePoll = struct {
-    pct: u8 = 0,
-    muted: bool = false,
-    text: []const u8 = "",
-    ok: bool = false,
-};
-
-fn parseVolumePoll(text: []const u8, buf: []u8) VolumePoll {
-    var it = std.mem.splitScalar(u8, text, '\n');
-    var digits: []const u8 = "";
-    var muted = false;
-    while (it.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r");
-        if (line.len == 0) continue;
-        if (std.mem.eql(u8, line, "MUTED")) {
-            muted = true;
-            continue;
-        }
-        if (digits.len == 0) {
-            var all_digits = true;
-            for (line) |c| {
-                if (c < '0' or c > '9') {
-                    all_digits = false;
-                    break;
-                }
-            }
-            if (all_digits) digits = line;
-        }
-    }
-    if (digits.len == 0) return .{};
-    const pct: u8 = @intCast(@min(std.fmt.parseInt(u32, digits, 10) catch 0, 255));
-    const n = @min(digits.len, buf.len);
-    @memcpy(buf[0..n], digits[0..n]);
-    return .{ .pct = pct, .muted = muted, .text = buf[0..n], .ok = true };
 }
 
 // Finds the first playerctl-visible player that's actually Playing or
@@ -11760,13 +11690,6 @@ fn drawLavaBackground(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, 
 /// launcher_gap instead: a cell per icon would space them arbitrarily far
 /// apart, and their width is data-driven rather than a label's, so there is
 /// no meaningful "natural width" to pad out to a minimum.
-/// Speaker icon tier for a 0-100 volume (wireplumber's "default"
-/// format-icons array: low/medium/high, U+F026/F027/F028). Shared by the
-/// volume module and the OSD so they never disagree.
-fn volumeIconFor(pct: u8) []const u8 {
-    return if (pct >= 67) "\u{f028}" else if (pct >= 34) "\u{f027}" else "\u{f026}";
-}
-
 fn drawRightGroup(
     pixels: [*]u32,
     buf_width: u32,
@@ -11839,7 +11762,7 @@ fn drawRightGroup(
                 if (!first) x_end -= MODULE_GAP;
                 first = false;
                 const vol_pct: u8 = @intCast(@min(std.fmt.parseInt(u32, volume_text, 10) catch 0, 255));
-                const vol_icon: []const u8 = volumeIconFor(vol_pct);
+                const vol_icon: []const u8 = volmath.iconFor(vol_pct);
                 var vol_buf: [24]u8 = undefined;
                 const vol_label = std.fmt.bufPrint(&vol_buf, "{s} {s}", .{ vol_icon, volume_text }) catch vol_icon;
                 const cell = reserveRightCell(x_end, textPixelWidth(font, vol_label), center_start_x);
@@ -12340,7 +12263,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                         }
                         if (pm.vol_drag_row != null) {
                             const tr = ccTrack(pm.width);
-                            const v = volSliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
+                            const v = volmath.sliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
                             if (v != pm.vol_drag_val) {
                                 pm.vol_drag_val = v;
                                 drawPopup(bar) catch {};
@@ -12355,7 +12278,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                         }
                         if (pm.vol_drag_moved) {
                             const tr = volSliderTrack(pm.width);
-                            const v = volSliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
+                            const v = volmath.sliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
                             if (v != pm.vol_drag_val) {
                                 pm.vol_drag_val = v;
                                 drawPopup(bar) catch {};
@@ -13154,7 +13077,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
     }
     const center_start_x = centerGroupStartX(bar.width, bar.font, time_text, barWorkspaces(bar), mpris_text, mpris_playing);
     var volume_buf: [16]u8 = undefined;
-    const vol_poll = parseVolumePoll(bar.volume.text(), &volume_buf);
+    const vol_poll = volmath.parsePoll(bar.volume.text(), &volume_buf);
     const volume_text = vol_poll.text;
     var weather_buf: [32]u8 = undefined;
     const weather_text = bar.weather.label(&weather_buf);
@@ -13708,36 +13631,36 @@ test "volume poll and slider math" {
     const t = std.testing;
     // Volume poll text ("67" / "67\nMUTED") parses to level + mute flag.
     var pbuf: [16]u8 = undefined;
-    const p1 = parseVolumePoll("67\n", &pbuf);
+    const p1 = volmath.parsePoll("67\n", &pbuf);
     try t.expect(p1.ok);
     try t.expectEqual(@as(u8, 67), p1.pct);
     try t.expect(!p1.muted);
     try t.expectEqualStrings("67", p1.text);
-    const p2 = parseVolumePoll("0\nMUTED\n", &pbuf);
+    const p2 = volmath.parsePoll("0\nMUTED\n", &pbuf);
     try t.expect(p2.ok);
     try t.expect(p2.muted);
     try t.expectEqual(@as(u8, 0), p2.pct);
-    const p3 = parseVolumePoll("", &pbuf);
+    const p3 = volmath.parsePoll("", &pbuf);
     try t.expect(!p3.ok);
-    const p4 = parseVolumePoll("hello\n", &pbuf);
+    const p4 = volmath.parsePoll("hello\n", &pbuf);
     try t.expect(!p4.ok);
     // Track geometry round-trips: value -> thumb x -> value.
     const tr = volSliderTrack(200);
     try t.expectEqual(@as(i64, POPUP_PADDING_X), tr.x0);
     try t.expectEqual(@as(i64, 200) - POPUP_PADDING_X, tr.x1);
-    try t.expectEqual(tr.x0, volSliderValToX(tr.x0, tr.x1, 0));
-    try t.expectEqual(tr.x1, volSliderValToX(tr.x0, tr.x1, 100));
-    try t.expectEqual(@as(u8, 0), volSliderXToVal(tr.x0, tr.x1, tr.x0));
-    try t.expectEqual(@as(u8, 100), volSliderXToVal(tr.x0, tr.x1, tr.x1));
-    try t.expectEqual(@as(u8, 50), volSliderXToVal(tr.x0, tr.x1, @divTrunc(tr.x0 + tr.x1, 2)));
+    try t.expectEqual(tr.x0, volmath.sliderValToX(tr.x0, tr.x1, 0));
+    try t.expectEqual(tr.x1, volmath.sliderValToX(tr.x0, tr.x1, 100));
+    try t.expectEqual(@as(u8, 0), volmath.sliderXToVal(tr.x0, tr.x1, tr.x0));
+    try t.expectEqual(@as(u8, 100), volmath.sliderXToVal(tr.x0, tr.x1, tr.x1));
+    try t.expectEqual(@as(u8, 50), volmath.sliderXToVal(tr.x0, tr.x1, @divTrunc(tr.x0 + tr.x1, 2)));
     // Overshoot clamps both ways; degenerate tracks read 0.
-    try t.expectEqual(@as(u8, 0), volSliderXToVal(tr.x0, tr.x1, tr.x0 - 40));
-    try t.expectEqual(@as(u8, 100), volSliderXToVal(tr.x0, tr.x1, tr.x1 + 40));
-    try t.expectEqual(@as(u8, 0), volSliderXToVal(50, 50, 60));
+    try t.expectEqual(@as(u8, 0), volmath.sliderXToVal(tr.x0, tr.x1, tr.x0 - 40));
+    try t.expectEqual(@as(u8, 100), volmath.sliderXToVal(tr.x0, tr.x1, tr.x1 + 40));
+    try t.expectEqual(@as(u8, 0), volmath.sliderXToVal(50, 50, 60));
     // Value text honors mute.
     var vb: [8]u8 = undefined;
-    try t.expectEqualStrings("muted", volValueText(true, 80, &vb));
-    try t.expectEqualStrings("80%", volValueText(false, 80, &vb));
+    try t.expectEqualStrings("muted", volmath.valueText(true, 80, &vb));
+    try t.expectEqualStrings("80%", volmath.valueText(false, 80, &vb));
 }
 
 test "running app matching and taskbar tail" {

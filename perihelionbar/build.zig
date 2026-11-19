@@ -111,6 +111,14 @@ pub fn build(b: *Build) !void {
     });
     exe_mod.addImport("notifs", notifs_mod);
     // Control Center: Wi-Fi / Bluetooth and power-profile output parsing.
+    // Volume parsing and slider maths (src/volume.zig): the volume module,
+    // mixer, OSD and Control Center here, and Glance's Media tab in the shell.
+    const volume_mod = b.createModule(.{
+        .root_source_file = b.path("src/volume.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("volume", volume_mod);
     const radios_mod = b.createModule(.{
         .root_source_file = b.path("src/radios.zig"),
         .target = target,
@@ -248,6 +256,11 @@ pub fn build(b: *Build) !void {
     const radios_tests = b.addTest(.{ .root_module = radios_mod, .use_llvm = true, .use_lld = true });
     const radios_test_step = b.step("test-radios", "Run src/radios.zig unit tests");
     radios_test_step.dependOn(&b.addRunArtifact(radios_tests).step);
+    // `zig build test-volume`: src/volume.zig (pactl lines, the poll text,
+    // slider value <-> x, labels and icon tiers).
+    const volume_tests = b.addTest(.{ .root_module = volume_mod, .use_llvm = true, .use_lld = true });
+    const volume_test_step = b.step("test-volume", "Run src/volume.zig unit tests");
+    volume_test_step.dependOn(&b.addRunArtifact(volume_tests).step);
     const powerprof_tests = b.addTest(.{ .root_module = powerprof_mod, .use_llvm = true, .use_lld = true });
     const powerprof_test_step = b.step("test-powerprof", "Run src/powerprof.zig unit tests");
     powerprof_test_step.dependOn(&b.addRunArtifact(powerprof_tests).step);

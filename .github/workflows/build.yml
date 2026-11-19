@@ -89,6 +89,9 @@ jobs:
         run: |
           /opt/zig/zig build test-radios
           /opt/zig/zig build test-powerprof
+      - name: Unit-test the shared volume maths (pactl lines, poll text, slider value <-> x)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-volume
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc
