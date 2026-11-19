@@ -2538,7 +2538,6 @@ const WIDGET_TABLE = [_]WidgetToggle{
     .{ .id = "media", .title = "Media", .subtitle = "Now-playing card with cover art and controls" },
     .{ .id = "system", .title = "System", .subtitle = "System stats card" },
     .{ .id = "calendar", .title = "Calendar", .subtitle = "Calendar card with reminders" },
-    .{ .id = "watch", .title = "Watch", .subtitle = "Analog watch" },
     .{ .id = "note1", .title = "Notes", .subtitle = "Sticky notes with tabs and checklists" },
     .{ .id = "icons", .title = "Desktop icons", .subtitle = "~/Desktop shortcuts as a grid of launchable icons" },
     .{ .id = "fastfetch", .title = "Fastfetch", .subtitle = "System info card with your fastfetch logo" },

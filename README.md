@@ -21,7 +21,7 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 ## Desktop widgets
 
-`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, network speed, user and uptime, fastfetch, calendar with reminders, analog watch, sticky note.
+`perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, network speed, user and uptime, fastfetch, calendar with reminders, sticky note.
 
 - Same matugen colors as the bar, translucent cards.
 - Turn cards on or off, and pick their options (clock face, System bars or rings, units, Processes rows, Network graph and refresh, User card host and uptime wording, calendar reminders, note tabs and checklists), in **Perihelion Settings → Appearance → Desktop Widgets / Desktop Card Options**. The options are saved in `shell.json`, and the cards restart to apply them.
