@@ -262,6 +262,8 @@ try:
     mk = pt.mako_config(pt.build_theme("macchiato", ["blue", "pink", "yellow"]))
     check("border-color=#8aadf4" in mk and "background-color=#24273aee" in mk and "[urgency=high]" in mk,
           "mako: notification colors from the palette")
+    check(mk.rstrip().endswith("[mode=do-not-disturb]\ninvisible=1"),
+          "mako: do-not-disturb mode hides pop-ups, last section")
 
     # 6c. Wallpaper tint: backgrounds take the wallpaper's hue
     for name, rgb, lo, hi in (("purple", (150, 60, 210), 280, 330), ("green", (40, 190, 80), 120, 170)):
