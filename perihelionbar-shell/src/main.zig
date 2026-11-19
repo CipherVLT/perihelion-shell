@@ -21,6 +21,8 @@ const logging = @import("logging");
 const widgets_mod = @import("widgets");
 const glass = @import("glass.zig");
 const overview_mod = @import("overview");
+const glance = @import("glance.zig");
+const glance_view = @import("glance_view.zig");
 const weather_service = @import("weather");
 const temps_service = @import("temps");
 const ff_service = @import("fastfetch");
@@ -75,6 +77,9 @@ const JsonConfig = struct {
     holiday_country: ?[]const u8 = null,
     holiday_region: ?[]const u8 = null,
     overview_favorites: ?[]const []const u8 = null,
+    // Glance dashboard (Super+I): on/off and the page it opens on.
+    glance_enabled: ?bool = null,
+    glance_start_tab: ?[]const u8 = null,
     // Weather card (widgets.zig WeatherWidget / weather.zig). Coordinates
     // win over a city; with neither, IP geolocation (when allowed).
     weather_latitude: ?f64 = null,
@@ -210,6 +215,11 @@ const ShellConfig = struct {
     notes_dir: []const u8 = "",
     /// File number of the open note (noteN.txt), saved on each switch.
     notes_page: u8 = 1,
+    /// Glance dashboard (Super+I, `perihelion-shell glance`): off means the
+    /// command answers "off" and nothing is ever built for it.
+    glance_enabled: bool = true,
+    /// The page a plain `glance toggle` opens on.
+    glance_start_tab: glance.Tab = .overview,
     /// Overview dash launch commands (shell.json `overview_favorites`).
     fav_cmds: [overview_mod.MAX_FAVS][]const u8 = undefined,
     fav_count: usize = 0,
@@ -568,6 +578,13 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
     if (parsed.notes_lines) |v| cfg.notes.lines = std.math.clamp(@as(i64, v), 3, 30);
     if (parsed.notes_dir) |v| cfg.notes_dir = v;
     if (parsed.notes_page) |v| cfg.notes_page = @intCast(std.math.clamp(v, 1, widgets_mod.NoteWidget.MAX_PAGES));
+    if (parsed.glance_enabled) |v| cfg.glance_enabled = v;
+    if (parsed.glance_start_tab) |v| {
+        cfg.glance_start_tab = glance.Tab.parse(v) orelse blk: {
+            logging.warn("config: glance_start_tab \"{s}\" unknown (overview|media|weather) — using overview", .{v});
+            break :blk .overview;
+        };
+    }
     if (parsed.overview_favorites) |fs| {
         // An explicit list replaces the defaults entirely (including an
         // explicit empty list = no dash). Strings are alloc_always, so they
@@ -690,6 +707,7 @@ fn reloadTheme(host: *Host) void {
     // Every cached tile still holds the old colours, so invalidate all of
     // them — the same frame-wide reset the hover path uses.
     markAllDirty(host);
+    if (host.glance) |gl| gl.themeChanged();
     logging.step("theme: reloaded matugen colors", .{});
 }
 
@@ -846,6 +864,11 @@ const Host = struct {
     /// True while pointer focus sits on the overview surface rather than a
     /// desktop surface (routes motion/clicks there instead of widgets).
     pointer_over_ov: bool = false,
+    /// Glance (Super+I): its own overlay surface, built on open and freed
+    /// on close. Null when shell.json switches it off.
+    glance: ?*glance_view.Glance = null,
+    /// True while pointer focus sits on the Glance surface.
+    pointer_over_gl: bool = false,
 };
 
 /// The pre-Open-Meteo card read a city or ZIP from the first line of
@@ -1042,6 +1065,26 @@ fn initWidgets(host: *Host, cfg: ShellConfig) void {
     }
 }
 
+/// The allocator, for Glance's card setup (a plain function pointer, so it
+/// can't carry the Host along).
+var g_gpa: std.mem.Allocator = undefined;
+
+/// Glance's fresh card instances get the desktop cards' settings: weather
+/// place and units, calendar holidays and reminders, temperature sensors.
+/// Clock, User and Media read the shared layout globals initWidgets set.
+fn setupGlanceCards(cards: *glance_view.Cards) void {
+    for (cards) |*c| switch (c.*) {
+        .weather => |*w| configureWeather(w, g_gpa, &g_shell_cfg),
+        .calendar => |*k| k.configure(reminders_path, g_shell_cfg.holiday_country, g_shell_cfg.holiday_region),
+        .system => |*sy| sy.configure(.{
+            .interval_ms = @as(i64, g_shell_cfg.system_temp_interval_seconds) * 1000,
+            .gpu = g_shell_cfg.system_gpu,
+            .nvidia_smi = g_shell_cfg.system_nvidia_smi,
+        }, g_shell_cfg.system_temp_units),
+        else => {},
+    };
+}
+
 /// Restricts the desktop surface's input to the union of widget rects so the
 /// rest of the desktop passes clicks through to windows.
 fn setInputRegion(host: *Host, d: *Desktop) void {
@@ -1181,6 +1224,10 @@ fn saveConfig(host: *Host) void {
         "  \"notes_tabs\": {s},\n  \"notes_checklists\": {s},\n  \"notes_lines\": {d},\n  \"notes_dir\": \"{s}\",\n  \"notes_page\": {d},\n",
         .{ jsonBool(nl.tabs), jsonBool(nl.checklists), nl.lines, nd_esc, g_shell_cfg.notes_page },
     )) return;
+    if (!w.appendFmt(
+        "  \"glance_enabled\": {s},\n  \"glance_start_tab\": \"{s}\",\n",
+        .{ jsonBool(g_shell_cfg.glance_enabled), @tagName(g_shell_cfg.glance_start_tab) },
+    )) return;
     // overview_favorites round-trips too — saveConfig must not drop keys it
     // didn't just write (that's the whole round-trip contract here).
     if (!w.append("  \"overview_favorites\": [")) return;
@@ -1270,7 +1317,11 @@ fn refreshBackdrop(host: *Host, d: *const Desktop) void {
     host.backdrop_checked = true;
     var buf: [512]u8 = undefined;
     const path = currentWallpaper(host.gpa, &buf);
-    if (host.backdrop.loadIfChanged(host.gpa, path, @max(d.width, d.height))) markAllDirty(host);
+    if (host.backdrop.loadIfChanged(host.gpa, path, @max(d.width, d.height))) {
+        markAllDirty(host);
+        // An open Glance frosts its panel from the same picture.
+        if (host.glance) |gl| gl.themeChanged();
+    }
 }
 
 fn paintDesktop(host: *Host, d: *Desktop) !void {
@@ -1575,6 +1626,16 @@ fn updateHover(host: *Host) bool {
 fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
     switch (event) {
         .enter => |e| {
+            if (host.glance) |gl| {
+                if (gl.surface == e.surface) {
+                    host.pointer_over_gl = true;
+                    host.pointer_over_ov = false;
+                    host.pointer_desktop = null;
+                    gl.motion(e.surface_x.toInt(), e.surface_y.toInt());
+                    return;
+                }
+            }
+            host.pointer_over_gl = false;
             if (host.overview) |ov| {
                 if (ov.surface == e.surface) {
                     host.pointer_over_ov = true;
@@ -1596,6 +1657,11 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
             _ = iconsPointerChanged(host, true);
         },
         .leave => {
+            if (host.pointer_over_gl) {
+                host.pointer_over_gl = false;
+                if (host.glance) |gl| gl.leave();
+                return;
+            }
             if (host.pointer_over_ov) {
                 host.pointer_over_ov = false;
                 if (host.overview) |ov| ov.leave();
@@ -1611,6 +1677,10 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
             _ = iconsPointerChanged(host, false);
         },
         .motion => |e| {
+            if (host.pointer_over_gl) {
+                if (host.glance) |gl| gl.motion(e.surface_x.toInt(), e.surface_y.toInt());
+                return;
+            }
             if (host.pointer_over_ov) {
                 if (host.overview) |ov| ov.motion(e.surface_x.toInt(), e.surface_y.toInt());
                 return;
@@ -1655,6 +1725,10 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
             }
         },
         .button => |e| {
+            if (host.pointer_over_gl) {
+                if (host.glance) |gl| gl.button(e.button, e.state == .pressed);
+                return;
+            }
             if (host.pointer_over_ov) {
                 if (host.overview) |ov| ov.button(e.button, e.state == .pressed);
                 return;
@@ -1665,7 +1739,7 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, host: *Host) void {
         // Wheel over the notes card scrolls its text (the other cards
         // have nothing to scroll).
         .axis => |e| {
-            if (host.pointer_over_ov or e.axis != .vertical_scroll) return;
+            if (host.pointer_over_ov or host.pointer_over_gl or e.axis != .vertical_scroll) return;
             onWheel(host, e.value.toDouble());
         },
         .axis_source => {},
@@ -2026,6 +2100,13 @@ fn repeatWanted(host: *Host) bool {
 /// unless a note is being edited. The key is decoded through xkb into
 /// UTF-32 before handing it on.
 fn keyPress(host: *Host, keycode: u32) void {
+    // Glance holds the keyboard exclusively while it's up.
+    if (host.glance) |gl| {
+        if (gl.keyPress(keycode)) {
+            logging.step("kb: glance key={d}", .{keycode});
+            return;
+        }
+    }
     if (host.overview) |ov| {
         if (ov.takesKeys()) {
             var ov_utf32: u32 = 0;
@@ -2331,6 +2412,12 @@ fn ipcAccept(listen_fd: posix.fd_t, host: *Host) void {
 
 fn ipcHandle(host: *Host, data: []const u8) []const u8 {
     const trimmed = std.mem.trim(u8, data, " \t\r\n");
+    // `glance [toggle|open|close] [overview|media|weather]` (Super+I).
+    if (glance.parseLine(trimmed)) |parsed| {
+        const cmd = parsed catch return "err usage: glance [toggle|open|close] [overview|media|weather]\n";
+        const gl = host.glance orelse return "err glance is off (shell.json glance_enabled)\n";
+        return if (gl.command(cmd)) "ok\n" else "err glance could not open\n";
+    }
     var it = std.mem.splitScalar(u8, trimmed, ' ');
     const head = it.next() orelse return "err empty\n";
     if (!std.mem.eql(u8, head, "overview")) return "err unknown command\n";
@@ -2351,16 +2438,36 @@ fn cliPrint(fd: c_int, msg: []const u8) void {
     _ = std.c.write(fd, msg.ptr, msg.len);
 }
 
-/// Client side of the control socket: send, print the daemon's reply,
-/// exit 0 when it starts with "ok". Never returns.
+const CLI_USAGE =
+    "usage: perihelion-shell [overview [toggle|open|close]]\n" ++
+    "       perihelion-shell glance [toggle|open|close] [overview|media|weather]\n";
+
 fn cliOverview(action: []const u8) noreturn {
     if (!std.mem.eql(u8, action, "toggle") and
         !std.mem.eql(u8, action, "open") and
         !std.mem.eql(u8, action, "close"))
     {
-        cliPrint(2, "usage: perihelionbar-shell overview [toggle|open|close]\n");
+        cliPrint(2, CLI_USAGE);
         std.process.exit(2);
     }
+    var msg_buf: [64]u8 = undefined;
+    cliSend(std.fmt.bufPrint(&msg_buf, "overview {s}\n", .{action}) catch unreachable);
+}
+
+/// `perihelion-shell glance ...`: checked here first, so a typo gets the
+/// usage line without bothering the daemon.
+fn cliGlance(args: []const []const u8) noreturn {
+    const cmd = glance.parseArgs(args) catch {
+        cliPrint(2, CLI_USAGE);
+        std.process.exit(2);
+    };
+    var msg_buf: [64]u8 = undefined;
+    cliSend(glance.formatRequest(&msg_buf, cmd) catch unreachable);
+}
+
+/// Client side of the control socket: send one request line, print the
+/// daemon's reply, exit 0 when it starts with "ok". Never returns.
+fn cliSend(msg: []const u8) noreturn {
     var path_buf: [IPC_PATH_LEN]u8 = undefined;
     const path = ipcSockPathZ(&path_buf) orelse {
         cliPrint(2, "perihelion-shell: XDG_RUNTIME_DIR not set\n");
@@ -2383,8 +2490,6 @@ fn cliOverview(action: []const u8) noreturn {
         std.process.exit(1);
     }
 
-    var msg_buf: [64]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "overview {s}\n", .{action}) catch unreachable;
     var off: usize = 0;
     while (off < msg.len) {
         const n = std.c.write(fd, msg[off..].ptr, msg.len - off);
@@ -2427,10 +2532,23 @@ pub fn main(init: std.process.Init.Minimal) !void {
         if (std.mem.eql(u8, arg, "overview")) {
             cliOverview(args_it.next() orelse "toggle");
         }
-        var ubuf: [256]u8 = undefined;
+        if (std.mem.eql(u8, arg, "glance")) {
+            var words: [glance.MAX_ARGS][]const u8 = undefined;
+            var n: usize = 0;
+            while (args_it.next()) |a| {
+                if (n == words.len) {
+                    cliPrint(2, CLI_USAGE);
+                    std.process.exit(2);
+                }
+                words[n] = a;
+                n += 1;
+            }
+            cliGlance(words[0..n]);
+        }
+        var ubuf: [384]u8 = undefined;
         const usage = std.fmt.bufPrint(
             &ubuf,
-            "perihelion-shell: unknown command \"{s}\"\nusage: perihelion-shell [overview [toggle|open|close]]\n",
+            "perihelion-shell: unknown command \"{s}\"\n" ++ CLI_USAGE,
             .{arg},
         ) catch "perihelion-shell: unknown command\n";
         cliPrint(2, usage);
@@ -2461,6 +2579,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     else
         std.heap.c_allocator;
 
+    g_gpa = gpa;
     resolveConfigPaths();
     var cfg = loadConfig(gpa);
     // Per-widget kill switches (perihelionbar-config writes the disabled list):
@@ -2552,6 +2671,29 @@ pub fn main(init: std.process.Init.Minimal) !void {
         gpa.destroy(ov);
     };
 
+    // Glance (Super+I): wiring only. Its surface, panel buffer and card
+    // instances exist only while it's open (glance_view.zig).
+    if (cfg.glance_enabled) {
+        if (gpa.create(glance_view.Glance)) |gl| {
+            gl.* = .{
+                .gpa = gpa,
+                .font = &font,
+                .theme = &host.theme,
+                .compositor = compositor,
+                .shm = shm,
+                .layer_shell = layer_shell,
+                .backdrop = &host.backdrop,
+                .setup = setupGlanceCards,
+                .start_tab = cfg.glance_start_tab,
+            };
+            host.glance = gl;
+        } else |err| logging.err("glance: init failed: {}", .{err});
+    }
+    defer if (host.glance) |gl| {
+        gl.deinit();
+        gpa.destroy(gl);
+    };
+
     // One desktop layer surface per output (or a single compositor-picked
     // surface if the registry reported none), anchored edge-to-edge on the
     // bottom layer — above the wallpaper's background level, never below
@@ -2637,11 +2779,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
     if (!g_selftest) writeShellPidfile();
 
     // Slot 0: display fd, slot 1: control socket (fixed), slots 2+:
-    // widget fetch pipes (refreshed every loop).
+    // widget fetch pipes, then Glance's card pipes while it's open
+    // (refreshed every loop).
     var poll_fds = [_]posix.pollfd{
         .{ .fd = display.getFd(), .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = ipc_fd, .events = posix.POLL.IN, .revents = 0 },
-    } ++ [_]posix.pollfd{.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }} ** MAX_WIDGETS;
+    } ++ [_]posix.pollfd{.{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }} ** (MAX_WIDGETS + glance.CARD_COUNT);
 
     while (true) {
         // Refresh the pipe fds (they change across fetch cycles).
@@ -2655,6 +2798,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
                     break;
                 }
             }
+        }
+        if (host.glance) |gl| {
+            var gl_fds: [glance.CARD_COUNT]posix.fd_t = undefined;
+            const n = gl.pollFds(&gl_fds);
+            for (poll_fds[2 + MAX_WIDGETS ..][0..n], gl_fds[0..n]) |*pf, fd| pf.fd = fd;
         }
 
         _ = display.flush();
@@ -2676,6 +2824,10 @@ pub fn main(init: std.process.Init.Minimal) !void {
         // wake the loop even with no widget cadence pending.
         if (host.overview) |ov| {
             if (ov.deadline()) |d| next_deadline = @min(next_deadline, d);
+        }
+        // Glance: animation frames, or its cards' cadences while open.
+        if (host.glance) |gl| {
+            if (gl.deadline()) |d| next_deadline = @min(next_deadline, d);
         }
         const timeout: i32 = blk: {
             if (next_deadline == std.math.maxInt(i64)) break :blk -1; // nothing to wake for; wait for events only
@@ -2707,6 +2859,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
                 for (0..host.widget_count) |i| {
                     if (host.widgets[i].onPipe()) markDirty(&host, i);
                 }
+                if (host.glance) |gl| gl.onPipes();
             }
         }
 
@@ -2724,6 +2877,12 @@ pub fn main(init: std.process.Init.Minimal) !void {
         if (host.overview) |ov| {
             ov.pollTimeout(now2);
             if (ov.anim == .closed and host.pointer_over_ov) host.pointer_over_ov = false;
+        }
+        // Glance: animation step, due card ticks, at most one frame. Same
+        // pointer hygiene once its surface is gone.
+        if (host.glance) |gl| {
+            gl.tick(now2);
+            if (gl.surface == null and host.pointer_over_gl) host.pointer_over_gl = false;
         }
 
         for (0..host.widget_count) |i| {

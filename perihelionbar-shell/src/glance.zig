@@ -139,16 +139,19 @@ pub const Layout = struct {
     }
 };
 
-/// Lays the Overview out as three columns, each card at least its designed
-/// size (`sizes`, the desktop cards' base sizes, so their painters fit):
+/// Lays the Overview out from the cards' designed sizes (`sizes`, the
+/// desktop cards' base sizes, so their painters always fit):
 ///   left   Clock over Weather
 ///   middle Calendar
-///   right  User, Media, System
+///   right  User over Media
+///   bottom System, across the full width (every System style spreads its
+///          gauges over the card's width)
 /// Cards widen to their column; the last card of each column grows to the
-/// tallest column, so the three bottoms line up. The tab row runs along the
-/// top (label widths come from the font: `tab_label_w`), the settings
-/// button sits at its right end, and the panel is centred on the output
-/// (pinned to the top-left when the output is smaller than the panel).
+/// tallest column, so the three bottoms line up above the System strip.
+/// The tab row runs along the top (label widths come from the font:
+/// `tab_label_w`), the settings button sits at its right end, and the panel
+/// is centred on the output (pinned to the top-left when the output is
+/// smaller than the panel).
 pub fn compute(out_w: i32, out_h: i32, sizes: [CARD_COUNT]Size, tab_label_w: [TAB_COUNT]i32) Layout {
     var l = Layout{};
     const s = struct {
@@ -165,26 +168,27 @@ pub fn compute(out_w: i32, out_h: i32, sizes: [CARD_COUNT]Size, tab_label_w: [TA
 
     const wl = @max(clock.w, weather.w);
     const wm = calendar.w;
-    const wr = @max(user.w, @max(media.w, system.w));
-    const hl = clock.h + GAP + weather.h;
-    const hm = calendar.h;
-    const hr = user.h + GAP + media.h + GAP + system.h;
-    const content_w = @max(wl + GAP + wm + GAP + wr, MIN_CONTENT_W);
-    const content_h = @max(@max(hl, hm), @max(hr, MIN_CONTENT_H));
+    const wr = @max(user.w, media.w);
+    const cols_h = @max(@max(clock.h + GAP + weather.h, calendar.h), user.h + GAP + media.h);
+    const content_w = @max(@max(wl + GAP + wm + GAP + wr, system.w), MIN_CONTENT_W);
+    const content_h = @max(cols_h + GAP + system.h, MIN_CONTENT_H);
+    // Spare height from the minimum goes to the columns, not the strip.
+    const top_h = content_h - GAP - system.h;
 
     const top = PAD + TAB_H + TAB_ROW_GAP;
     l.content = .{ .x = PAD, .y = top, .w = content_w, .h = content_h };
 
+    // Spare width (a wide System card or the minimum) goes to the middle.
+    const wm_fit = content_w - wl - wr - 2 * GAP;
     const xl = PAD;
     const xm = xl + wl + GAP;
-    const xr = xm + wm + GAP;
+    const xr = xm + wm_fit + GAP;
     l.cards[@intFromEnum(Card.clock)] = .{ .x = xl, .y = top, .w = wl, .h = clock.h };
-    l.cards[@intFromEnum(Card.weather)] = .{ .x = xl, .y = top + clock.h + GAP, .w = wl, .h = content_h - clock.h - GAP };
-    l.cards[@intFromEnum(Card.calendar)] = .{ .x = xm, .y = top, .w = wm, .h = content_h };
+    l.cards[@intFromEnum(Card.weather)] = .{ .x = xl, .y = top + clock.h + GAP, .w = wl, .h = top_h - clock.h - GAP };
+    l.cards[@intFromEnum(Card.calendar)] = .{ .x = xm, .y = top, .w = wm_fit, .h = top_h };
     l.cards[@intFromEnum(Card.user)] = .{ .x = xr, .y = top, .w = wr, .h = user.h };
-    l.cards[@intFromEnum(Card.media)] = .{ .x = xr, .y = top + user.h + GAP, .w = wr, .h = media.h };
-    const sys_y = top + user.h + GAP + media.h + GAP;
-    l.cards[@intFromEnum(Card.system)] = .{ .x = xr, .y = sys_y, .w = wr, .h = top + content_h - sys_y };
+    l.cards[@intFromEnum(Card.media)] = .{ .x = xr, .y = top + user.h + GAP, .w = wr, .h = top_h - user.h - GAP };
+    l.cards[@intFromEnum(Card.system)] = .{ .x = PAD, .y = top + top_h + GAP, .w = content_w, .h = system.h };
 
     var tx: i32 = PAD;
     for (0..TAB_COUNT) |i| {
@@ -478,16 +482,32 @@ test "layout: centred, every card at least its base size, no overlaps" {
         try tt.expect(inside(local, r));
         for (l.cards[i + 1 ..]) |o| try tt.expect(!overlaps(r, o));
     }
-    // The three column bottoms line up.
-    const bottom = l.content.y + l.content.h;
-    for ([_]Card{ .weather, .calendar, .system }) |c| {
+    // The three column bottoms line up above the System strip, which spans
+    // the content width and ends at its bottom.
+    const sys = l.card(.system);
+    for ([_]Card{ .weather, .calendar, .media }) |c| {
         const r = l.card(c);
-        try tt.expectEqual(bottom, r.y + r.h);
+        try tt.expectEqual(sys.y - GAP, r.y + r.h);
     }
+    try tt.expectEqual(l.content.x, sys.x);
+    try tt.expectEqual(l.content.w, sys.w);
+    try tt.expectEqual(l.content.y + l.content.h, sys.y + sys.h);
+    // Tallest column (Clock 76 + gap + Weather 197) + gap + System (138).
+    try tt.expectEqual(@as(i32, 76 + GAP + 197 + GAP + 138), l.content.h);
     // Tab row above the cards, settings button on its right edge.
     for (l.tabs) |r| try tt.expect(r.y + r.h <= l.content.y);
     try tt.expectEqual(l.panel.w - PAD, l.settings.x + l.settings.w);
     try tt.expect(!overlaps(l.tabs[TAB_COUNT - 1], l.settings));
+}
+
+test "layout: a System card wider than the columns widens the middle" {
+    var wide = SIZES;
+    wide[@intFromEnum(Card.system)] = .{ .w = 1200, .h = 100 };
+    const l = compute(1920, 1080, wide, TAB_W);
+    try tt.expectEqual(@as(i32, 1200), l.content.w);
+    const cal = l.card(.calendar);
+    try tt.expect(cal.w > 238);
+    try tt.expectEqual(l.content.x + l.content.w, l.card(.media).x + l.card(.media).w);
 }
 
 test "layout: small output pins the panel, tiny cards keep a minimum area" {
