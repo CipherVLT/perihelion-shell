@@ -195,7 +195,7 @@ Left-side order:
 - Turning the Dock off and on must only show/hide the existing Dock. It must never create additional Dock instances.
 - Both the Bar and Dock must be treated as singletons. Prevent any code path that can spawn duplicates.
 
-- # CLAUDE.md
+  # CLAUDE.md
 
 Guidance for Claude / Claude Code when working on Perihelion-shell and the Perihelion Linux ISO.
 
@@ -222,6 +222,7 @@ Desktop cards and bar features already landed and working:
 - Brightness OSD
 - Notification center (mako history + DND)
 - Control Center (volume, brightness, Wi-Fi, Bluetooth, power profile, keep-awake, DND)
+- Glance Slice 1 (Super+I dashboard, Overview tab)
 
 ## Porting Rules (Event Horizon → Perihelion)
 
@@ -240,7 +241,7 @@ When porting widgets or features from Event Horizon dotfiles:
 
 ## Key Conventions
 
-- Zig version: **0.17.0** (use the version already in the environment / CI).
+- Zig version: **0.17.0** (latest stable). Use this version for all local builds and tests. CI must be updated to match.
 - Tests: `zig build` + `zig build test-*` steps must pass.
 - Config: Prefer extending existing `shell.json` / `config.json` over new files.
 - State: Use `~/.local/state/perihelionbar/` or XDG paths. Never write to the user’s real config during tests.
@@ -249,8 +250,8 @@ When porting widgets or features from Event Horizon dotfiles:
 
 ## Current Priorities
 
-1. **Glance** (DarkDash-inspired dashboard) — in progress. Goal is a floating overview/media/weather surface that can eventually reduce reliance on the basic dock.
-2. Keep the existing dock functional until Glance is ready.
+1. **Glance** (DarkDash-inspired dashboard) — Slice 1 done. Next is Media tab, then Weather, then Apps (needed before any dock retirement).
+2. Keep the existing dock functional until Glance is ready to take over.
 3. Privacy indicators and other polish items are lower priority.
 
 ## What Not To Do
@@ -260,6 +261,7 @@ When porting widgets or features from Event Horizon dotfiles:
 - Do not break the MangoWM ISO path.
 - Do not start large new systems (full Control Center rewrites, embedded terminal, lock screen) without explicit request.
 - Do not assume Hyprland or Niri behavior.
+- Do not use Zig 0.16.0 — the project is on 0.17.0.
 
 ## Useful Paths (local development)
 
