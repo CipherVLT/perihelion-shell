@@ -86,6 +86,13 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
 
+    // Reminders file parsing for the Calendar card (same convention).
+    const reminders_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/reminders.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const widgets_mod = b.createModule(.{
         .root_source_file = b.path("src/widgets.zig"),
         .target = target,
@@ -97,6 +104,7 @@ pub fn build(b: *Build) !void {
     widgets_mod.addImport("temps", temps_mod);
     widgets_mod.addImport("fastfetch", fastfetch_mod);
     widgets_mod.addImport("procs", procs_mod);
+    widgets_mod.addImport("reminders", reminders_mod);
     widgets_mod.addImport("logging", logging_mod);
 
     // Album-art decode for the media card: same gdk-pixbuf shim the bar

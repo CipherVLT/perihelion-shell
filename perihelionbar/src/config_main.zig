@@ -2683,6 +2683,14 @@ const CARD_OPTIONS = [_]CardOption{
         .values = &.{ .{ .int = 3 }, .{ .int = 4 }, .{ .int = 5 }, .{ .int = 6 }, .{ .int = 7 }, .{ .int = 8 } },
         .default = .{ .int = 6 },
     },
+    .{
+        .key = "calendar_reminders",
+        .title = "Calendar reminders",
+        .subtitle = "Today's and upcoming reminders listed under the month",
+        .labels = &.{ "Off", "1", "2", "3", "4", "5", "6" },
+        .values = &.{ .{ .int = 0 }, .{ .int = 1 }, .{ .int = 2 }, .{ .int = 3 }, .{ .int = 4 }, .{ .int = 5 }, .{ .int = 6 } },
+        .default = .{ .int = 0 },
+    },
     .{ .key = "notes_tabs", .title = "Note tabs", .subtitle = "Up to nine notes with tabs, + and ×; off keeps one plain note", .default = .{ .boolean = true } },
     .{ .key = "notes_checklists", .title = "Note checklists", .subtitle = "Show - [ ] lines as checkboxes, - as bullets and # as headings", .default = .{ .boolean = true } },
 };

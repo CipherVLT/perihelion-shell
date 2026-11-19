@@ -83,6 +83,13 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    // Reminders file parsing behind the shell's Calendar card (same
+    // convention: shared source, tests run from this build).
+    const reminders_mod = b.createModule(.{
+        .root_source_file = b.path("src/reminders.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     exe_mod.linkSystemLibrary("wayland-client", .{});
     exe_mod.linkSystemLibrary("freetype2", .{}); // real Nerd Font/Unicode glyph rendering (src/font.zig)
     exe_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{}); // tray icon-name -> PNG/SVG decode (src/icontheme.zig)
@@ -155,6 +162,12 @@ pub fn build(b: *Build) !void {
     const procs_tests = b.addTest(.{ .root_module = procs_mod, .use_llvm = true, .use_lld = true });
     const procs_test_step = b.step("test-procs", "Run src/procs.zig unit tests");
     procs_test_step.dependOn(&b.addRunArtifact(procs_tests).step);
+
+    // `zig build test-reminders`: src/reminders.zig (line parsing, the
+    // upcoming list and day labels from fake file text).
+    const reminders_tests = b.addTest(.{ .root_module = reminders_mod, .use_llvm = true, .use_lld = true });
+    const reminders_test_step = b.step("test-reminders", "Run src/reminders.zig unit tests");
+    reminders_test_step.dependOn(&b.addRunArtifact(reminders_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.
