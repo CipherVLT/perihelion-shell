@@ -299,7 +299,7 @@ fn iconRoots(bufs: *[3][512]u8) [3][]const u8 {
 /// themes. Returns how many folders it unwrapped.
 pub fn unnestIconFolders(root: []const u8) usize {
     var zr: [576]u8 = undefined;
-    const rz = std.fmt.bufPrintZ(&zr, "{s}", .{root}) catch return 0;
+    const rz = std.fmt.bufPrintSentinel(&zr, "{s}", .{root}, 0) catch return 0;
     const dir = opendir(rz.ptr) orelse return 0;
     // Names first: the loop below renames entries of this folder.
     var names: [MAX_NAMES][MAX_NAME]u8 = undefined;
@@ -322,10 +322,10 @@ pub fn unnestIconFolders(root: []const u8) usize {
 
 fn unnestOne(root: []const u8, name: []const u8) bool {
     var ob: [576]u8 = undefined;
-    const outer = std.fmt.bufPrintZ(&ob, "{s}/{s}", .{ root, name }) catch return false;
+    const outer = std.fmt.bufPrintSentinel(&ob, "{s}/{s}", .{ root, name }, 0) catch return false;
     if (isSymlinkZ(outer) or !isDir(outer)) return false;
     var ib: [600]u8 = undefined;
-    if (existsZ(std.fmt.bufPrintZ(&ib, "{s}/index.theme", .{outer}) catch return false)) return false;
+    if (existsZ(std.fmt.bufPrintSentinel(&ib, "{s}/index.theme", .{outer}, 0) catch return false)) return false;
 
     // Everything inside must be an icon theme folder, and each name must be
     // free beside the wrapper (except the wrapper's own name, which it frees).
@@ -342,12 +342,12 @@ fn unnestOne(root: []const u8, name: []const u8) bool {
             break;
         }
         var cb: [700]u8 = undefined;
-        const cp = std.fmt.bufPrintZ(&cb, "{s}/{s}", .{ outer, c }) catch {
+        const cp = std.fmt.bufPrintSentinel(&cb, "{s}/{s}", .{ outer, c }, 0) catch {
             ok = false;
             break;
         };
         var cib: [720]u8 = undefined;
-        const ci = std.fmt.bufPrintZ(&cib, "{s}/index.theme", .{cp}) catch {
+        const ci = std.fmt.bufPrintSentinel(&cib, "{s}/index.theme", .{cp}, 0) catch {
             ok = false;
             break;
         };
@@ -357,7 +357,7 @@ fn unnestOne(root: []const u8, name: []const u8) bool {
         }
         if (!std.mem.eql(u8, c, name)) {
             var db: [700]u8 = undefined;
-            const dp = std.fmt.bufPrintZ(&db, "{s}/{s}", .{ root, c }) catch {
+            const dp = std.fmt.bufPrintSentinel(&db, "{s}/{s}", .{ root, c }, 0) catch {
                 ok = false;
                 break;
             };
@@ -374,15 +374,15 @@ fn unnestOne(root: []const u8, name: []const u8) bool {
     if (!ok or k == 0) return false;
 
     var tb: [600]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tb, "{s}/.{s}.perihelion-unwrap", .{ root, name }) catch return false;
+    const tmp = std.fmt.bufPrintSentinel(&tb, "{s}/.{s}.perihelion-unwrap", .{ root, name }, 0) catch return false;
     if (existsZ(tmp) or isSymlinkZ(tmp)) return false;
     if (rename(outer.ptr, tmp.ptr) != 0) return false;
     for (0..k) |i| {
         const c = kids[i][0..klens[i]];
         var fb: [700]u8 = undefined;
         var db: [700]u8 = undefined;
-        const from = std.fmt.bufPrintZ(&fb, "{s}/{s}", .{ tmp, c }) catch continue;
-        const to = std.fmt.bufPrintZ(&db, "{s}/{s}", .{ root, c }) catch continue;
+        const from = std.fmt.bufPrintSentinel(&fb, "{s}/{s}", .{ tmp, c }, 0) catch continue;
+        const to = std.fmt.bufPrintSentinel(&db, "{s}/{s}", .{ root, c }, 0) catch continue;
         _ = rename(from.ptr, to.ptr);
     }
     if (rmdir(tmp.ptr) != 0) {
@@ -408,7 +408,7 @@ pub const ThemeHealth = struct {
 /// them) against `roots`, fixing what it can when the theme is yours.
 pub fn checkIconTheme(roots: []const []const u8, root: []const u8, theme: []const u8, h: *ThemeHealth) void {
     var tb: [576]u8 = undefined;
-    const td = std.fmt.bufPrintZ(&tb, "{s}/{s}", .{ root, theme }) catch return;
+    const td = std.fmt.bufPrintSentinel(&tb, "{s}/{s}", .{ root, theme }, 0) catch return;
     const writable = access(td.ptr, W_OK) == 0;
     walkLinks(roots, td, 1, writable, h);
 }
@@ -420,7 +420,7 @@ fn walkLinks(roots: []const []const u8, dir_path: [:0]const u8, depth: usize, wr
         const name = std.mem.span(@as([*:0]const u8, @ptrCast(&e.d_name)));
         if (std.mem.eql(u8, name, ".") or std.mem.eql(u8, name, "..")) continue;
         var pb: [640]u8 = undefined;
-        const p = std.fmt.bufPrintZ(&pb, "{s}/{s}", .{ dir_path, name }) catch continue;
+        const p = std.fmt.bufPrintSentinel(&pb, "{s}/{s}", .{ dir_path, name }, 0) catch continue;
         var lb: [512]u8 = undefined;
         const n = readlink(p.ptr, &lb, lb.len);
         if (n > 0) {
@@ -440,11 +440,11 @@ fn fixLink(roots: []const []const u8, link: [:0]const u8, target: []const u8, de
     for (roots) |r| {
         if (r.len == 0) continue;
         var cb: [640]u8 = undefined;
-        const cand = std.fmt.bufPrintZ(&cb, "{s}/{s}", .{ r, lt.rest }) catch continue;
+        const cand = std.fmt.bufPrintSentinel(&cb, "{s}/{s}", .{ r, lt.rest }, 0) catch continue;
         if (!existsZ(cand)) continue;
         if (!writable) return; // installed, just not where a system theme can see it
         var nb: [680]u8 = undefined;
-        const tmp = std.fmt.bufPrintZ(&nb, "{s}.perihelion-new", .{link}) catch return;
+        const tmp = std.fmt.bufPrintSentinel(&nb, "{s}.perihelion-new", .{link}, 0) catch return;
         _ = unlink(tmp.ptr);
         if (symlink(cand.ptr, tmp.ptr) != 0) return;
         if (rename(tmp.ptr, link.ptr) != 0) {
@@ -472,7 +472,7 @@ pub fn repairUserIconThemes() void {
     for (roots[0..2]) |r| {
         if (r.len == 0) continue;
         var zr: [576]u8 = undefined;
-        const rz = std.fmt.bufPrintZ(&zr, "{s}", .{r}) catch continue;
+        const rz = std.fmt.bufPrintSentinel(&zr, "{s}", .{r}, 0) catch continue;
         const dir = opendir(rz.ptr) orelse continue;
         defer _ = closedir(dir);
         while (readdir(dir)) |e| {
@@ -493,7 +493,7 @@ pub fn iconThemeMissing(name: []const u8, out: []u8) []const u8 {
     for (roots) |r| {
         if (r.len == 0) continue;
         var ib: [640]u8 = undefined;
-        const idx = std.fmt.bufPrintZ(&ib, "{s}/{s}/index.theme", .{ r, name }) catch continue;
+        const idx = std.fmt.bufPrintSentinel(&ib, "{s}/{s}/index.theme", .{ r, name }, 0) catch continue;
         if (!existsZ(idx)) continue;
         var h: ThemeHealth = .{};
         checkIconTheme(&roots, r, name, &h);
@@ -1714,7 +1714,7 @@ fn testMkdirs(comptime fmt: []const u8, args: anytype) !void {
     while (i <= p.len) : (i += 1) {
         if (i == p.len or p[i] == '/') {
             var z: [600]u8 = undefined;
-            const pz = try std.fmt.bufPrintZ(&z, "{s}", .{p[0..i]});
+            const pz = try std.fmt.bufPrintSentinel(&z, "{s}", .{p[0..i]}, 0);
             _ = mkdir(pz.ptr, 0o755);
         }
     }
@@ -1722,7 +1722,7 @@ fn testMkdirs(comptime fmt: []const u8, args: anytype) !void {
 
 fn testTouch(comptime fmt: []const u8, args: anytype) !void {
     var b: [600]u8 = undefined;
-    const p = try std.fmt.bufPrintZ(&b, fmt, args);
+    const p = try std.fmt.bufPrintSentinel(&b, fmt, args, 0);
     const fd = open(p.ptr, O_WRONLY_CREAT_TRUNC, 0o644);
     try std.testing.expect(fd >= 0);
     _ = close(fd);
@@ -1730,13 +1730,13 @@ fn testTouch(comptime fmt: []const u8, args: anytype) !void {
 
 fn testLink(target: [:0]const u8, comptime fmt: []const u8, args: anytype) !void {
     var b: [600]u8 = undefined;
-    const p = try std.fmt.bufPrintZ(&b, fmt, args);
+    const p = try std.fmt.bufPrintSentinel(&b, fmt, args, 0);
     try std.testing.expectEqual(@as(c_int, 0), symlink(target.ptr, p.ptr));
 }
 
 fn testExists(comptime fmt: []const u8, args: anytype) bool {
     var b: [600]u8 = undefined;
-    const p = std.fmt.bufPrintZ(&b, fmt, args) catch return false;
+    const p = std.fmt.bufPrintSentinel(&b, fmt, args, 0) catch return false;
     return existsZ(p);
 }
 

@@ -197,7 +197,7 @@ pub const Weather = struct {
     observed: Hhmm = .{},
     /// IANA time zone of the place (Open-Meteo's timezone=auto answer).
     timezone: BoundedText(48) = .{},
-    forecast: [FORECAST_DAYS]ForecastDay = [_]ForecastDay{.{}} ** FORECAST_DAYS,
+    forecast: [FORECAST_DAYS]ForecastDay = @as([FORECAST_DAYS]ForecastDay, @splat(.{})),
     forecast_len: usize = 0,
 
     pub fn temp(self: *const Weather, u: Units) f32 {
@@ -1146,7 +1146,7 @@ pub const Service = struct {
     fn tryCache(self: *Service, now_ms: i64) bool {
         if (self.cache_path.len == 0 or self.source_key.len == 0) return false;
         var path_buf: [400]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buf, "{s}", .{self.cache_path.slice()}) catch return false;
+        const path = std.fmt.bufPrintSentinel(&path_buf, "{s}", .{self.cache_path.slice()}, 0) catch return false;
         var buf: [CACHE_MAX]u8 = undefined;
         const bytes = readSmallFile(path, &buf) orelse return false;
         const e = parseCache(bytes) orelse return false;
@@ -1202,10 +1202,10 @@ pub const Service = struct {
         var head_buf: [1024]u8 = undefined;
         const head = formatCacheHeader(&head_buf, self.data_fetched_s, self.source_key.slice(), self.lat, self.lon, city, country, body.len) orelse return;
         var path_buf: [400]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&path_buf, "{s}", .{self.cache_path.slice()}) catch return;
+        const path = std.fmt.bufPrintSentinel(&path_buf, "{s}", .{self.cache_path.slice()}, 0) catch return;
         mkdirParents(path);
         var tmp_buf: [430]u8 = undefined;
-        const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.{d}.tmp", .{ path, std.c.getpid() }) catch return;
+        const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}.{d}.tmp", .{ path, std.c.getpid() }, 0) catch return;
         const raw_fd = posix.system.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
         if (raw_fd < 0) return;
         const fd: posix.fd_t = @intCast(raw_fd);
@@ -1249,10 +1249,11 @@ pub const Service = struct {
 
     fn buildUrl(self: *Service, kind: RequestKind) ?[:0]const u8 {
         return switch (kind) {
-            .forecast => std.fmt.bufPrintZ(
+            .forecast => std.fmt.bufPrintSentinel(
                 &self.url_buf,
                 "{s}?latitude={d:.4}&longitude={d:.4}&current={s}&daily={s}&timezone=auto&forecast_days={d}",
                 .{ FORECAST_URL, self.lat, self.lon, CURRENT_FIELDS, DAILY_FIELDS, FORECAST_DAYS },
+                0,
             ) catch null,
             .geocode => blk: {
                 var enc_buf: [300]u8 = undefined;
@@ -1260,19 +1261,21 @@ pub const Service = struct {
                 // Narrowed searches look at more results to find the region.
                 const count: u8 = if (self.geo_cc.len > 0 or self.geo_region.len > 0) 10 else 1;
                 if (self.geo_cc.len > 0) {
-                    break :blk std.fmt.bufPrintZ(
+                    break :blk std.fmt.bufPrintSentinel(
                         &self.url_buf,
                         "{s}?name={s}&count={d}&language=en&format=json&countryCode={s}",
                         .{ GEOCODE_URL, enc, count, self.geo_cc.slice() },
+                        0,
                     ) catch null;
                 }
-                break :blk std.fmt.bufPrintZ(
+                break :blk std.fmt.bufPrintSentinel(
                     &self.url_buf,
                     "{s}?name={s}&count={d}&language=en&format=json",
                     .{ GEOCODE_URL, enc, count },
+                    0,
                 ) catch null;
             },
-            .ip_locate => std.fmt.bufPrintZ(&self.url_buf, "{s}", .{self.ip_url.slice()}) catch null,
+            .ip_locate => std.fmt.bufPrintSentinel(&self.url_buf, "{s}", .{self.ip_url.slice()}, 0) catch null,
         };
     }
 };
@@ -1565,7 +1568,7 @@ test "cache file: write, adopt in a second service, reject stale/foreign" {
     var path_buf: [64]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/tmp/perihelion-weather-test-{d}.cache", .{std.c.getpid()}) catch unreachable;
     var pz_buf: [72]u8 = undefined;
-    const pz = std.fmt.bufPrintZ(&pz_buf, "{s}", .{path}) catch unreachable;
+    const pz = std.fmt.bufPrintSentinel(&pz_buf, "{s}", .{path}, 0) catch unreachable;
     defer _ = libc.unlink(pz.ptr);
     const cfg = Config{ .latitude = 41.88, .longitude = -87.63, .city = "Chicago", .cache_path = path };
 

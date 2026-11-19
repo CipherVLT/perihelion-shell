@@ -16,8 +16,8 @@ pub const Tab = enum {
     weather,
 
     pub fn parse(s: []const u8) ?Tab {
-        inline for (@typeInfo(Tab).@"enum".fields) |f| {
-            if (std.ascii.eqlIgnoreCase(s, f.name)) return @enumFromInt(f.value);
+        for (std.meta.tags(Tab)) |t| {
+            if (std.ascii.eqlIgnoreCase(s, @tagName(t))) return t;
         }
         return null;
     }
@@ -31,7 +31,7 @@ pub const Tab = enum {
     }
 };
 
-pub const TAB_COUNT = @typeInfo(Tab).@"enum".fields.len;
+pub const TAB_COUNT = std.meta.tags(Tab).len;
 
 pub const Verb = enum {
     toggle,
@@ -39,10 +39,7 @@ pub const Verb = enum {
     close,
 
     pub fn parse(s: []const u8) ?Verb {
-        inline for (@typeInfo(Verb).@"enum".fields) |f| {
-            if (std.mem.eql(u8, s, f.name)) return @enumFromInt(f.value);
-        }
-        return null;
+        return std.meta.stringToEnum(Verb, s);
     }
 };
 
@@ -112,7 +109,7 @@ pub const Size = struct { w: i32, h: i32 };
 
 /// The Overview tab's cards, in paint order.
 pub const Card = enum { clock, weather, user, calendar, media, system };
-pub const CARD_COUNT = @typeInfo(Card).@"enum".fields.len;
+pub const CARD_COUNT = std.meta.tags(Card).len;
 
 pub const PAD: i32 = 20; // panel edge -> tab row and cards
 pub const GAP: i32 = 14; // between cards
@@ -129,10 +126,10 @@ pub const Layout = struct {
     /// Surface coordinates.
     panel: Rect = .{},
     /// Panel-local from here on.
-    tabs: [TAB_COUNT]Rect = [_]Rect{.{}} ** TAB_COUNT,
+    tabs: [TAB_COUNT]Rect = @as([TAB_COUNT]Rect, @splat(.{})),
     settings: Rect = .{},
     content: Rect = .{},
-    cards: [CARD_COUNT]Rect = [_]Rect{.{}} ** CARD_COUNT,
+    cards: [CARD_COUNT]Rect = @as([CARD_COUNT]Rect, @splat(.{})),
 
     pub fn card(self: *const Layout, c: Card) Rect {
         return self.cards[@intFromEnum(c)];
@@ -514,7 +511,7 @@ test "layout: small output pins the panel, tiny cards keep a minimum area" {
     const l = compute(800, 500, SIZES, TAB_W);
     try tt.expectEqual(@as(i32, 0), l.panel.x);
     try tt.expectEqual(@as(i32, 0), l.panel.y);
-    const tiny = [_]Size{.{ .w = 10, .h = 10 }} ** CARD_COUNT;
+    const tiny = @as([CARD_COUNT]Size, @splat(.{ .w = 10, .h = 10 }));
     const m = compute(1920, 1080, tiny, TAB_W);
     try tt.expectEqual(MIN_CONTENT_W, m.content.w);
     try tt.expectEqual(MIN_CONTENT_H, m.content.h);

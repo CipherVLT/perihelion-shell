@@ -231,17 +231,17 @@ pub fn init(proc_name: []const u8) void {
     var parent_buf: [600]u8 = undefined;
     const base_override = std.mem.sliceTo(getenv("PERIHELIONBAR_LOG_DIR") orelse "", 0);
     const base: [:0]const u8 = if (base_override.len > 0) blk: {
-        break :blk std.fmt.bufPrintZ(&parent_buf, "{s}", .{base_override}) catch return;
+        break :blk std.fmt.bufPrintSentinel(&parent_buf, "{s}", .{base_override}, 0) catch return;
     } else blk: {
         // Build each parent dir on its own stack buffer (g_log_dir is reserved
         // for the final per-proc dir, which every later log line depends on)
         // and mkdir immediately — failures are ignored because parents usually
         // pre-exist.
-        const d0 = std.fmt.bufPrintZ(&parent_buf, "{s}/.config", .{home}) catch null;
+        const d0 = std.fmt.bufPrintSentinel(&parent_buf, "{s}/.config", .{home}, 0) catch null;
         if (d0) |d| _ = mkdir(d.ptr, 0o755);
-        const d1 = std.fmt.bufPrintZ(&parent_buf, "{s}/.config/perihelionbar-config", .{home}) catch null;
+        const d1 = std.fmt.bufPrintSentinel(&parent_buf, "{s}/.config/perihelionbar-config", .{home}, 0) catch null;
         if (d1) |d| _ = mkdir(d.ptr, 0o755);
-        break :blk std.fmt.bufPrintZ(&parent_buf, "{s}{s}", .{ home, LOG_DIR_REL }) catch return;
+        break :blk std.fmt.bufPrintSentinel(&parent_buf, "{s}{s}", .{ home, LOG_DIR_REL }, 0) catch return;
     };
 _ = mkdir(base.ptr, 0o755);
 
@@ -252,7 +252,7 @@ _ = mkdir(base.ptr, 0o755);
     g_log_base_buf[base_len] = 0;
     g_log_base = g_log_base_buf[0..base_len :0];
 
-    const dir = std.fmt.bufPrintZ(&g_log_dir_buf, "{s}/{s}", .{ base, proc_name }) catch return;
+    const dir = std.fmt.bufPrintSentinel(&g_log_dir_buf, "{s}/{s}", .{ base, proc_name }, 0) catch return;
     g_log_dir = dir;
     g_proc_tag = proc_name;
     _ = mkdir(dir.ptr, 0o755);
@@ -261,7 +261,7 @@ _ = mkdir(base.ptr, 0o755);
     // crash.log is the one file that must sit on a live fd; rotate it if it
     // outgrew its cap in a previous run, then open it for the whole process.
     var crash_buf: [600 + 16]u8 = undefined;
-    const crash_path = std.fmt.bufPrintZ(&crash_buf, "{s}/{s}", .{ dir, CRASH_FILE }) catch return;
+    const crash_path = std.fmt.bufPrintSentinel(&crash_buf, "{s}/{s}", .{ dir, CRASH_FILE }, 0) catch return;
     if (logTooBig(crash_path.ptr)) rotateLogFile(crash_path.ptr);
     g_crash_fd = open(crash_path.ptr, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644);
 
@@ -312,7 +312,7 @@ pub fn crash(comptime fmt: []const u8, args: anytype) void {
 pub fn scoped(self: *Scope, name: []const u8) void {
     self.* = .{ .tag = name };
     if (g_ready and g_log_base.len > 0) {
-        const dir = std.fmt.bufPrintZ(&self.dir_buf, "{s}/{s}", .{ g_log_base, name }) catch return;
+        const dir = std.fmt.bufPrintSentinel(&self.dir_buf, "{s}/{s}", .{ g_log_base, name }, 0) catch return;
         _ = mkdir(dir.ptr, 0o755);
         self.dir = self.dir_buf[0..dir.len :0];
     }
@@ -397,7 +397,7 @@ fn buildLine(tag: []const u8, level: Level, body: []const u8) []const u8 {
 /// current file has outgrown MAX_LOG_SIZE.
 fn appendRotated(dir: [:0]const u8, comptime base: []const u8, line: []const u8) void {
     var full_buf: [600 + 16]u8 = undefined;
-    const full = std.fmt.bufPrintZ(&full_buf, "{s}/{s}", .{ dir, base }) catch return;
+    const full = std.fmt.bufPrintSentinel(&full_buf, "{s}/{s}", .{ dir, base }, 0) catch return;
     if (logTooBig(full.ptr)) rotateLogFile(full.ptr);
     const fd = open(full.ptr, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644);
     if (fd < 0) return;
@@ -414,7 +414,7 @@ fn appendCrashRaw(line: []const u8) void {
 
 fn rotateLogFile(path: [*:0]const u8) void {
     var old_buf: [600 + 16 + 8]u8 = undefined;
-    const old = std.fmt.bufPrintZ(&old_buf, "{s}.old", .{path}) catch return;
+    const old = std.fmt.bufPrintSentinel(&old_buf, "{s}.old", .{path}, 0) catch return;
     // rename() atomically replaces any previous .old generation.
     _ = rename(path, old.ptr);
 }

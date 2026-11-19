@@ -76,12 +76,12 @@ fn openLock(role: Role) c_int {
     const name: []const u8 = if (role == .dock) "dock" else "bar";
     var buf: [600]u8 = undefined;
     const home = std.mem.span(getenv("HOME") orelse "/root");
-    if (std.fmt.bufPrintZ(&buf, "{s}/.config/perihelionbar/{s}.lock", .{ home, name })) |path| {
+    if (std.fmt.bufPrintSentinel(&buf, "{s}/.config/perihelionbar/{s}.lock", .{ home, name }, 0)) |path| {
         const fd = open(path.ptr, O_RDWR | O_CREAT | O_CLOEXEC, @as(c_uint, 0o644));
         if (fd >= 0) return fd;
     } else |_| {}
     if (getenv("XDG_RUNTIME_DIR")) |rt| {
-        if (std.fmt.bufPrintZ(&buf, "{s}/perihelion-{s}.lock", .{ std.mem.span(rt), name })) |path| {
+        if (std.fmt.bufPrintSentinel(&buf, "{s}/perihelion-{s}.lock", .{ std.mem.span(rt), name }, 0)) |path| {
             const fd = open(path.ptr, O_RDWR | O_CREAT | O_CLOEXEC, @as(c_uint, 0o644));
             if (fd >= 0) return fd;
         } else |_| {}
@@ -147,7 +147,7 @@ var env_buf: [131072]u8 = undefined;
 fn roleOf(pid: c_int) ?Role {
     var path_buf: [64]u8 = undefined;
     var status_buf: [2048]u8 = undefined;
-    const status_path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/status", .{pid}) catch return null;
+    const status_path = std.fmt.bufPrintSentinel(&path_buf, "/proc/{d}/status", .{pid}, 0) catch return null;
     const status = readInto(status_path.ptr, &status_buf) orelse return null;
     const name = statusField(status, "Name:") orelse return null;
     if (!std.mem.eql(u8, name, PROC_NAME)) return null;
@@ -159,7 +159,7 @@ fn roleOf(pid: c_int) ?Role {
     const uid = std.fmt.parseInt(c_uint, uid_it.next() orelse return null, 10) catch return null;
     if (uid != getuid()) return null;
 
-    const env_path = std.fmt.bufPrintZ(&path_buf, "/proc/{d}/environ", .{pid}) catch return null;
+    const env_path = std.fmt.bufPrintSentinel(&path_buf, "/proc/{d}/environ", .{pid}, 0) catch return null;
     const env = readInto(env_path.ptr, &env_buf) orelse return null;
     if (env.len == env_buf.len) return null; // cut short: can't be sure
     return if (envIsDock(env)) .dock else .bar;

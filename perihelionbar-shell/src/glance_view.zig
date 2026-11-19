@@ -84,7 +84,7 @@ pub const Glance = struct {
     tab: g.Tab = .overview,
     layout: g.Layout = .{},
     cards: ?*Cards = null,
-    next_tick: [g.CARD_COUNT]i64 = [_]i64{0} ** g.CARD_COUNT,
+    next_tick: [g.CARD_COUNT]i64 = @as([g.CARD_COUNT]i64, @splat(0)),
     weather_seen: WeatherSeen = .{},
     panel_px: ?[]u32 = null,
     /// The panel's glass alone (the frosted wallpaper is per-pixel float
@@ -182,7 +182,7 @@ pub const Glance = struct {
         }
         self.setup(cards);
         self.cards = cards;
-        self.next_tick = [_]i64{0} ** g.CARD_COUNT; // all due on the first tick
+        self.next_tick = @as([g.CARD_COUNT]i64, @splat(0)); // all due on the first tick
         self.weather_seen = .{};
 
         const surface = self.compositor.createSurface() catch |err| {

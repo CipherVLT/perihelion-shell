@@ -395,15 +395,15 @@ var shell_pidfile_path: [:0]const u8 = "";
 fn resolvePaths() void {
     const home = std.mem.span(getenv("HOME") orelse "/root");
     var dir_buf: [480]u8 = undefined;
-    const dir = std.fmt.bufPrintZ(&dir_buf, "{s}/.config/perihelionbar", .{home}) catch return;
+    const dir = std.fmt.bufPrintSentinel(&dir_buf, "{s}/.config/perihelionbar", .{home}, 0) catch return;
     _ = mkdir(dir.ptr, 0o755);
-    config_json_path = std.fmt.bufPrintZ(&config_json_path_buf, "{s}/config.json", .{dir}) catch "";
-    pidfile_path = std.fmt.bufPrintZ(&pidfile_path_buf, "{s}/perihelionbar.pid", .{dir}) catch "";
-    theme_path = std.fmt.bufPrintZ(&theme_path_buf, "{s}/theme", .{dir}) catch "";
-    widgets_disabled_path = std.fmt.bufPrintZ(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}) catch "";
-    shell_pidfile_path = std.fmt.bufPrintZ(&shell_pidfile_path_buf, "{s}/perihelionbar-shell.pid", .{dir}) catch "";
-    shell_json_path = std.fmt.bufPrintZ(&shell_json_path_buf, "{s}/shell.json", .{dir}) catch "";
-    settings_style_path = std.fmt.bufPrintZ(&settings_style_path_buf, "{s}/settings-style", .{dir}) catch "";
+    config_json_path = std.fmt.bufPrintSentinel(&config_json_path_buf, "{s}/config.json", .{dir}, 0) catch "";
+    pidfile_path = std.fmt.bufPrintSentinel(&pidfile_path_buf, "{s}/perihelionbar.pid", .{dir}, 0) catch "";
+    theme_path = std.fmt.bufPrintSentinel(&theme_path_buf, "{s}/theme", .{dir}, 0) catch "";
+    widgets_disabled_path = std.fmt.bufPrintSentinel(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}, 0) catch "";
+    shell_pidfile_path = std.fmt.bufPrintSentinel(&shell_pidfile_path_buf, "{s}/perihelionbar-shell.pid", .{dir}, 0) catch "";
+    shell_json_path = std.fmt.bufPrintSentinel(&shell_json_path_buf, "{s}/shell.json", .{dir}, 0) catch "";
+    settings_style_path = std.fmt.bufPrintSentinel(&settings_style_path_buf, "{s}/settings-style", .{dir}, 0) catch "";
 }
 
 // Perihelion: this window's own light/dark choice (~/.config/perihelionbar/settings-style:
@@ -454,7 +454,7 @@ fn applyDarkGlassGuard(dark: bool) void {
     if (!dark) return;
     const home = std.mem.span(getenv("HOME") orelse "/root");
     var pbuf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/gtk-4.0/perihelion-glass.css", .{home}) catch return;
+    const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/gtk-4.0/perihelion-glass.css", .{home}, 0) catch return;
     const text = readFileAll(path) orelse return;
     defer gpa.free(text);
     if (std.mem.indexOf(u8, text, "scheme=light") == null) return;
@@ -1491,7 +1491,7 @@ fn signalBar() void {
     // config.json; reload it too. Quietly skipped when no dock runs.
     var buf: [520]u8 = undefined;
     const dir = std.fs.path.dirname(pidfile_path) orelse return;
-    const dock = std.fmt.bufPrintZ(&buf, "{s}/dock.pid", .{dir}) catch return;
+    const dock = std.fmt.bufPrintSentinel(&buf, "{s}/dock.pid", .{dir}, 0) catch return;
     signalPidfile(dock, false);
 }
 
@@ -2902,7 +2902,7 @@ fn setShellJsonKey(key: []const u8, val: CardVal) bool {
     defer list.deinit(gpa);
     buildShellJson(&list, root, key, val) catch return false;
     var tmp_buf: [530]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.settings-tmp", .{shell_json_path}) catch return false;
+    const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}.settings-tmp", .{shell_json_path}, 0) catch return false;
     if (!writeFileAll(tmp, list.items)) {
         logging.err("config: could not write {s}", .{tmp});
         return false;
@@ -3284,8 +3284,8 @@ fn onIconChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, _: ?*anyopaque) call
     if (missing.len > 0) {
         var hb: [desk.MAX_NAME + 48]u8 = undefined;
         var bb: [3 * desk.MAX_NAME + 256]u8 = undefined;
-        const heading = std.fmt.bufPrintZ(&hb, "\u{201c}{s}\u{201d} is incomplete", .{vals[idx]}) catch "This icon theme is incomplete";
-        const body = std.fmt.bufPrintZ(&bb, "It takes its icons from \u{201c}{s}\u{201d}, which isn't installed. Put {s} in ~/.icons as well (it usually comes in the same download), then pick this theme again. Your icons were left as they were.", .{ missing, missing }) catch "It takes its icons from another theme that isn't installed. Your icons were left as they were.";
+        const heading = std.fmt.bufPrintSentinel(&hb, "\u{201c}{s}\u{201d} is incomplete", .{vals[idx]}, 0) catch "This icon theme is incomplete";
+        const body = std.fmt.bufPrintSentinel(&bb, "It takes its icons from \u{201c}{s}\u{201d}, which isn't installed. Put {s} in ~/.icons as well (it usually comes in the same download), then pick this theme again. Your icons were left as they were.", .{ missing, missing }, 0) catch "It takes its icons from another theme that isn't installed. Your icons were left as they were.";
         const dialog = adw_alert_dialog_new(heading.ptr, body.ptr);
         adw_alert_dialog_add_response(dialog, "ok", "OK");
         hg.adw_dialog_present(@ptrCast(dialog), @ptrCast(row));
@@ -3735,9 +3735,9 @@ fn resolveApplicationsDir() void {
     applications_dir_resolved = true;
     const home = std.mem.span(getenv("HOME") orelse "/root");
     var dir_buf: [440]u8 = undefined;
-    const dir = std.fmt.bufPrintZ(&dir_buf, "{s}/.local/share/applications", .{home}) catch return;
+    const dir = std.fmt.bufPrintSentinel(&dir_buf, "{s}/.local/share/applications", .{home}, 0) catch return;
     _ = mkdir(dir.ptr, 0o755);
-    applications_dir = std.fmt.bufPrintZ(&applications_dir_buf, "{s}", .{dir}) catch "";
+    applications_dir = std.fmt.bufPrintSentinel(&applications_dir_buf, "{s}", .{dir}, 0) catch "";
 }
 
 /// Name -> filesystem-safe slug: lowercased alphanumerics with runs of
@@ -3917,7 +3917,7 @@ fn onCreateShortcutClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void 
     var slug_buf: [MAX_ROW_TEXT]u8 = undefined;
     const slug = slugify(name, &slug_buf);
     var path_buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}.desktop", .{ applications_dir, slug }) catch {
+    const path = std.fmt.bufPrintSentinel(&path_buf, "{s}/{s}.desktop", .{ applications_dir, slug }, 0) catch {
         logging.warn("shortcuts: slug too long, not creating", .{});
         return;
     };
@@ -4681,7 +4681,7 @@ fn ensureRole(role: singleton.Role, want: bool) void {
         _ = std.c.unlink(pidfile_path.ptr);
     } else if (std.fs.path.dirname(pidfile_path)) |dir| {
         var buf: [600]u8 = undefined;
-        if (std.fmt.bufPrintZ(&buf, "{s}/dock.pid", .{dir})) |path| {
+        if (std.fmt.bufPrintSentinel(&buf, "{s}/dock.pid", .{dir}, 0)) |path| {
             _ = std.c.unlink(path.ptr);
         } else |_| {}
     }
@@ -6830,7 +6830,7 @@ fn onBootApply(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
     if (sys_pid >= 0) return;
     sys_status = sys_labels[0];
     var tbuf: [8]u8 = undefined;
-    const t = std.fmt.bufPrintZ(&tbuf, "{d}", .{sys_grub_timeout}) catch return;
+    const t = std.fmt.bufPrintSentinel(&tbuf, "{d}", .{sys_grub_timeout}, 0) catch return;
     sysRun(&.{ "pkexec", SYS_HELPER, "grub", "--menu", if (sys_grub_menu_always) "always" else "auto", "--timeout", t, "--quiet", if (sys_grub_quiet) "on" else "off" });
 }
 
@@ -6969,7 +6969,7 @@ fn applyPerihelionStyle() void {
     defer css.deinit(gpa);
     const home = std.mem.span(getenv("HOME") orelse "/root");
     var pbuf: [512]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&pbuf, "{s}/.config/perihelionbar/matugen.json", .{home}) catch return;
+    const path = std.fmt.bufPrintSentinel(&pbuf, "{s}/.config/perihelionbar/matugen.json", .{home}, 0) catch return;
     if (readFileAll(path)) |text| {
         defer gpa.free(text);
         var hb: [8]u8 = undefined;

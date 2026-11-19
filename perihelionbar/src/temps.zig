@@ -100,7 +100,7 @@ pub fn Text(comptime N: usize) type {
 const Path = Text(200);
 
 fn pathZ(buf: []u8, comptime fmt: []const u8, args: anytype) ?[:0]const u8 {
-    return std.fmt.bufPrintZ(buf, fmt, args) catch null;
+    return std.fmt.bufPrintSentinel(buf, fmt, args, 0) catch null;
 }
 
 /// Reads a small sysfs file, trimmed. Null if missing/unreadable/empty.
@@ -367,7 +367,7 @@ pub const Service = struct {
     cpu_path: Path = .{},
     cpu_mc: ?i32 = null,
 
-    gpus: [MAX_GPUS]Gpu = [_]Gpu{.{}} ** MAX_GPUS,
+    gpus: [MAX_GPUS]Gpu = @as([MAX_GPUS]Gpu, @splat(.{})),
     gpu_count: usize = 0,
     selected: ?usize = null,
 
@@ -832,7 +832,7 @@ fn writeFile(root: []const u8, rel: []const u8, content: []const u8) void {
     const p = std.fmt.bufPrint(&pb, "{s}/{s}", .{ root, rel }) catch return;
     if (std.mem.lastIndexOfScalar(u8, p, '/')) |slash| mkdirP(p[0..slash]);
     var zb: [300]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zb, "{s}", .{p}) catch return;
+    const z = std.fmt.bufPrintSentinel(&zb, "{s}", .{p}, 0) catch return;
     const raw = posix.system.open(z.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
     if (raw < 0) return;
     const fd: posix.fd_t = @intCast(raw);

@@ -219,7 +219,7 @@ pub const Service = struct {
     group: bool = false,
     root: Text(96) = .{},
 
-    top: [MAX_SHOWN]Proc = [_]Proc{.{}} ** MAX_SHOWN,
+    top: [MAX_SHOWN]Proc = @as([MAX_SHOWN]Proc, @splat(.{})),
     top_len: usize = 0,
     mem_total: u64 = 0,
     page_size: u64 = 4096,
@@ -332,7 +332,7 @@ pub const Service = struct {
         var buf: [4096]u8 = undefined;
 
         if (self.mem_total == 0) {
-            if (std.fmt.bufPrintZ(&pb, "{s}/proc/meminfo", .{root})) |p| {
+            if (std.fmt.bufPrintSentinel(&pb, "{s}/proc/meminfo", .{root}, 0)) |p| {
                 if (readFile(p, &buf)) |t| {
                     if (std.mem.indexOf(u8, t, "MemTotal:")) |i| {
                         var it = std.mem.tokenizeScalar(u8, t[i + "MemTotal:".len ..], ' ');
@@ -342,7 +342,7 @@ pub const Service = struct {
             } else |_| {}
         }
         var total: u64 = 0;
-        if (std.fmt.bufPrintZ(&pb, "{s}/proc/stat", .{root})) |p| {
+        if (std.fmt.bufPrintSentinel(&pb, "{s}/proc/stat", .{root}, 0)) |p| {
             if (readFile(p, &buf)) |t| {
                 if (parseProcStat(t)) |ps| {
                     total = ps.total;
@@ -358,7 +358,7 @@ pub const Service = struct {
         var group_len: usize = 0;
         var n: usize = 0;
 
-        const dp = std.fmt.bufPrintZ(&pb, "{s}/proc", .{root}) catch return;
+        const dp = std.fmt.bufPrintSentinel(&pb, "{s}/proc", .{root}, 0) catch return;
         const dir = libc.opendir(dp.ptr) orelse return;
         defer _ = libc.closedir(dir);
         while (libc.readdir(dir)) |e| {
@@ -366,7 +366,7 @@ pub const Service = struct {
             if (name.len == 0 or !std.ascii.isDigit(name[0])) continue;
             const pid = std.fmt.parseInt(u32, name, 10) catch continue;
             var sp: [160]u8 = undefined;
-            const stat_path = std.fmt.bufPrintZ(&sp, "{s}/proc/{s}/stat", .{ root, name }) catch continue;
+            const stat_path = std.fmt.bufPrintSentinel(&sp, "{s}/proc/{s}/stat", .{ root, name }, 0) catch continue;
             var lb: [1024]u8 = undefined;
             const line = readFile(stat_path, &lb) orelse continue; // exited meanwhile
             const st = parseStat(line) orelse continue;
@@ -425,7 +425,7 @@ pub const Service = struct {
 
     fn applyCmdlineName(self: *const Service, p: *Proc) void {
         var pb: [160]u8 = undefined;
-        const path = std.fmt.bufPrintZ(&pb, "{s}/proc/{d}/cmdline", .{ self.root.slice(), p.pid }) catch return;
+        const path = std.fmt.bufPrintSentinel(&pb, "{s}/proc/{d}/cmdline", .{ self.root.slice(), p.pid }, 0) catch return;
         var cb: [512]u8 = undefined;
         const raw = readFile(path, &cb) orelse return;
         const argv0 = std.mem.sliceTo(raw, 0);
@@ -487,7 +487,7 @@ fn writeFile(root: []const u8, rel: []const u8, content: []const u8) void {
     const p = std.fmt.bufPrint(&pb, "{s}/{s}", .{ root, rel }) catch return;
     if (std.mem.lastIndexOfScalar(u8, p, '/')) |slash| mkdirP(p[0..slash]);
     var zb: [300]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zb, "{s}", .{p}) catch return;
+    const z = std.fmt.bufPrintSentinel(&zb, "{s}", .{p}, 0) catch return;
     const raw = posix.system.open(z.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
     if (raw < 0) return;
     const fd: posix.fd_t = @intCast(raw);

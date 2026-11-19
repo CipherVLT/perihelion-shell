@@ -1593,7 +1593,7 @@ pub const WeatherWidget = struct {
                 var cb: [200]u8 = undefined;
                 // The URL is digits, letters and URL punctuation only (no
                 // quote), so single quotes keep it one argument.
-                const cmd = std.fmt.bufPrintZ(&cb, "exec xdg-open '{s}'", .{url}) catch return;
+                const cmd = std.fmt.bufPrintSentinel(&cb, "exec xdg-open '{s}'", .{url}, 0) catch return;
                 spawnDetached(cmd);
             },
         }
@@ -2559,7 +2559,7 @@ pub const MediaWidget = struct {
             return;
         }
         var script: [1024]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&script, "curl -s -o {s} -- '{s}' && printf art-ok || printf art-fail", .{ ART_CACHE, u }) catch {
+        const s = std.fmt.bufPrintSentinel(&script, "curl -s -o {s} -- '{s}' && printf art-ok || printf art-fail", .{ ART_CACHE, u }, 0) catch {
             self.art = .failed;
             return;
         };
@@ -2854,7 +2854,7 @@ pub const MediaWidget = struct {
                             .playlist => "Playlist",
                         };
                         var cmd_buf: [32]u8 = undefined;
-                        const cmd = std.fmt.bufPrintZ(&cmd_buf, "playerctl loop {s}", .{arg}) catch return;
+                        const cmd = std.fmt.bufPrintSentinel(&cmd_buf, "playerctl loop {s}", .{arg}, 0) catch return;
                         spawnDetached(cmd);
                         self.loop_mode = target;
                     },
@@ -3551,7 +3551,7 @@ pub const CalendarWidget = struct {
         // the fetch pipe always reaches EOF-with-bytes (the Fetcher treats a
         // fully empty read as "still in flight"); --max-time stops a black-
         // holed network from wedging the fetcher (and the retry gate) open.
-        const s = std.fmt.bufPrintZ(&script, "curl -sf --max-time 20 -- '{s}' || printf '\\nH'", .{url}) catch return;
+        const s = std.fmt.bufPrintSentinel(&script, "curl -sf --max-time 20 -- '{s}' || printf '\\nH'", .{url}, 0) catch return;
         var argv = [_:null]?[*:0]const u8{ "sh", "-c", s.ptr, null };
         self.fetch.start("/bin/sh", &argv);
         self.phase = .holidays;
@@ -3715,7 +3715,7 @@ pub const CalendarWidget = struct {
             const title = shQuote(r.text(), &t_q) orelse continue;
             const body = shQuote(when, &w_q) orelse continue;
             var cmd: [560]u8 = undefined;
-            const s = std.fmt.bufPrintZ(&cmd, "notify-send -a perihelionbar -u normal {s} {s}", .{ title, body }) catch continue;
+            const s = std.fmt.bufPrintSentinel(&cmd, "notify-send -a perihelionbar -u normal {s} {s}", .{ title, body }, 0) catch continue;
             logging.step("calendar: reminder due, notifying: {s}", .{r.text()});
             spawnDetached(s);
         }
@@ -3733,7 +3733,7 @@ pub const CalendarWidget = struct {
         // grep match and wrote '+'-prefixed lines. Cast to unsigned.
         const ds = std.fmt.bufPrint(&d_buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ @as(u32, @intCast(@max(y, 0))), m, d }) catch return;
         var script: [1536]u8 = undefined;
-        const s = std.fmt.bufPrintZ(&script,
+        const s = std.fmt.bufPrintSentinel(&script,
             \\printf 'menu-run\n'
             \\f='{s}'
             \\d='{s}'
@@ -3758,7 +3758,7 @@ pub const CalendarWidget = struct {
             \\  ;;
             \\esac
             \\printf 'menu-done'
-        , .{ self.remPath(), ds }) catch return;
+        , .{ self.remPath(), ds }, 0) catch return;
         var argv = [_:null]?[*:0]const u8{ "sh", "-c", s.ptr, null };
         self.fetch.start("/bin/sh", &argv);
         self.phase = .menu;
@@ -4488,7 +4488,7 @@ pub const NoteWidget = struct {
     }
 
     fn slotPath(self: *const NoteWidget, slot: u8, buf: []u8) ?[:0]const u8 {
-        return std.fmt.bufPrintZ(buf, "{s}/note{d}.txt", .{ self.dir(), slot }) catch null;
+        return std.fmt.bufPrintSentinel(buf, "{s}/note{d}.txt", .{ self.dir(), slot }, 0) catch null;
     }
 
     fn hasPage(self: *const NoteWidget, slot: u8) bool {
@@ -4615,7 +4615,7 @@ pub const NoteWidget = struct {
         self.leavePage();
         if (self.path_len > 0) {
             var bb: [340]u8 = undefined;
-            if (std.fmt.bufPrintZ(&bb, "{s}/.last-deleted.txt", .{self.dir()})) |bak| {
+            if (std.fmt.bufPrintSentinel(&bb, "{s}/.last-deleted.txt", .{self.dir()}, 0)) |bak| {
                 // Fails harmlessly for a note that was never saved.
                 _ = std.c.rename(self.path().ptr, bak.ptr);
             } else |_| {}
@@ -4683,7 +4683,7 @@ pub const NoteWidget = struct {
     fn armWatch(self: *NoteWidget) void {
         if (self.notify_fd >= 0 or self.dir_len == 0) return;
         var zb: [301]u8 = undefined;
-        const z = std.fmt.bufPrintZ(&zb, "{s}", .{self.dir()}) catch return;
+        const z = std.fmt.bufPrintSentinel(&zb, "{s}", .{self.dir()}, 0) catch return;
         const fd: posix.fd_t = @intCast(inotify_init1(INOTIFY_FLAGS));
         if (fd < 0) return;
         if (inotify_add_watch(fd, z.ptr, IN_WATCH_MASK) < 0) {
@@ -5137,20 +5137,20 @@ pub const NoteWidget = struct {
 test "notes: pages on disk — new, switch, delete, refresh" {
     const t = std.testing;
     var dbuf: [96]u8 = undefined;
-    const d = try std.fmt.bufPrintZ(&dbuf, "/tmp/perihelion-notes-test-{d}", .{std.c.getpid()});
+    const d = try std.fmt.bufPrintSentinel(&dbuf, "/tmp/perihelion-notes-test-{d}", .{std.c.getpid()}, 0);
     _ = posix.system.mkdir(d.ptr, 0o755);
     defer {
         var cb: [128]u8 = undefined;
         for ([_][]const u8{ "note1.txt", "note2.txt", "note3.txt", ".last-deleted.txt" }) |f| {
-            if (std.fmt.bufPrintZ(&cb, "{s}/{s}", .{ d, f })) |cp| {
+            if (std.fmt.bufPrintSentinel(&cb, "{s}/{s}", .{ d, f }, 0)) |cp| {
                 _ = unlink(cp.ptr);
             } else |_| {}
         }
         _ = rmdir(d.ptr);
     }
     var pb: [128]u8 = undefined;
-    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d}), "first"));
-    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note3.txt", .{d}), "- [ ] third"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintSentinel(&pb, "{s}/note1.txt", .{d}, 0), "first"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintSentinel(&pb, "{s}/note3.txt", .{d}, 0), "- [ ] third"));
 
     var n = NoteWidget{};
     n.configure(d, 3); // the remembered note is open
@@ -5178,8 +5178,8 @@ test "notes: pages on disk — new, switch, delete, refresh" {
     try t.expectEqualSlices(u8, "first", n.text());
 
     // Another program writes note2.txt and rewrites note1: both show up.
-    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note2.txt", .{d}), "second"));
-    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d}), "first, edited"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintSentinel(&pb, "{s}/note2.txt", .{d}, 0), "second"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintSentinel(&pb, "{s}/note1.txt", .{d}, 0), "first, edited"));
     try t.expect(n.refresh());
     try t.expectEqualSlices(u8, &[_]u8{ 1, 2, 3 }, n.pages[0..n.page_count]);
     try t.expectEqualSlices(u8, "first, edited", n.text());
@@ -5191,7 +5191,7 @@ test "notes: pages on disk — new, switch, delete, refresh" {
     n.caret = 0;
     try t.expect(n.insertCp('z'));
     n.dirty = true;
-    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d}), "from elsewhere"));
+    try t.expect(writeFileAtomicZ(try std.fmt.bufPrintSentinel(&pb, "{s}/note1.txt", .{d}, 0), "from elsewhere"));
     _ = n.refresh();
     try t.expectEqualSlices(u8, "z", n.text());
     n.endEditing();
@@ -5200,22 +5200,22 @@ test "notes: pages on disk — new, switch, delete, refresh" {
     n.deletePage();
     try t.expectEqualSlices(u8, &[_]u8{ 2, 3 }, n.pages[0..n.page_count]);
     try t.expectEqual(@as(u8, 2), n.slot);
-    const bak = try std.fmt.bufPrintZ(&pb, "{s}/.last-deleted.txt", .{d});
+    const bak = try std.fmt.bufPrintSentinel(&pb, "{s}/.last-deleted.txt", .{d}, 0);
     try t.expectEqualSlices(u8, "z", rb[0..readFileInto(bak, &rb)]);
 }
 
 test "notes: an oversized file is read-only and never written" {
     const t = std.testing;
     var dbuf: [96]u8 = undefined;
-    const d = try std.fmt.bufPrintZ(&dbuf, "/tmp/perihelion-notes-big-{d}", .{std.c.getpid()});
+    const d = try std.fmt.bufPrintSentinel(&dbuf, "/tmp/perihelion-notes-big-{d}", .{std.c.getpid()}, 0);
     _ = posix.system.mkdir(d.ptr, 0o755);
     var pb: [128]u8 = undefined;
-    const p = try std.fmt.bufPrintZ(&pb, "{s}/note1.txt", .{d});
+    const p = try std.fmt.bufPrintSentinel(&pb, "{s}/note1.txt", .{d}, 0);
     defer {
         _ = unlink(p.ptr);
         _ = rmdir(d.ptr);
     }
-    const big = [_]u8{'x'} ** (NoteWidget.NOTE_MAX + 10);
+    const big = @as([NoteWidget.NOTE_MAX + 10]u8, @splat('x'));
     try t.expect(writeFileAtomicZ(p, &big));
     var n = NoteWidget{};
     n.configure(d, 1);
@@ -5686,7 +5686,7 @@ pub const IconsWidget = struct {
                     break;
                 }
                 var pbuf: [ICON_PATH_MAX + 1]u8 = undefined;
-                const rel = std.fmt.bufPrintZ(&pbuf, "{s}/{s}", .{ self.dir(), name }) catch continue;
+                const rel = std.fmt.bufPrintSentinel(&pbuf, "{s}/{s}", .{ self.dir(), name }, 0) catch continue;
                 var raw: [8192]u8 = undefined;
                 const got = readFileCapped(rel, &raw);
                 if (!parseDesktopFile(&fresh[count], raw[0..got], self.dir(), name)) continue;
@@ -6005,7 +6005,7 @@ pub const IconsWidget = struct {
         execz[item.exec_len] = 0;
 
         var scratch: [2 * ICON_EXEC_MAX + 2 * ICON_ARGS_MAX]u8 = undefined;
-        var child_argv = [_]?[*:0]const u8{null} ** (ICON_ARGS_MAX + 1);
+        var child_argv = @as([ICON_ARGS_MAX + 1]?[*:0]const u8, @splat(null));
         var argc: usize = 0;
 
         if (item.terminal) {
@@ -6392,7 +6392,7 @@ pub const KEY_DELETE: u32 = 111;
 pub fn writeFileAtomicZ(path: [:0]const u8, data: []const u8) bool {
     if (path.len + 4 >= 512) return false;
     var tmp_buf: [400]u8 = undefined;
-    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.tmp", .{path}) catch return false;
+    const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}.tmp", .{path}, 0) catch return false;
     const raw_fd = posix.system.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
     if (raw_fd < 0) return false;
     const fd: posix.fd_t = @intCast(raw_fd);

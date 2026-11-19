@@ -106,7 +106,7 @@ pub const Backlight = struct {
     pub fn init(dir: []const u8) Backlight {
         var self = Backlight{};
         var dz: [256]u8 = undefined;
-        const dir_z = std.fmt.bufPrintZ(&dz, "{s}", .{dir}) catch return self;
+        const dir_z = std.fmt.bufPrintSentinel(&dz, "{s}", .{dir}, 0) catch return self;
         const d = libc.opendir(dir_z.ptr) orelse return self;
         defer _ = libc.closedir(d);
         var best_rank: i16 = -1;
@@ -115,11 +115,11 @@ pub const Backlight = struct {
             const n = std.mem.sliceTo(&e.d_name, 0);
             if (n.len == 0 or n[0] == '.' or n.len > self.name_buf.len) continue;
             var pb: [400]u8 = undefined;
-            const mp = std.fmt.bufPrintZ(&pb, "{s}/{s}/max_brightness", .{ dir, n }) catch continue;
+            const mp = std.fmt.bufPrintSentinel(&pb, "{s}/{s}/max_brightness", .{ dir, n }, 0) catch continue;
             const max = readU64(mp) orelse continue;
             if (max == 0) continue;
             var tb: [32]u8 = undefined;
-            const tp = std.fmt.bufPrintZ(&pb, "{s}/{s}/type", .{ dir, n }) catch continue;
+            const tp = std.fmt.bufPrintSentinel(&pb, "{s}/{s}/type", .{ dir, n }, 0) catch continue;
             const rank: i16 = typeRank(readSmall(tp, &tb) orelse "");
             const better = rank > best_rank or
                 (rank == best_rank and max > best_max) or
@@ -134,7 +134,7 @@ pub const Backlight = struct {
         self.max = best_max;
         for ([_][]const u8{ "actual_brightness", "brightness" }) |f| {
             var pb: [400]u8 = undefined;
-            const p = std.fmt.bufPrintZ(&pb, "{s}/{s}/{s}", .{ dir, self.name(), f }) catch continue;
+            const p = std.fmt.bufPrintSentinel(&pb, "{s}/{s}/{s}", .{ dir, self.name(), f }, 0) catch continue;
             const raw = posix.system.open(p.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, @as(posix.mode_t, 0));
             if (raw >= 0) {
                 self.fd = @intCast(raw);
@@ -188,7 +188,7 @@ fn writeFile(dir: []const u8, rel: []const u8, body: []const u8) void {
     const p = std.fmt.bufPrint(&pb, "{s}/{s}", .{ dir, rel }) catch return;
     if (std.mem.lastIndexOfScalar(u8, p, '/')) |s| mkdirP(p[0..s]);
     var zb: [300]u8 = undefined;
-    const z = std.fmt.bufPrintZ(&zb, "{s}", .{p}) catch return;
+    const z = std.fmt.bufPrintSentinel(&zb, "{s}", .{p}, 0) catch return;
     const raw = posix.system.open(z.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
     if (raw < 0) return;
     _ = std.c.write(@intCast(raw), body.ptr, body.len);
