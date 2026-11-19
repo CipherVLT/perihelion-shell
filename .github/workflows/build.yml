@@ -151,6 +151,9 @@ jobs:
       - name: Unit-test the desktop cards (notes editing and pages, layout)
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build test-widgets
+      - name: Unit-test Glance (commands, panel layout, hit-testing, open/close)
+        working-directory: perihelionbar-shell
+        run: /opt/zig/zig build test-glance
       - name: Check the app drawer's QML parses
         run: |
           dnf5 install -y --setopt=install_weak_deps=False qt6-qtdeclarative-devel
