@@ -389,6 +389,7 @@ fn resolvePaths() void {
     theme_path = std.fmt.bufPrintZ(&theme_path_buf, "{s}/theme", .{dir}) catch "";
     widgets_disabled_path = std.fmt.bufPrintZ(&widgets_disabled_path_buf, "{s}/widgets-disabled", .{dir}) catch "";
     shell_pidfile_path = std.fmt.bufPrintZ(&shell_pidfile_path_buf, "{s}/perihelionbar-shell.pid", .{dir}) catch "";
+    shell_json_path = std.fmt.bufPrintZ(&shell_json_path_buf, "{s}/shell.json", .{dir}) catch "";
     settings_style_path = std.fmt.bufPrintZ(&settings_style_path_buf, "{s}/settings-style", .{dir}) catch "";
 }
 
@@ -743,7 +744,7 @@ var live_theme_accent: []const u8 = "wallpaper";
 // Desktop widgets on/off, one bit per WIDGET_TABLE row below (bit i =
 // row i). Lives outside config.json in the widgets-disabled file; default
 // zero (missing file means all enabled).
-var live_disabled_mask: u8 = 0;
+var live_disabled_mask: u16 = 0;
 
 // Module lists (Step 6) — each group is a small fixed-capacity mutable
 // array, not a read-only slice into config_arena, since Modules-tab rows
@@ -2454,17 +2455,17 @@ fn buildPillBordersRow(group: *gtk.AdwPreferencesGroup) void {
 /// over WIDGET_TABLE below (bit i = row i). Missing/unreadable file means
 /// zero (all enabled), matching the shell's own default — a fresh install
 /// has no file.
-fn loadDisabledMask() u8 {
+fn loadDisabledMask() u16 {
     const raw = readFileAll(widgets_disabled_path) orelse return 0;
     defer gpa.free(raw);
-    var mask: u8 = 0;
+    var mask: u16 = 0;
     var it = std.mem.splitScalar(u8, raw, '\n');
     while (it.next()) |line| {
         const id = std.mem.trim(u8, line, " \t\r");
         if (id.len == 0) continue;
         for (WIDGET_TABLE, 0..) |w, i| {
             if (std.mem.eql(u8, w.id, id)) {
-                mask |= @as(u8, 1) << @as(u3, @intCast(i));
+                mask |= @as(u16, 1) << @as(u4, @intCast(i));
                 break;
             }
         }
@@ -2479,7 +2480,7 @@ fn saveDisabledMask() void {
     var buf: [256]u8 = undefined;
     var len: usize = 0;
     for (WIDGET_TABLE, 0..) |w, i| {
-        const bit: u8 = @as(u8, 1) << @as(u3, @intCast(i));
+        const bit: u16 = @as(u16, 1) << @as(u4, @intCast(i));
         if (live_disabled_mask & bit == 0) continue;
         const line = std.fmt.bufPrint(buf[len..], "{s}\n", .{w.id}) catch break;
         len += line.len;
@@ -2513,7 +2514,9 @@ fn restartShell() void {
         // No pidfile (shell predating pidfiles, or none running): exact-name
         // pkill covers the live-but-untracked case; a miss is a silent no-op.
         // (-f: the kernel's 15-character process name cuts it short)
-        launchDetached(&.{ "pkill", "-f", "^(/usr/bin/)?perihelion-shell( |$)" });
+        // Both names: perihelion-shell, or the perihelionbar-shell link
+        // older standalone configs still launch it by.
+        launchDetached(&.{ "pkill", "-f", "^(/usr/bin/)?perihelion(bar)?-shell( |$)" });
     }
     launchDetached(&.{"perihelion-shell"});
 }
@@ -2536,9 +2539,16 @@ const WIDGET_TABLE = [_]WidgetToggle{
     .{ .id = "system", .title = "System", .subtitle = "System stats card" },
     .{ .id = "calendar", .title = "Calendar", .subtitle = "Calendar card with reminders" },
     .{ .id = "watch", .title = "Watch", .subtitle = "Analog watch" },
-    .{ .id = "note1", .title = "Sticky note", .subtitle = "Sticky note card" },
+    .{ .id = "note1", .title = "Notes", .subtitle = "Sticky notes with tabs and checklists" },
     .{ .id = "icons", .title = "Desktop icons", .subtitle = "~/Desktop shortcuts as a grid of launchable icons" },
+    .{ .id = "fastfetch", .title = "Fastfetch", .subtitle = "System info card with your fastfetch logo" },
+    .{ .id = "processes", .title = "Processes", .subtitle = "Top processes by CPU or memory (click to switch)" },
 };
+
+// One mask bit per row (u16, u4 shifts above): keep the table within it.
+comptime {
+    if (WIDGET_TABLE.len > 16) @compileError("WIDGET_TABLE outgrew the u16 widget mask");
+}
 
 /// Flips one desktop widget off/on: updates the live mask, persists the
 /// on/off list, and restarts the shell so the change shows up right away.
@@ -2546,9 +2556,10 @@ const WIDGET_TABLE = [_]WidgetToggle{
 /// Independent of config.json — intentionally not routed through
 /// saveAndSignal.
 fn onWidgetEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
-    const idx: usize = @intFromPtr(user_data.?);
-    if (idx >= WIDGET_TABLE.len) return;
-    const bit: u8 = @as(u8, 1) << @as(u3, @intCast(idx));
+    const raw: usize = @intFromPtr(user_data orelse return);
+    if (raw == 0 or raw > WIDGET_TABLE.len) return;
+    const idx = raw - 1;
+    const bit: u16 = @as(u16, 1) << @as(u4, @intCast(idx));
     if (gtk.gtk_switch_get_active(sw) != 0) {
         live_disabled_mask &= ~bit;
     } else {
@@ -2560,7 +2571,7 @@ fn onWidgetEnabledChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*a
 
 fn buildWidgetRows(group: *gtk.AdwPreferencesGroup) void {
     for (WIDGET_TABLE, 0..) |w, i| {
-        const bit: u8 = @as(u8, 1) << @as(u3, @intCast(i));
+        const bit: u16 = @as(u16, 1) << @as(u4, @intCast(i));
         const row = gtk.adw_action_row_new();
         gtk.adw_preferences_row_set_title(@ptrCast(row), w.title);
         gtk.adw_action_row_set_subtitle(row, w.subtitle);
@@ -2569,9 +2580,353 @@ fn buildWidgetRows(group: *gtk.AdwPreferencesGroup) void {
         const sw = gtk.gtk_switch_new();
         gtk.gtk_switch_set_active(sw, if (live_disabled_mask & bit == 0) 1 else 0);
         gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
-        _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onWidgetEnabledChanged), @ptrFromInt(i), null, 0);
+        // Index + 1: index 0 as a pointer would be null.
+        _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onWidgetEnabledChanged), @ptrFromInt(i + 1), null, 0);
 
         gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+        gtk.adw_preferences_group_add(group, @ptrCast(row));
+    }
+}
+
+// ---------------------------------------------------------------------
+// Desktop card options (shell.json)
+// ---------------------------------------------------------------------
+//
+// The desktop cards' own settings live in shell.json, next to the positions
+// the shell saves when a card is dragged. This group changes one key at a
+// time: it re-reads the file, writes it back with only that key replaced
+// (every other key, and the widgets list, kept as they are), and restarts
+// the shell — the same apply step as the on/off switches above. A shell.json
+// that doesn't parse is left alone rather than overwritten.
+
+var shell_json_path_buf: [512]u8 = undefined;
+var shell_json_path: [:0]const u8 = "";
+
+/// A value as written to shell.json.
+const CardVal = union(enum) { str: []const u8, int: i64, boolean: bool };
+
+const CardOption = struct {
+    /// The shell.json key (main.zig's ShellConfig names it the same).
+    key: []const u8,
+    title: [*:0]const u8,
+    subtitle: [*:0]const u8,
+    /// A choice row: labels shown and values written, in the same order.
+    /// Empty for an on/off row.
+    labels: []const [*:0]const u8 = &.{},
+    values: []const CardVal = &.{},
+    /// What the shell uses when the key is absent.
+    default: CardVal,
+    /// The bar reads this key too: ask it to reload.
+    bar: bool = false,
+};
+
+const MAX_CARD_CHOICES = 8;
+
+const CARD_OPTIONS = [_]CardOption{
+    .{
+        .key = "clock_style",
+        .title = "Clock face",
+        .subtitle = "Digital, split-flap tiles, hours over minutes, or the classic two lines",
+        .labels = &.{ "Digital", "Flip", "Stacked", "Classic" },
+        .values = &.{ .{ .str = "digital" }, .{ .str = "flip" }, .{ .str = "stacked" }, .{ .str = "classic" } },
+        .default = .{ .str = "digital" },
+    },
+    .{ .key = "clock_24h", .title = "24-hour clock", .subtitle = "Off shows the time as 1:30 PM", .default = .{ .boolean = true } },
+    .{ .key = "clock_seconds", .title = "Clock seconds", .subtitle = "Without seconds the clock redraws once a minute", .default = .{ .boolean = false } },
+    .{ .key = "clock_date", .title = "Clock date", .subtitle = "The weekday and date under the time", .default = .{ .boolean = true } },
+    .{
+        .key = "system_style",
+        .title = "System card",
+        .subtitle = "Rows with bars, or ring gauges for CPU, memory, GPU and temperature",
+        .labels = &.{ "Bars", "Rings" },
+        .values = &.{ .{ .str = "bars" }, .{ .str = "rings" } },
+        .default = .{ .str = "bars" },
+    },
+    .{
+        .key = "system_temp_units",
+        .title = "Temperature units",
+        .subtitle = "CPU and GPU temperatures on the System card",
+        .labels = &.{ "Celsius", "Fahrenheit" },
+        .values = &.{ .{ .str = "C" }, .{ .str = "F" } },
+        .default = .{ .str = "C" },
+    },
+    .{
+        .key = "weather_units",
+        .title = "Weather units",
+        .subtitle = "The Weather card and the bar's weather. Automatic uses °F in the US, °C elsewhere",
+        .labels = &.{ "Automatic", "Celsius", "Fahrenheit" },
+        .values = &.{ .{ .str = "auto" }, .{ .str = "C" }, .{ .str = "F" } },
+        .default = .{ .str = "auto" },
+        .bar = true,
+    },
+    .{
+        .key = "weather_click",
+        .title = "Clicking the Weather card",
+        .subtitle = "Open the full forecast (weather.gov in the US, Windy elsewhere), or switch °C/°F",
+        .labels = &.{ "Opens the forecast", "Switches °C/°F" },
+        .values = &.{ .{ .str = "forecast" }, .{ .str = "units" } },
+        .default = .{ .str = "forecast" },
+    },
+    .{
+        .key = "processes_sort",
+        .title = "Processes order",
+        .subtitle = "Busiest by CPU or by memory (clicking the card switches too)",
+        .labels = &.{ "CPU", "Memory" },
+        .values = &.{ .{ .str = "cpu" }, .{ .str = "memory" } },
+        .default = .{ .str = "cpu" },
+    },
+    .{
+        .key = "processes_count",
+        .title = "Processes shown",
+        .subtitle = "Rows on the Processes card",
+        .labels = &.{ "3", "4", "5", "6", "7", "8" },
+        .values = &.{ .{ .int = 3 }, .{ .int = 4 }, .{ .int = 5 }, .{ .int = 6 }, .{ .int = 7 }, .{ .int = 8 } },
+        .default = .{ .int = 6 },
+    },
+    .{ .key = "notes_tabs", .title = "Note tabs", .subtitle = "Up to nine notes with tabs, + and ×; off keeps one plain note", .default = .{ .boolean = true } },
+    .{ .key = "notes_checklists", .title = "Note checklists", .subtitle = "Show - [ ] lines as checkboxes, - as bullets and # as headings", .default = .{ .boolean = true } },
+};
+
+comptime {
+    for (CARD_OPTIONS) |o| {
+        if (o.labels.len != o.values.len) @compileError("card option labels and values differ in length");
+        if (o.labels.len > MAX_CARD_CHOICES) @compileError("card option has too many choices");
+        if (o.values.len == 0 and o.default != .boolean) @compileError("an on/off card option needs a bool default");
+    }
+}
+
+fn cardValMatches(v: std.json.Value, want: CardVal) bool {
+    return switch (want) {
+        .str => |s| switch (v) {
+            .string => |x| std.ascii.eqlIgnoreCase(x, s),
+            else => false,
+        },
+        .int => |i| switch (v) {
+            .integer => |x| x == i,
+            else => false,
+        },
+        .boolean => |b| switch (v) {
+            .bool => |x| x == b,
+            else => false,
+        },
+    };
+}
+
+fn cardValEql(a: CardVal, b: CardVal) bool {
+    return switch (a) {
+        .str => |s| b == .str and std.mem.eql(u8, s, b.str),
+        .int => |i| b == .int and i == b.int,
+        .boolean => |x| b == .boolean and x == b.boolean,
+    };
+}
+
+/// shell.json as a JSON object, or null when it's missing or doesn't parse.
+fn loadShellJson(arena: std.mem.Allocator) ?std.json.Value {
+    const text = readFileAll(shell_json_path) orelse return null;
+    defer gpa.free(text);
+    const v = std.json.parseFromSliceLeaky(std.json.Value, arena, text, .{ .allocate = .alloc_always }) catch return null;
+    if (v != .object) return null;
+    return v;
+}
+
+fn appendIndent(list: *std.ArrayList(u8), depth: usize) std.mem.Allocator.Error!void {
+    try list.append(gpa, '\n');
+    for (0..depth) |_| try list.appendSlice(gpa, "  ");
+}
+
+fn appendCardVal(list: *std.ArrayList(u8), v: CardVal) std.mem.Allocator.Error!void {
+    switch (v) {
+        .str => |s| try appendJsonString(list, s),
+        .int => |i| {
+            var b: [24]u8 = undefined;
+            try list.appendSlice(gpa, std.fmt.bufPrint(&b, "{d}", .{i}) catch unreachable);
+        },
+        .boolean => |b| try list.appendSlice(gpa, if (b) "true" else "false"),
+    }
+}
+
+/// Any JSON value, two-space indented (the shell writes shell.json the same
+/// way, so the file stays readable either way round).
+fn appendJsonPretty(list: *std.ArrayList(u8), v: std.json.Value, depth: usize) std.mem.Allocator.Error!void {
+    switch (v) {
+        .null => try list.appendSlice(gpa, "null"),
+        .bool => |b| try list.appendSlice(gpa, if (b) "true" else "false"),
+        .integer => |i| {
+            var b: [24]u8 = undefined;
+            try list.appendSlice(gpa, std.fmt.bufPrint(&b, "{d}", .{i}) catch unreachable);
+        },
+        .float => |f| {
+            var b: [64]u8 = undefined;
+            try list.appendSlice(gpa, std.fmt.bufPrint(&b, "{d}", .{f}) catch "0");
+        },
+        .number_string => |s| try list.appendSlice(gpa, s),
+        .string => |s| try appendJsonString(list, s),
+        .array => |a| {
+            if (a.items.len == 0) return list.appendSlice(gpa, "[]");
+            try list.append(gpa, '[');
+            for (a.items, 0..) |item, i| {
+                if (i > 0) try list.append(gpa, ',');
+                try appendIndent(list, depth + 1);
+                try appendJsonPretty(list, item, depth + 1);
+            }
+            try appendIndent(list, depth);
+            try list.append(gpa, ']');
+        },
+        .object => |o| {
+            if (o.count() == 0) return list.appendSlice(gpa, "{}");
+            try list.append(gpa, '{');
+            var it = o.iterator();
+            var first = true;
+            while (it.next()) |e| {
+                if (!first) try list.append(gpa, ',');
+                first = false;
+                try appendIndent(list, depth + 1);
+                try appendJsonString(list, e.key_ptr.*);
+                try list.appendSlice(gpa, ": ");
+                try appendJsonPretty(list, e.value_ptr.*, depth + 1);
+            }
+            try appendIndent(list, depth);
+            try list.append(gpa, '}');
+        },
+    }
+}
+
+/// shell.json text with `key` set to `val` (added at the end when absent).
+fn buildShellJson(list: *std.ArrayList(u8), root: ?std.json.Value, key: []const u8, val: CardVal) std.mem.Allocator.Error!void {
+    try list.append(gpa, '{');
+    var first = true;
+    var replaced = false;
+    if (root) |r| {
+        var it = r.object.iterator();
+        while (it.next()) |e| {
+            if (!first) try list.append(gpa, ',');
+            first = false;
+            try appendIndent(list, 1);
+            try appendJsonString(list, e.key_ptr.*);
+            try list.appendSlice(gpa, ": ");
+            if (std.mem.eql(u8, e.key_ptr.*, key)) {
+                try appendCardVal(list, val);
+                replaced = true;
+            } else {
+                try appendJsonPretty(list, e.value_ptr.*, 1);
+            }
+        }
+    }
+    if (!replaced) {
+        if (!first) try list.append(gpa, ',');
+        try appendIndent(list, 1);
+        try appendJsonString(list, key);
+        try list.appendSlice(gpa, ": ");
+        try appendCardVal(list, val);
+    }
+    try list.appendSlice(gpa, "\n}\n");
+}
+
+/// Sets one shell.json key, keeping everything else. Written to a temp file
+/// and renamed over, so the shell never reads half a file.
+fn setShellJsonKey(key: []const u8, val: CardVal) bool {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    var root: ?std.json.Value = null;
+    if (readFileAll(shell_json_path)) |text| {
+        defer gpa.free(text);
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena_state.allocator(), text, .{ .allocate = .alloc_always }) catch {
+            logging.err("config: {s} doesn't parse — not changing it", .{shell_json_path});
+            return false;
+        };
+        if (parsed != .object) {
+            logging.err("config: {s} isn't a JSON object — not changing it", .{shell_json_path});
+            return false;
+        }
+        root = parsed;
+    }
+    var list: std.ArrayList(u8) = .empty;
+    defer list.deinit(gpa);
+    buildShellJson(&list, root, key, val) catch return false;
+    var tmp_buf: [530]u8 = undefined;
+    const tmp = std.fmt.bufPrintZ(&tmp_buf, "{s}.settings-tmp", .{shell_json_path}) catch return false;
+    if (!writeFileAll(tmp, list.items)) {
+        logging.err("config: could not write {s}", .{tmp});
+        return false;
+    }
+    if (std.c.rename(tmp.ptr, shell_json_path.ptr) != 0) {
+        logging.err("config: could not replace {s}", .{shell_json_path});
+        return false;
+    }
+    return true;
+}
+
+fn applyCardOption(opt: *const CardOption, v: CardVal) void {
+    if (!setShellJsonKey(opt.key, v)) return;
+    restartShell();
+    if (opt.bar) signalBar();
+}
+
+/// user_data carries the row's CARD_OPTIONS index + 1 (0 would be null).
+fn cardOptionFrom(user_data: ?*anyopaque) ?*const CardOption {
+    const raw = @intFromPtr(user_data orelse return null);
+    if (raw == 0 or raw > CARD_OPTIONS.len) return null;
+    return &CARD_OPTIONS[raw - 1];
+}
+
+fn onCardChoiceChanged(row: *gtk.AdwComboRow, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
+    const opt = cardOptionFrom(user_data) orelse return;
+    const sel = gtk.adw_combo_row_get_selected(row);
+    if (sel >= opt.values.len) return;
+    applyCardOption(opt, opt.values[sel]);
+}
+
+fn onCardToggleChanged(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
+    const opt = cardOptionFrom(user_data) orelse return;
+    applyCardOption(opt, .{ .boolean = gtk.gtk_switch_get_active(sw) != 0 });
+}
+
+fn buildCardOptionRows(group: *gtk.AdwPreferencesGroup) void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const root = loadShellJson(arena_state.allocator());
+    for (&CARD_OPTIONS, 0..) |*opt, i| {
+        const cur: ?std.json.Value = if (root) |r| r.object.get(opt.key) else null;
+        const tag: ?*anyopaque = @ptrFromInt(i + 1);
+        if (opt.values.len == 0) {
+            const on = if (cur) |v| switch (v) {
+                .bool => |b| b,
+                else => opt.default.boolean,
+            } else opt.default.boolean;
+            const row = gtk.adw_action_row_new();
+            gtk.adw_preferences_row_set_title(@ptrCast(row), opt.title);
+            gtk.adw_action_row_set_subtitle(row, opt.subtitle);
+            const sw = gtk.gtk_switch_new();
+            gtk.gtk_switch_set_active(sw, if (on) 1 else 0);
+            gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
+            _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onCardToggleChanged), tag, null, 0);
+            gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
+            gtk.adw_action_row_set_activatable_widget(row, @ptrCast(sw));
+            gtk.adw_preferences_group_add(group, @ptrCast(row));
+            continue;
+        }
+        var selected: c_uint = 0;
+        for (opt.values, 0..) |want, vi| {
+            const hit = if (cur) |v| cardValMatches(v, want) else false;
+            if (hit) {
+                selected = @intCast(vi);
+                break;
+            }
+        } else {
+            // Absent or unrecognised: show what the shell actually uses.
+            for (opt.values, 0..) |want, vi| {
+                if (cardValEql(want, opt.default)) selected = @intCast(vi);
+            }
+        }
+        const row = gtk.adw_combo_row_new();
+        gtk.adw_preferences_row_set_title(@ptrCast(row), opt.title);
+        gtk.adw_action_row_set_subtitle(@ptrCast(row), opt.subtitle);
+        var buf: [MAX_CARD_CHOICES + 1]?[*:0]const u8 = undefined;
+        for (opt.labels, 0..) |label, li| buf[li] = label;
+        buf[opt.labels.len] = null;
+        gtk.adw_combo_row_set_model(row, @ptrCast(gtk.gtk_string_list_new(@ptrCast(&buf))));
+        gtk.adw_combo_row_set_selected(row, selected);
+        _ = gtk.g_signal_connect_data(@ptrCast(row), "notify::selected", @ptrCast(&onCardChoiceChanged), tag, null, 0);
         gtk.adw_preferences_group_add(group, @ptrCast(row));
     }
 }
@@ -3196,6 +3551,12 @@ fn buildAppearancePage() *gtk.GtkBox {
     gtk.adw_preferences_group_set_title(widgets_group, "Desktop Widgets");
     buildWidgetRows(widgets_group);
     gtk.gtk_box_append(outer, @ptrCast(widgets_group));
+
+    const cards_group = gtk.adw_preferences_group_new();
+    gtk.adw_preferences_group_set_title(cards_group, "Desktop Card Options");
+    gtk.adw_preferences_group_set_description(cards_group, "How the clock, System, Processes, Weather and Notes cards look. Saved in ~/.config/perihelionbar/shell.json; the cards restart to apply a change.");
+    buildCardOptionRows(cards_group);
+    gtk.gtk_box_append(outer, @ptrCast(cards_group));
 
     const bar_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(bar_group, "Bar Colors");

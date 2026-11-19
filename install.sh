@@ -1251,20 +1251,34 @@ build_perihelionbar_shell() {
 run_spinner "Building perihelionbar" build_perihelionbar \
     || die "Failed to build perihelionbar — check zig, freetype2, gdk-pixbuf2, wayland, wayland-protocols, gtk4, and libadwaita installed correctly."
 
-run_spinner "Installing perihelionbar to /usr/bin" \
-    sudo install -Dm755 ~/.local/share/perihelionbar/perihelionbar/zig-out/bin/perihelionbar /usr/bin/perihelionbar \
-    || die "Failed to install the perihelionbar binary to /usr/bin."
-ok "perihelionbar built and installed to /usr/bin/perihelionbar"
+# The build names its programs perihelion-bar, perihelion-settings and
+# perihelion-shell — the same names Perihelion Linux ships. The older
+# perihelionbar / perihelionbar-config / perihelionbar-shell names stay as
+# symlinks, so existing Mango and Hyprland configs, keybinds and scripts
+# keep working (and an older install's real files under those names are
+# replaced by the links).
+install_perihelion_bin() {  # <zig-out/bin dir> <built name> [old name]
+    sudo install -Dm755 "$1/$2" "/usr/bin/$2" || return 1
+    if [ -n "${3:-}" ]; then
+        sudo ln -sfn "$2" "/usr/bin/$3" || return 1
+    fi
+}
+BAR_OUT="$HOME/.local/share/perihelionbar/perihelionbar/zig-out/bin"
+
+run_spinner "Installing perihelion-bar to /usr/bin" \
+    install_perihelion_bin "$BAR_OUT" perihelion-bar perihelionbar \
+    || die "Failed to install the perihelion-bar binary to /usr/bin."
+ok "perihelion-bar built and installed to /usr/bin/perihelion-bar (perihelionbar links to it)"
 
 run_spinner "Installing perihelionbar-welcome to /usr/bin" \
-    sudo install -Dm755 ~/.local/share/perihelionbar/perihelionbar/zig-out/bin/perihelionbar-welcome /usr/bin/perihelionbar-welcome \
+    install_perihelion_bin "$BAR_OUT" perihelionbar-welcome \
     || die "Failed to install the perihelionbar-welcome binary to /usr/bin."
 ok "perihelionbar-welcome built and installed to /usr/bin/perihelionbar-welcome"
 
-run_spinner "Installing perihelionbar-config to /usr/bin" \
-    sudo install -Dm755 ~/.local/share/perihelionbar/perihelionbar/zig-out/bin/perihelionbar-config /usr/bin/perihelionbar-config \
-    || die "Failed to install the perihelionbar-config binary to /usr/bin."
-ok "perihelionbar-config built and installed to /usr/bin/perihelionbar-config"
+run_spinner "Installing perihelion-settings to /usr/bin" \
+    install_perihelion_bin "$BAR_OUT" perihelion-settings perihelionbar-config \
+    || die "Failed to install the perihelion-settings binary to /usr/bin."
+ok "perihelion-settings built and installed to /usr/bin/perihelion-settings (perihelionbar-config links to it)"
 
 # Build perihelionbar-shell (the desktop widgets) too — same zig, against the bar's
 # source layout it was staged next to above. Autostarted on login by whichever
@@ -1272,10 +1286,10 @@ ok "perihelionbar-config built and installed to /usr/bin/perihelionbar-config"
 run_spinner "Building perihelionbar-shell" build_perihelionbar_shell \
     || die "Failed to build perihelionbar-shell — check zig, freetype2, gdk-pixbuf2, wayland, and wayland-protocols installed correctly."
 
-run_spinner "Installing perihelionbar-shell to /usr/bin" \
-    sudo install -Dm755 ~/.local/share/perihelionbar/perihelionbar-shell/zig-out/bin/perihelionbar-shell /usr/bin/perihelionbar-shell \
-    || die "Failed to install the perihelionbar-shell binary to /usr/bin."
-ok "perihelionbar-shell built and installed to /usr/bin/perihelionbar-shell"
+run_spinner "Installing perihelion-shell to /usr/bin" \
+    install_perihelion_bin "$HOME/.local/share/perihelionbar/perihelionbar-shell/zig-out/bin" perihelion-shell perihelionbar-shell \
+    || die "Failed to install the perihelion-shell binary to /usr/bin."
+ok "perihelion-shell built and installed to /usr/bin/perihelion-shell (perihelionbar-shell links to it)"
 
 # Seed the calendar widget's reminders file with its format reference on
 # first install (the widget appends it on demand too — this just documents
@@ -2022,9 +2036,9 @@ WELCOMEDESKTOPEOF
 cat > ~/.local/share/applications/perihelionbar-config.desktop <<'CONFIGDESKTOPEOF'
 [Desktop Entry]
 Type=Application
-Name=Perihelion Bar Config
-Comment=Configure perihelionbar's appearance, module layout, and desktop shortcuts
-Exec=perihelionbar-config
+Name=Perihelion Settings
+Comment=Perihelion's bar, desktop cards, colours and window manager settings
+Exec=perihelion-settings
 Icon=perihelionbar-config
 Terminal=false
 Categories=Settings;

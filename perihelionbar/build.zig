@@ -48,6 +48,41 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     }));
+    // Weather service shared with perihelionbar-shell's desktop card
+    // (Open-Meteo, location, refresh/retry schedule, shared answer cache).
+    // Pure std + libc; the shell imports this same file as a module.
+    const weather_mod = b.createModule(.{
+        .root_source_file = b.path("src/weather.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("weather", weather_mod);
+    // CPU/GPU temperature service, shared with the shell's System card.
+    const temps_mod = b.createModule(.{
+        .root_source_file = b.path("src/temps.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("temps", temps_mod);
+    // System-info service behind the shell's Fastfetch card. The bar does
+    // not use it; it lives here with the other shared services and its
+    // tests run from this build.
+    const fastfetch_mod = b.createModule(.{
+        .root_source_file = b.path("src/fastfetch.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    // Top-processes service behind the shell's Processes card (same
+    // convention: shared source, tests run from this build).
+    const procs_mod = b.createModule(.{
+        .root_source_file = b.path("src/procs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
     exe_mod.linkSystemLibrary("wayland-client", .{});
     exe_mod.linkSystemLibrary("freetype2", .{}); // real Nerd Font/Unicode glyph rendering (src/font.zig)
     exe_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{}); // tray icon-name -> PNG/SVG decode (src/icontheme.zig)
@@ -96,6 +131,30 @@ pub fn build(b: *Build) !void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run src/main.zig unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // `zig build test-weather`: src/weather.zig's parsing, schedule and
+    // cache-format tests (no Wayland or fonts needed).
+    const weather_tests = b.addTest(.{ .root_module = weather_mod, .use_llvm = true, .use_lld = true });
+    const weather_test_step = b.step("test-weather", "Run src/weather.zig unit tests");
+    weather_test_step.dependOn(&b.addRunArtifact(weather_tests).step);
+
+    // `zig build test-temps`: src/temps.zig (builds a fake sysfs tree under
+    // /tmp, so it runs on any machine).
+    const temps_tests = b.addTest(.{ .root_module = temps_mod, .use_llvm = true, .use_lld = true });
+    const temps_test_step = b.step("test-temps", "Run src/temps.zig unit tests");
+    temps_test_step.dependOn(&b.addRunArtifact(temps_tests).step);
+
+    // `zig build test-fastfetch`: src/fastfetch.zig (fake /etc, /proc, /sys
+    // trees under /tmp; no fastfetch binary needed).
+    const fastfetch_tests = b.addTest(.{ .root_module = fastfetch_mod, .use_llvm = true, .use_lld = true });
+    const fastfetch_test_step = b.step("test-fastfetch", "Run src/fastfetch.zig unit tests");
+    fastfetch_test_step.dependOn(&b.addRunArtifact(fastfetch_tests).step);
+
+    // `zig build test-procs`: src/procs.zig (stat parsing, formatting, and a
+    // fake /proc tree under /tmp for ranking, grouping and CPU deltas).
+    const procs_tests = b.addTest(.{ .root_module = procs_mod, .use_llvm = true, .use_lld = true });
+    const procs_test_step = b.step("test-procs", "Run src/procs.zig unit tests");
+    procs_test_step.dependOn(&b.addRunArtifact(procs_tests).step);
 
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.

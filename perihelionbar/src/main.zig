@@ -347,7 +347,25 @@ fn relaySIGUSR1(sig: posix.SIG, info: *const posix.siginfo_t, ctx: ?*anyopaque) 
     _ = info;
     _ = ctx;
     if (g_sigusr1_write_fd >= 0) {
-        const b = [_]u8{0x1};
+        const b = [_]u8{RELOAD_FULL};
+        _ = posix.system.write(g_sigusr1_write_fd, &b, b.len);
+    }
+}
+
+/// Self-pipe bytes: which reload a signal asked for.
+const RELOAD_FULL: u8 = 0x1; // SIGUSR1: config.json + matugen + weather keys
+const RELOAD_WEATHER: u8 = 0x2; // SIGUSR2: only shell.json's weather_* keys
+
+/// SIGUSR2 relay: perihelionbar-shell sends it after a °C/°F click on the
+/// desktop weather card. Same self-pipe as SIGUSR1, different byte, so the
+/// event loop re-reads just the weather keys instead of doing a full
+/// config reload (launcher icons, geometry, …) on every click.
+fn relaySIGUSR2(sig: posix.SIG, info: *const posix.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+    _ = sig;
+    _ = info;
+    _ = ctx;
+    if (g_sigusr1_write_fd >= 0) {
+        const b = [_]u8{RELOAD_WEATHER};
         _ = posix.system.write(g_sigusr1_write_fd, &b, b.len);
     }
 }
@@ -917,6 +935,11 @@ fn renderDistroTile(font: *font_mod.Font, codepoint: u32, dst: []u32) bool {
 
 // getenv is enough here; no need for std.process's env-map machinery.
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+// Weather service shared with the desktop card (Open-Meteo, location,
+// refresh schedule, shared answer cache) — see src/weather.zig.
+const wsvc = @import("weather");
+// CPU/GPU temperature service shared with the desktop System card.
+const tsvc = @import("temps");
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
@@ -2472,7 +2495,7 @@ fn spawnPlayerctlCommand(player: []const u8, command: [*:0]const u8) void {
         if (pid2 == 0) {
             _ = std.c.setsid();
             // Routed through /usr/bin/env for PATH search, same as
-            // startWeatherFetch/startVolumeFetch — execvp isn't bound here.
+            // startVolumeFetch — execvp isn't bound here.
             var argv = [_:null]?[*:0]const u8{ "env", "playerctl", "-p", player_z.ptr, command, null };
             _ = std.c.execve("/usr/bin/env", &argv, std.c.environ);
             std.c._exit(127);
@@ -5313,7 +5336,7 @@ const Bar = struct {
     surface: *wl.Surface,
     layer_surface: *zwlr.LayerSurfaceV1,
     workspaces: *Workspaces,
-    weather: *PolledCommand,
+    weather: *BarWeather,
     pacman: *PolledCommand,
     volume: *PolledCommand,
     mpris: *PolledCommand,
@@ -5790,8 +5813,8 @@ fn realMain() !void {
         _ = posix.system.close(comp_event_fd);
     };
 
-    var weather: PolledCommand = .{};
-    if (!dock_mode) startWeatherFetch(&weather);
+    var weather: BarWeather = .{};
+    if (!dock_mode) applyBarWeatherConfig(&weather, true);
     var pacman_updates: PolledCommand = .{};
     // Perihelion: no package-updates module on the bar, so no polling
     // (checkupdates is Arch's pacman-contrib; on Fedora it only failed).
@@ -5900,10 +5923,10 @@ fn realMain() !void {
     }
 
     const timer_fd = try createIntervalTimer(1);
-    const weather_timer_fd = try createIntervalTimer(WEATHER_REFRESH_SECONDS);
-    defer _ = posix.system.close(weather_timer_fd);
-    defer if (weather.pending_fd >= 0) {
-        _ = posix.system.close(weather.pending_fd);
+    // No weather timer: weather.zig schedules its own refetches and the
+    // once-a-second tick pumps it (see BarWeather).
+    defer if (weather.cmd.pending_fd >= 0) {
+        _ = posix.system.close(weather.cmd.pending_fd);
     };
     const pacman_timer_fd = try createIntervalTimer(PACMAN_REFRESH_SECONDS);
     defer _ = posix.system.close(pacman_timer_fd);
@@ -5953,6 +5976,12 @@ fn realMain() !void {
             .flags = posix.SA.SIGINFO,
         };
         posix.sigaction(.USR1, &act, null);
+        const act2 = posix.Sigaction{
+            .handler = .{ .sigaction = relaySIGUSR2 },
+            .mask = posix.sigemptyset(),
+            .flags = posix.SA.SIGINFO,
+        };
+        posix.sigaction(.USR2, &act2, null);
     } else {
         logging.warn("SIGUSR1 self-pipe failed, live config reload disabled", .{});
     }
@@ -6008,8 +6037,7 @@ fn realMain() !void {
     };
 
     findBattery();
-    findCpuTempSensor();
-    sampleSysStats(); // first sample has no delta yet (cpu_pct stays 0 until the next tick); ram_pct/cpu_temp are valid immediately
+    sampleSysStats(); // first sample has no delta yet (cpu_pct stays 0 until the next tick); temps discover their sensors on the first tick
     sampleDisk();
     sampleNetSpeed();
     startNetSsidFetch(&net_ssid);
@@ -6039,7 +6067,7 @@ fn realMain() !void {
         .{ .fd = display.getFd(), .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = timer_fd, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = comp_event_fd, .events = posix.POLL.IN, .revents = 0 },
-        .{ .fd = weather_timer_fd, .events = posix.POLL.IN, .revents = 0 },
+        .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // was the wttr.in refresh timer; slot kept so indices don't shift
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // weather.pending_fd, refreshed below
         .{ .fd = pacman_timer_fd, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // pacman_updates.pending_fd
@@ -6079,7 +6107,7 @@ fn realMain() !void {
         // Flush any outstanding requests (e.g. from the last commit) before
         // blocking, since dispatch() alone doesn't guarantee a flush.
         _ = display.flush();
-        poll_fds[4].fd = weather.pending_fd; // changes across fetch cycles
+        poll_fds[4].fd = weather.cmd.pending_fd; // changes across fetch cycles
         poll_fds[6].fd = pacman_updates.pending_fd;
         poll_fds[8].fd = volume.pending_fd;
         poll_fds[10].fd = mpris.pending_fd;
@@ -6108,6 +6136,9 @@ fn realMain() !void {
             // reaping exactly at EOF, so it's retried until it succeeds.
             reapChildren();
             second_count += 1;
+            // Weather refetches (or adopts the desktop card's fresh answer
+            // from the shared cache) whenever weather.zig says one is due.
+            if (!dock_mode) weather.pump();
             // Focus changes don't always move the compositor event stream
             // (nothing about the tag set changes), so poll the client list
             // on a slow cadence as well — socket IPC, no fork, cheap. The
@@ -6187,11 +6218,6 @@ fn realMain() !void {
             _ = running_changed;
             drawAllBars(bars[0..bar_count]);
         }
-        if (poll_fds[3].revents & posix.POLL.IN != 0) {
-            var expirations: u64 = undefined;
-            _ = posix.read(weather_timer_fd, std.mem.asBytes(&expirations)) catch {};
-            if (!dock_mode) startWeatherFetch(&weather);
-        }
         // POLLHUP (not just POLLIN) needs to trigger a read attempt too:
         // once a pipe is fully drained and its write end has closed, Linux
         // reports HUP-only on later poll() calls — the POLLIN|read()==0
@@ -6201,8 +6227,6 @@ fn realMain() !void {
         // pacman/volume blocks below.)
         if (poll_fds[4].revents & (posix.POLL.IN | posix.POLL.HUP) != 0) {
             if (weather.onReadable()) {
-                _ = posix.system.close(weather.pending_fd);
-                weather.pending_fd = -1;
                 // Not reaped here — see the once-a-second tick above.
                 drawAllBars(bars[0..bar_count]);
             }
@@ -6431,16 +6455,29 @@ fn realMain() !void {
             // Drain the SIGUSR1 self-pipe. Multiple quick reloads coalesce
             // into a single reload below — fine for live config edits.
             var sig_buf: [64]u8 = undefined;
+            var reload_full = false;
             while (true) {
                 const n = posix.read(sigusr1_fd, sig_buf[0..]) catch 0;
                 if (n <= 0) break; // drained (0 counts as fine too, defensive)
+                for (sig_buf[0..n]) |byte| {
+                    if (byte != RELOAD_WEATHER) reload_full = true;
+                }
+            }
+            // Both signals re-read shell.json's weather_* keys (the shell
+            // sends SIGUSR2 after a °C/°F click; hand edits land on any
+            // SIGUSR1). Same place → units/refresh change in place, keeping
+            // the reading; new place → refetch. Rapid clicks coalesce here:
+            // the pipe is drained once and the file read once.
+            if (!dock_mode) {
+                applyBarWeatherConfig(&weather, false);
+                if (!reload_full) drawAllBars(bars[0..bar_count]);
             }
             // Unlike the startup load, a reload NEVER falls back to
             // defaultConfig() — a config.json that's momentarily missing or
             // malformed (mid-edit, a bad hand-edit, a GUI bug) should leave
             // the bar exactly as it was, not silently discard the user's
             // working config.
-            if (loadConfigFromFile()) |file_cfg| {
+            if (if (reload_full) loadConfigFromFile() else null) |file_cfg| {
                 dockExitIfDisabled(file_cfg);
                 barExitIfDisabled(file_cfg);
                 sweepDuplicates();
@@ -6573,7 +6610,7 @@ fn realMain() !void {
                 }
 
                 drawAllBars(bars[0..bar_count]);
-            } else {
+            } else if (reload_full) {
                 logging.warn("config: reload failed, keeping previous config", .{});
             }
         }
@@ -7040,9 +7077,14 @@ const SysStats = struct {
 };
 
 fn sampleSysStats() void {
-    sampleCpu();
-    sampleRam();
-    sampleCpuTemp();
+    // Perihelion retires these modules from the bar (see retiredOnBar):
+    // nothing would read the samples, so skip the /proc and /sys reads.
+    // Un-retire a module there and its sampling comes back by itself.
+    if (!retiredOnBar(.cpu) or !retiredOnBar(.ram)) {
+        sampleCpu();
+        sampleRam();
+    }
+    if (!retiredOnBar(.cpu_temp)) _ = bar_temps.tick(monoNowMs());
 }
 
 /// Utilization since the LAST sample (not since boot) — needs one persisted
@@ -7187,106 +7229,17 @@ fn sampleBattery() void {
     }
 }
 
-// --- CPU temperature (hwmon) ---
+// --- CPU / GPU temperature (src/temps.zig) ---
 //
-// Deliberately NOT /sys/class/thermal/thermal_zone* — confirmed via direct
-// testing that this system has zero thermal zones registered there at all,
-// despite having a perfectly good sensor. hwmon is what `sensors` and every
-// real system monitor actually reads, so that's what this uses too.
+// The same service as the desktop System card: hwmon / thermal-zone
+// discovery for the CPU and the DRM cards' hwmon for the GPU, rescanned
+// every few minutes. The bar never runs nvidia-smi (the desktop card does,
+// and one poller per machine is enough), so a proprietary-driver NVIDIA GPU
+// simply isn't shown here; AMD, Intel and nouveau are plain sysfs reads.
 
-var cpu_temp_state: CpuTempState = .{};
-
-const CpuTempState = struct {
-    found: bool = false,
-    scanned: bool = false,
-    // Full path straight to the chosen tempN_input file (unlike
-    // battery_state.path(), which is a directory other paths get appended
-    // to) — this is already the file to read, nothing more to build.
-    path_buf: [96]u8 = undefined,
-    path_len: usize = 0,
-    millidegrees_c: i32 = 0,
-
-    fn path(self: *const CpuTempState) []const u8 {
-        return self.path_buf[0..self.path_len];
-    }
-};
-
-/// Scans /sys/class/hwmon once for a device whose driver `name` is a known
-/// CPU-temp sensor ("k10temp" AMD, "coretemp" Intel — deliberately narrow;
-/// this machine also has "nvme" and "amdgpu" hwmon devices that must NOT
-/// match). Within that device, prefers whichever tempN_input has a label of
-/// "Tctl", "Tdie", or "Package id 0" — the conventional "the" CPU
-/// temperature reading (confirmed on this machine: hwmon3 is k10temp,
-/// temp1_input=41375 with temp1_label="Tctl", i.e. 41.375°C) — falling back
-/// to the first temp*_input found with no label check if none of those
-/// labels turn up. If no matching hwmon device exists at all (older driver,
-/// unsupported CPU), cpu_temp_state.found stays false forever and the
-/// module quietly draws nothing when enabled, same "quietly absent"
-/// behavior battery/network-ssid already have on missing hardware, rather
-/// than rescanning every tick.
-fn findCpuTempSensor() void {
-    cpu_temp_state.scanned = true;
-    const dir = libc_dir.opendir("/sys/class/hwmon") orelse return;
-    defer _ = libc_dir.closedir(dir);
-    while (libc_dir.readdir(dir)) |entry| {
-        const name = std.mem.sliceTo(&entry.d_name, 0);
-        if (!std.mem.startsWith(u8, name, "hwmon")) continue;
-
-        var name_path_buf: [96]u8 = undefined;
-        const name_path = std.fmt.bufPrintZ(&name_path_buf, "/sys/class/hwmon/{s}/name", .{name}) catch continue;
-        var driver_buf: [32]u8 = undefined;
-        const driver_raw = readSmallFile(name_path, &driver_buf) orelse continue;
-        const driver = std.mem.trim(u8, driver_raw, " \t\r\n");
-        if (!std.mem.eql(u8, driver, "k10temp") and !std.mem.eql(u8, driver, "coretemp")) continue;
-
-        var fallback_buf: [96]u8 = undefined;
-        var fallback_len: usize = 0;
-        var n: usize = 1;
-        while (n <= 8) : (n += 1) {
-            var input_path_buf: [96]u8 = undefined;
-            const input_path = std.fmt.bufPrintZ(&input_path_buf, "/sys/class/hwmon/{s}/temp{d}_input", .{ name, n }) catch break;
-            var label_path_buf: [96]u8 = undefined;
-            const label_path = std.fmt.bufPrintZ(&label_path_buf, "/sys/class/hwmon/{s}/temp{d}_label", .{ name, n }) catch break;
-            var label_buf: [32]u8 = undefined;
-            const label_raw = readSmallFile(label_path, &label_buf);
-
-            if (fallback_len == 0) {
-                // First temp*_input seen at all for this device, regardless
-                // of label (or lack of one) — the ultimate fallback if no
-                // preferred label ever turns up below.
-                fallback_len = @min(input_path.len, fallback_buf.len);
-                @memcpy(fallback_buf[0..fallback_len], input_path[0..fallback_len]);
-            }
-            if (label_raw) |lr| {
-                const label = std.mem.trim(u8, lr, " \t\r\n");
-                if (std.mem.eql(u8, label, "Tctl") or std.mem.eql(u8, label, "Tdie") or std.mem.eql(u8, label, "Package id 0")) {
-                    cpu_temp_state.path_len = @min(input_path.len, cpu_temp_state.path_buf.len);
-                    @memcpy(cpu_temp_state.path_buf[0..cpu_temp_state.path_len], input_path[0..cpu_temp_state.path_len]);
-                    cpu_temp_state.found = true;
-                    return;
-                }
-            }
-        }
-        if (fallback_len > 0) {
-            cpu_temp_state.path_len = fallback_len;
-            @memcpy(cpu_temp_state.path_buf[0..fallback_len], fallback_buf[0..fallback_len]);
-            cpu_temp_state.found = true;
-            return;
-        }
-    }
-}
-
-fn sampleCpuTemp() void {
-    if (!cpu_temp_state.scanned) findCpuTempSensor();
-    if (!cpu_temp_state.found) return;
-    var path_buf: [96:0]u8 = undefined;
-    const path_z = std.fmt.bufPrintZ(&path_buf, "{s}", .{cpu_temp_state.path()}) catch return;
-    var text_buf: [16]u8 = undefined;
-    if (readSmallFile(path_z, &text_buf)) |text| {
-        const trimmed = std.mem.trim(u8, text, " \t\r\n");
-        cpu_temp_state.millidegrees_c = std.fmt.parseInt(i32, trimmed, 10) catch cpu_temp_state.millidegrees_c;
-    }
-}
+// Field defaults, not Service.init: a container-level initializer must be
+// comptime-known. Empty gpu_pref means "auto"; the interval is 2 s.
+var bar_temps: tsvc.Service = .{ .nvidia_smi = false };
 
 // --- Disk usage ---
 
@@ -7491,26 +7444,141 @@ fn startCustomScriptFetch(cmd: *PolledCommand, command: []const u8) void {
     cmd.startFetch("/bin/sh", &argv);
 }
 
-const WEATHER_URL = "https://wttr.in/?format=1";
-const WEATHER_REFRESH_SECONDS: i64 = 1200; // matches "interval": 1200 in ~/.config/waybar/config
 const PACMAN_REFRESH_SECONDS: i64 = 3600; // matches custom/pacman's "interval": 3600
 const VOLUME_REFRESH_SECONDS: i64 = 5; // wireplumber has no interval (event-driven); polled here instead
 const MPRIS_REFRESH_SECONDS: i64 = 2; // mpris has no interval either (also event-driven); polled here instead
 const SCROLL_INTERVAL_MS: i64 = 60; // drawer fade + hover/morph animation tick
 const DRAWER_ANIM_STEP: f32 = 0.25; // fraction of the fade per SCROLL_INTERVAL_MS tick (~240ms full fade)
 
-// Perihelion: the bar's weather follows the same place as the desktop
-// widget. perihelion-weather --bar prints wttr's format=1 shape
-// ("<emoji> <temp>"); without it, wttr.in is asked for the first line of
-// ~/.config/perihelionbar/weather-location (or guesses from the IP when empty).
-const WEATHER_BAR_CMD =
-    "if command -v perihelion-weather >/dev/null 2>&1; then exec perihelion-weather --bar; fi; " ++
-    "loc=$(head -n 1 \"$HOME/.config/perihelionbar/weather-location\" 2>/dev/null | tr -d '\\r' | sed 's/^ *//; s/ *$//; s/ /+/g'); " ++
-    "exec curl -s \"https://wttr.in/${loc}?format=1\"";
+// --- weather (Open-Meteo via weather.zig) ----------------------------------
+//
+// The same service as the desktop card: place, units and refresh period come
+// from the weather_* keys of ~/.config/perihelionbar/shell.json (the shell
+// owns that file; the bar only reads it), and the last good answer is shared
+// through weather.zig's cache file, so the bar and the card always agree and
+// make one set of requests between them. Refetch timing lives in weather.zig
+// (15 min, 30 s floor, retries with backoff); the bar just pumps it from its
+// once-a-second tick.
 
-fn startWeatherFetch(cmd: *PolledCommand) void {
-    var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", WEATHER_BAR_CMD, null };
-    cmd.startFetch("/bin/sh", &argv);
+fn monoNowMs() i64 {
+    var ts: std.posix.timespec = undefined;
+    _ = perihelion_clock.clock_gettime(1, &ts); // CLOCK_MONOTONIC
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
+}
+
+const BarWeather = struct {
+    svc: wsvc.Service = .{},
+    /// Only its fork/pipe plumbing is used: Open-Meteo's answer (~2 KB)
+    /// outgrows PolledCommand's staging buffer, so it's collected below.
+    cmd: PolledCommand = .{},
+    buf: [12288]u8 = undefined,
+    len: usize = 0,
+
+    /// Same curl call as the desktop card: the URL arrives as $1, never
+    /// spliced into the script; --fail keeps HTTP error pages off stdout.
+    const CURL_CMD =
+        "exec curl -sS --fail --compressed --connect-timeout 5 --max-time 10 " ++
+        "-A perihelion-shell -H 'Accept: application/json' --url \"$1\"";
+
+    /// Starts the request weather.zig asks for, if one is due.
+    fn pump(self: *BarWeather) void {
+        if (self.cmd.pending_fd >= 0) return;
+        const now = monoNowMs();
+        const url = self.svc.poll(now) orelse return;
+        self.len = 0;
+        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", CURL_CMD, "perihelion-weather", url.ptr, null };
+        self.cmd.startFetch("/bin/sh", &argv);
+        // pipe()/fork() failed: a failed attempt, so the retry schedule runs.
+        if (self.cmd.pending_fd < 0) self.svc.complete("", now);
+    }
+
+    /// poll() reported the pipe readable or hung up. True once the fetch
+    /// ended (the reading may have changed).
+    fn onReadable(self: *BarWeather) bool {
+        var chunk: [2048]u8 = undefined;
+        const n = posix.read(self.cmd.pending_fd, &chunk) catch 0;
+        if (n > 0) {
+            const k = @min(n, self.buf.len - self.len);
+            @memcpy(self.buf[self.len..][0..k], chunk[0..k]);
+            self.len += k;
+            return false;
+        }
+        _ = posix.system.close(self.cmd.pending_fd);
+        self.cmd.pending_fd = -1;
+        // Not reaped here — the once-a-second tick reaps curl.
+        self.svc.complete(self.buf[0..self.len], monoNowMs());
+        return true;
+    }
+
+    /// "<icon> 72°F", or empty until the first reading (the module then
+    /// takes no space, like the old wttr.in module before its first answer).
+    fn label(self: *const BarWeather, out: []u8) []const u8 {
+        return self.svc.compactLabel(out);
+    }
+
+    fn fx(self: *const BarWeather) WeatherFx {
+        if (!self.svc.data.available) return .none;
+        return fxForKind(wsvc.kindFor(self.svc.data.w_code));
+    }
+
+    /// Semantic condition tint (day/night aware); unknown codes wear
+    /// `fallback` (the caller passes the text color).
+    fn tint(self: *const BarWeather, fallback: u32) u32 {
+        const t = wsvc.tintFor(self.svc.data.w_code, self.svc.data.is_day);
+        return if (t != 0) t else fallback;
+    }
+};
+
+var weather_cache_path_buf: [400]u8 = undefined;
+
+/// Reads the weather_* keys from shell.json plus the legacy
+/// weather-location file when no weather_city is set — the same resolution
+/// the shell does. No shell.json yet → the defaults (IP location, °C,
+/// 15 min). A shell.json that exists but won't parse → null, so a reload
+/// keeps the current place instead of snapping to IP geolocation. (The
+/// shell writes it by temp file + rename, so this only bites hand edits.)
+/// Strings live in `arena`; Service.init copies them, so the caller may
+/// free it straight after.
+fn loadBarWeatherConfig(arena: std.mem.Allocator) ?wsvc.Config {
+    const cache = wsvc.defaultCachePath(&weather_cache_path_buf);
+    const home = std.mem.span(getenv("HOME") orelse "/root");
+    var keys: wsvc.ShellJsonKeys = .{};
+    var path_buf: [480]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&path_buf, "{s}/.config/perihelionbar/shell.json", .{home}) catch return null;
+    if (readFileAlloc(arena, path)) |bytes| {
+        keys = std.json.parseFromSliceLeaky(wsvc.ShellJsonKeys, arena, bytes, .{
+            .ignore_unknown_fields = true,
+        }) catch |err| {
+            logging.warn("weather: could not parse {s}: {} — keeping current settings", .{ path, err });
+            return null;
+        };
+    } else |err| {
+        if (err != error.OpenFailed) return null; // exists but unreadable
+    }
+    var cfg = wsvc.configFromKeys(keys, cache);
+    if (cfg.city.len == 0) {
+        if (std.fmt.bufPrintZ(&path_buf, "{s}/.config/perihelionbar/weather-location", .{home})) |legacy_path| {
+            if (readFileAlloc(arena, legacy_path)) |text| {
+                const first = if (std.mem.indexOfScalar(u8, text, '\n')) |i| text[0..i] else text;
+                cfg.city = std.mem.trim(u8, first, " \t\r");
+            } else |_| {}
+        } else |_| {}
+    }
+    return cfg;
+}
+
+/// (Re)loads the bar's weather config: startup, and every SIGUSR1 (the
+/// shell sends one after a °C/°F click on the desktop card).
+fn applyBarWeatherConfig(w: *BarWeather, first: bool) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const cfg = loadBarWeatherConfig(arena.allocator());
+    if (first) {
+        w.svc = wsvc.Service.init(cfg orelse wsvc.configFromKeys(.{}, wsvc.defaultCachePath(&weather_cache_path_buf)));
+    } else if (cfg) |c| {
+        w.svc.reconfigure(c);
+    }
+    w.pump();
 }
 
 /// The shell one-liner that counts available package updates
@@ -7681,33 +7749,21 @@ fn utf8Encode(cp: u32, out: []u8) usize {
 
 /// Condition effects for the weather hover animation (bar module + desktop
 /// card): what plays while the pointer sits on the widget.
-/// Mapped from the shaped weather icon, like the tint.
+/// Mapped from the condition family, like the tint.
 const WeatherFx = enum { none, rain, snow, storm, clear, cloud, fog, wind };
 
-/// Maps a shaped weather icon (U+E3xx) to its hover effect. Pure so tests
-/// pin it — the shell duplicates this table (it can't import main.zig).
-fn weatherFxKind(nf: u32) WeatherFx {
-    return switch (nf) {
-        0xE30D => .clear,
-        0xE302, 0xE304 => .cloud,
-        0xE335 => .cloud,
-        0xE319 => .rain,
-        0xE31D => .storm,
-        0xE31A => .snow,
-        0xE313 => .fog,
-        0xE34B => .wind,
-        0xE351 => .wind,
-        else => .none,
+/// Hover effect for a condition family (weather.zig Kind). Pure so tests
+/// pin it; the desktop card (perihelionbar-shell widgets.zig) has the twin.
+fn fxForKind(kind: wsvc.Kind) WeatherFx {
+    return switch (kind) {
+        .clear => .clear,
+        .partly_cloudy, .overcast => .cloud,
+        .fog => .fog,
+        .drizzle, .freezing, .rain, .showers => .rain,
+        .snow, .snow_showers => .snow,
+        .thunderstorm => .storm,
+        .unknown => .none,
     };
-}
-
-/// Condition-aware resolver: showers (0x1F326) wear the partly-rainy icon
-/// but must RAIN, not drift cloud puffs — the icon alone can't tell them
-/// from sun-behind-cloud (0x1F324). Everything else follows the icon
-/// table. Pure so tests pin it; mirrored by the shell.
-fn weatherFxFor(wttr: u32, nf: u32) WeatherFx {
-    if (wttr == 0x1F326) return .rain;
-    return weatherFxKind(nf);
 }
 
 /// Deterministic 0..1 scatter for particle `i` (stateless effects need no
@@ -7735,8 +7791,7 @@ fn putFxPixel(pixels: [*]u32, buf_width: u32, buf_height: u32, x: i64, y: i64, x
 /// when pills are on, bar bg otherwise) and `tint` the condition color;
 /// both come from the caller, so this function reads no theme globals and
 /// tests can render it into a scratch buffer (see the smoke test below).
-fn drawWeatherFx(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, x1: i64, wttr: u32, nf: u32, frame: u32, interior: u32, tint: u32) void {
-    const kind = weatherFxFor(wttr, nf);
+fn drawWeatherFx(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, x1: i64, kind: WeatherFx, frame: u32, interior: u32, tint: u32) void {
     if (kind == .none) return;
     const w = x1 - x0;
     if (w <= 0) return;
@@ -7857,93 +7912,15 @@ fn weatherHovered(bar: *const Bar) bool {
     const px: i64 = @as(i64, bar.pointer_x);
     return px >= bar.weather_fx_x0 - 4 and px <= bar.weather_fx_x1 + 4;
 }
-/// Tint for a SHAPED weather icon (the U+E3xx codepoints formatWeatherText
-/// emits): semantic condition colors that stay vivid across themes. Keyed on
-/// the icon rather than wttr.in's emoji because the .weather arm only ever
-/// sees the shaped label; every icon from one condition shares its tint, so
-/// the mapping matches the shell's emoji-keyed table in intent (see
-/// ~/.local/share/perihelionbar/perihelionbar-shell/src/widgets.zig). Unlisted icons
-/// wear `fallback` (the caller passes the text color). Pure so tests pin it.
-fn weatherIconTint(nf: u32, fallback: u32) u32 {
-    return switch (nf) {
-        0xE30D => 0xFFFFD60A, // clear gold
-        0xE302, 0xE304 => 0xFFFFB340, // partly amber
-        0xE335 => 0xFF9AA7B8, // overcast slate
-        0xE319 => 0xFF4AA8FF, // rain blue
-        0xE31D => 0xFFB48CFF, // storm violet
-        0xE31A => 0xFFA8E6FF, // snow ice
-        0xE313 => 0xFF8E9AAF, // fog gray
-        0xE34B => 0xFF7DE3D0, // wind teal
-        0xE351 => 0xFFFF8A8A, // tornado red
-        else => fallback,
-    };
-}
-
 /// Splits a shaped weather label ("<icon> <temp>") back into its icon
 /// codepoint and the display text after it: the bar draws the icon tinted
-/// (wttrColorFor) with the temperature in the text color, but measures the
+/// (BarWeather.tint) with the temperature in the text color, but measures the
 /// joined string so widths never drift from the single-label days.
 fn splitWeatherLabel(text: []const u8) struct { icon: u32, icon_len: usize, rest: []const u8 } {
     var i: usize = 0;
     const icon = nextUtf8Codepoint(text, &i) orelse return .{ .icon = 0, .icon_len = 0, .rest = text };
     const rest = std.mem.trim(u8, text[i..], " \t");
     return .{ .icon = icon, .icon_len = i, .rest = rest };
-}
-
-/// Maps wttr.in's emoji (Miscellaneous Symbols / Emoji blocks — mostly
-/// *not* covered by this Nerd Font, confirmed by probing FT_Get_Char_Index
-/// directly) to an equivalent icon from the Nerd Font's weather-icons pack
-/// (U+E300-U+E3E3, verified present) that actually renders.
-fn wttrIconFor(cp: u32) ?u32 {
-    return switch (cp) {
-        0x2600 => 0xE30D, // ☀ sunny/clear
-        0x1F319 => 0xE32B, // 🌙 clear night (Perihelion: perihelion-weather --bar)
-        0x26C5 => 0xE302, // ⛅ partly cloudy
-        0x2601 => 0xE335, // ☁ cloudy
-        0x1F324 => 0xE302, // 🌥 sun behind small cloud (wttr's current "partly cloudy day" emoji)
-        0x1F326 => 0xE304, // 🌦 partly cloudy w/ rain
-        0x1F327 => 0xE319, // 🌧 rain
-        0x26C8 => 0xE31D, // ⛈ thunderstorm
-        0x1F329 => 0xE31D, // 🌩 lightning
-        0x1F328 => 0xE31A, // 🌨 snow shower
-        0x2744 => 0xE31A, // ❄ snowflake
-        0x1F32B => 0xE313, // 🌫 fog
-        0x1F4A8 => 0xE34B, // 💨 windy
-        0x1F32A => 0xE351, // 🌪 tornado
-        0x1F32C => 0xE34B, // 🌬 wind blowing face
-        else => null,
-    };
-}
-
-/// Turns wttr.in's "<emoji> <temp>" into "<nf-icon> <temp>". Falls back to
-/// the raw (trimmed) text unchanged if the leading symbol isn't one of the
-/// recognized condition emoji, rather than guessing.
-fn formatWeatherText(raw: []const u8, buf: []u8) []const u8 {
-    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    if (trimmed.len == 0) return "";
-
-    var i: usize = 0;
-    const cp = nextUtf8Codepoint(trimmed, &i) orelse return trimmed[0..@min(trimmed.len, buf.len)];
-    const icon = wttrIconFor(cp) orelse return trimmed[0..@min(trimmed.len, buf.len)];
-
-    // Skip past any variation-selector/ZWJ codepoints attached to the same
-    // emoji cluster (wttr.in's sun is "☀️" = U+2600 + U+FE0F) before the
-    // plain-text temperature begins.
-    while (i < trimmed.len) {
-        const save = i;
-        const next_cp = nextUtf8Codepoint(trimmed, &i) orelse break;
-        if (next_cp == 0xFE0F or next_cp == 0x200D) continue;
-        i = save;
-        break;
-    }
-    var rest = std.mem.trim(u8, trimmed[i..], " \t\r\n");
-    // wttr.in prefixes non-negative temperatures with "+" ("+21°C") — noise
-    // next to an icon, so drop it (a leading "-" is significant and stays).
-    if (rest.len > 0 and rest[0] == '+') rest = rest[1..];
-
-    var icon_bytes: [4]u8 = undefined;
-    const icon_len = utf8Encode(icon, &icon_bytes);
-    return std.fmt.bufPrint(buf, "{s} {s}", .{ icon_bytes[0..icon_len], rest }) catch rest;
 }
 
 /// Strips the "STATUS|" prefix off `raw`, leaving just "ARTIST - TITLE".
@@ -10738,7 +10715,7 @@ fn drawRightGroup(
                     // for the pill (only shaped U+E300-U+E3E3 icons go big —
                     // anything else would rasterize FreeType's .notdef box).
                     const parts = splitWeatherLabel(weather_text);
-                    const icon_col = weatherIconTint(parts.icon, text_color);
+                    const icon_col = bar.weather.tint(text_color);
                     const big = if (parts.icon_len > 0 and parts.icon >= 0xE300 and parts.icon <= 0xE3FF) font.glyphScaled(parts.icon, 2) catch null else null;
                     defer if (big) |b| font.gpa.free(b.pixels);
                     const avail_h: i64 = @as(i64, @intCast(buf_height)) - 2 * @as(i64, HOVER_PILL_PAD_Y) - 2;
@@ -10764,12 +10741,7 @@ fn drawRightGroup(
                     // fill exactly (see drawWeatherFx).
                     if (weatherHovered(bar)) {
                         const interior = if (current_config.appearance.module_pills) pillFillColor() else current_config.appearance.bg_color;
-                        // Raw poll text leads with the wttr emoji (format=1
-                        // keeps "<emoji> <temp>") — the fx resolver needs it
-                        // to tell showers apart from sun-behind-cloud.
-                        var wi: usize = 0;
-                        const wttr_cp = nextUtf8Codepoint(bar.weather.text(), &wi) orelse 0;
-                        drawWeatherFx(pixels, buf_width, buf_height, rs - 4, cell.content_end + 4, wttr_cp, parts.icon, hover_frame, interior, icon_col);
+                        drawWeatherFx(pixels, buf_width, buf_height, rs - 4, cell.content_end + 4, bar.weather.fx(), hover_frame, interior, icon_col);
                     }
                     var x0 = rs;
                     if (lay) |l| {
@@ -10832,12 +10804,20 @@ fn drawRightGroup(
                 }
             },
             .cpu_temp => {
-                if (cpu_temp_state.found) {
+                // Compact "<thermometer> 62°C  <card> 48°C": CPU, plus the
+                // selected GPU when it has a sysfs sensor and is awake.
+                if (bar_temps.cpuMc() != null) {
                     if (!first) x_end -= MODULE_GAP;
                     first = false;
-                    var temp_buf: [24]u8 = undefined;
-                    const celsius = @divTrunc(cpu_temp_state.millidegrees_c, 1000);
-                    const temp_label = std.fmt.bufPrint(&temp_buf, "\u{f2c9} {d}\u{00b0}C", .{celsius}) catch "\u{f2c9}";
+                    var cpu_t: [16]u8 = undefined;
+                    var gpu_t: [16]u8 = undefined;
+                    var temp_buf: [48]u8 = undefined;
+                    const cpu_s = tsvc.fmtTemp(bar_temps.cpuMc(), .celsius, &cpu_t);
+                    const gpu_mc: ?i32 = if (bar_temps.selectedGpu()) |g| (if (g.asleep) null else g.temp_mc) else null;
+                    const temp_label = if (gpu_mc != null)
+                        std.fmt.bufPrint(&temp_buf, "\u{f2c9} {s}  \u{f08ae} {s}", .{ cpu_s, tsvc.fmtTemp(gpu_mc, .celsius, &gpu_t) }) catch "\u{f2c9}"
+                    else
+                        std.fmt.bufPrint(&temp_buf, "\u{f2c9} {s}", .{cpu_s}) catch "\u{f2c9}";
                     const cell = reserveRightCell(x_end, textPixelWidth(font, temp_label), center_start_x);
                     x_end = cell.next_pen;
                     _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, temp_label, color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
@@ -11950,7 +11930,7 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
     const vol_poll = parseVolumePoll(bar.volume.text(), &volume_buf);
     const volume_text = vol_poll.text;
     var weather_buf: [32]u8 = undefined;
-    const weather_text = formatWeatherText(bar.weather.text(), &weather_buf);
+    const weather_text = bar.weather.label(&weather_buf);
     if (e >= 1.0) {
         paintDock(bar, pixels, time_text, mpris_text, mpris_playing, volume_text, weather_text);
     } else if (e <= 0.0) {
@@ -12210,12 +12190,13 @@ test "matrix distro glyph lookup" {
 
 test "weather tint and split" {
     const t = std.testing;
+    // Tint follows the reading's weather code (a fresh BarWeather reads as
+    // code 0, clear day); codes weather.zig doesn't know wear the fallback.
     const fb: u32 = 0xFFDCDCDC;
-    // Semantic tints per icon; unlisted icons wear the fallback.
-    try t.expectEqual(@as(u32, 0xFFFFD60A), weatherIconTint(0xE30D, fb));
-    try t.expectEqual(@as(u32, 0xFF4AA8FF), weatherIconTint(0xE319, fb));
-    try t.expectEqual(@as(u32, 0xFFA8E6FF), weatherIconTint(0xE31A, fb));
-    try t.expectEqual(fb, weatherIconTint(0x0041, fb));
+    var w = BarWeather{};
+    try t.expectEqual(@as(u32, 0xFFFFD60A), w.tint(fb)); // code 0, day
+    w.svc.data.w_code = 42;
+    try t.expectEqual(fb, w.tint(fb));
     // Split: first codepoint is the icon, rest trimmed of the gap space.
     const icon_bytes = [_]u8{ 0xEE, 0x8C, 0x8D }; // U+E30D sunny
     var buf: [32]u8 = undefined;
@@ -12247,21 +12228,16 @@ test "scaled glyph restores size" {
 
 test "weather fx mapping and render" {
     const t = std.testing;
-    // Every shaped icon maps somewhere sane; unknown icons stay still.
-    try t.expectEqual(WeatherFx.clear, weatherFxFor(0, 0xE30D));
-    try t.expectEqual(WeatherFx.cloud, weatherFxFor(0, 0xE302));
-    try t.expectEqual(WeatherFx.cloud, weatherFxFor(0, 0xE335));
-    try t.expectEqual(WeatherFx.rain, weatherFxFor(0, 0xE319));
-    try t.expectEqual(WeatherFx.storm, weatherFxFor(0, 0xE31D));
-    try t.expectEqual(WeatherFx.snow, weatherFxFor(0, 0xE31A));
-    try t.expectEqual(WeatherFx.fog, weatherFxFor(0, 0xE313));
-    try t.expectEqual(WeatherFx.wind, weatherFxFor(0, 0xE34B));
-    try t.expectEqual(WeatherFx.wind, weatherFxFor(0, 0xE351));
-    try t.expectEqual(WeatherFx.none, weatherFxFor(0, 0x0041));
-    // Showers wear the partly-rainy icon but must RAIN; sun-behind-cloud
-    // shares that icon and stays cloudy.
-    try t.expectEqual(WeatherFx.rain, weatherFxFor(0x1F326, 0xE304));
-    try t.expectEqual(WeatherFx.cloud, weatherFxFor(0x1F324, 0xE304));
+    // Every condition family maps somewhere sane; unknown codes stay still.
+    try t.expectEqual(WeatherFx.clear, fxForKind(wsvc.kindFor(0)));
+    try t.expectEqual(WeatherFx.cloud, fxForKind(wsvc.kindFor(2)));
+    try t.expectEqual(WeatherFx.cloud, fxForKind(wsvc.kindFor(3)));
+    try t.expectEqual(WeatherFx.fog, fxForKind(wsvc.kindFor(45)));
+    try t.expectEqual(WeatherFx.rain, fxForKind(wsvc.kindFor(61)));
+    try t.expectEqual(WeatherFx.rain, fxForKind(wsvc.kindFor(81))); // showers rain
+    try t.expectEqual(WeatherFx.snow, fxForKind(wsvc.kindFor(73)));
+    try t.expectEqual(WeatherFx.storm, fxForKind(wsvc.kindFor(95)));
+    try t.expectEqual(WeatherFx.none, fxForKind(wsvc.kindFor(42)));
     // Scatter stays in range.
     var hi: i64 = 0;
     while (hi < 200) : (hi += 1) {
@@ -12271,7 +12247,7 @@ test "weather fx mapping and render" {
     // Render smoke: rain lights pixels inside its rect and only there; the
     // none kind leaves the buffer untouched.
     var buf: [40 * 200]u32 = [_]u32{0xFF101010} ** (40 * 200);
-    drawWeatherFx(&buf, 200, 40, 10, 190, 0, 0xE319, 7, 0xFF101010, 0xFF4AA8FF);
+    drawWeatherFx(&buf, 200, 40, 10, 190, .rain, 7, 0xFF101010, 0xFF4AA8FF);
     var lit: usize = 0;
     var leaked: usize = 0;
     var yy: usize = 0;
@@ -12287,7 +12263,7 @@ test "weather fx mapping and render" {
     try t.expect(lit > 5);
     try t.expectEqual(@as(usize, 0), leaked);
     var buf2: [40 * 200]u32 = [_]u32{0xFF101010} ** (40 * 200);
-    drawWeatherFx(&buf2, 200, 40, 10, 190, 0, 0x0041, 7, 0xFF101010, 0xFF4AA8FF);
+    drawWeatherFx(&buf2, 200, 40, 10, 190, .none, 7, 0xFF101010, 0xFF4AA8FF);
     for (buf2) |px| try t.expectEqual(@as(u32, 0xFF101010), px);
 }
 

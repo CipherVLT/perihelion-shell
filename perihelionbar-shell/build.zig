@@ -52,6 +52,40 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
 
+    // Weather service, shared with the bar's top-bar indicator (lives with
+    // the bar's sources like font.zig): Open-Meteo, location, refresh
+    // schedule, and the answer cache both processes read and write.
+    const weather_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/weather.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    // CPU/GPU temperature service, shared with the bar (same convention).
+    const temps_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/temps.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    // System-info service for the Fastfetch card (same convention).
+    const fastfetch_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/fastfetch.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
+    // Top-processes service for the Processes card (same convention).
+    const procs_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/procs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+
     const widgets_mod = b.createModule(.{
         .root_source_file = b.path("src/widgets.zig"),
         .target = target,
@@ -59,6 +93,10 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     widgets_mod.addImport("font", font_mod);
+    widgets_mod.addImport("weather", weather_mod);
+    widgets_mod.addImport("temps", temps_mod);
+    widgets_mod.addImport("fastfetch", fastfetch_mod);
+    widgets_mod.addImport("procs", procs_mod);
     widgets_mod.addImport("logging", logging_mod);
 
     // Album-art decode for the media card: same gdk-pixbuf shim the bar
@@ -119,6 +157,10 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("font", font_mod);
     exe_mod.addImport("logging", logging_mod);
     exe_mod.addImport("widgets", widgets_mod);
+    exe_mod.addImport("weather", weather_mod); // shell.json weather_* keys (main.zig)
+    exe_mod.addImport("temps", temps_mod); // shell.json system_* keys (main.zig)
+    exe_mod.addImport("fastfetch", fastfetch_mod); // shell.json fastfetch_* keys (main.zig)
+    exe_mod.addImport("procs", procs_mod); // shell.json processes_* keys (main.zig)
     exe_mod.addImport("overview", overview_mod);
     // No EGL/GL stack: everything renders CPU-side into wl_shm ARGB buffers,
     // exactly like the bar.
@@ -149,4 +191,13 @@ pub fn build(b: *Build) !void {
     run_cmd.step.dependOn(b.getInstallStep());
     const run_step = b.step("run", "Run perihelionbar-shell");
     run_step.dependOn(&run_cmd.step);
+
+    // `zig build test-widgets`: src/widgets.zig's unit tests — note editing
+    // and wrapping, the Notes card's pages on disk (under /tmp), header
+    // hit-testing, checklist markers. No display needed. gdk-pixbuf is
+    // linked for the art/icon declarations the module pulls in.
+    widgets_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{});
+    const widgets_tests = b.addTest(.{ .root_module = widgets_mod, .use_llvm = true, .use_lld = true });
+    const widgets_test_step = b.step("test-widgets", "Run src/widgets.zig unit tests");
+    widgets_test_step.dependOn(&b.addRunArtifact(widgets_tests).step);
 }

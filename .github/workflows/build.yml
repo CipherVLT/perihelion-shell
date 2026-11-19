@@ -57,6 +57,18 @@ jobs:
       - name: Unit-test the icon theme lookup
         working-directory: perihelionbar
         run: /opt/zig/zig build test-icons
+      - name: Unit-test the weather service (bar + desktop card)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-weather
+      - name: Unit-test the temperature service (fake sysfs tree)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-temps
+      - name: Unit-test the fastfetch service (fake system tree)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-fastfetch
+      - name: Unit-test the top-processes service (fake /proc tree)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-procs
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc
@@ -116,6 +128,9 @@ jobs:
       - name: Build perihelionbar-shell
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=x86_64_v2
+      - name: Unit-test the desktop cards (notes editing and pages, layout)
+        working-directory: perihelionbar-shell
+        run: /opt/zig/zig build test-widgets
       - name: Check the app drawer's QML parses
         run: |
           dnf5 install -y --setopt=install_weak_deps=False qt6-qtdeclarative-devel
