@@ -220,8 +220,8 @@ pub fn cardSizeFor(id: WidgetId, font: *const font_mod.Font) [2]u32 {
         // Header line, then one name/value line over a thin bar per row.
         .processes => .{ @intCast(PROC_W), @intCast(2 * CARD_PAD + lh + PROC_HEAD_GAP + @as(i64, @intCast(processes_rows)) * (lh + PROC_ROW_GAP + PROC_BAR_H + 2)) },
         // Header, optional graph, then the down/up line.
-        // Avatar disc beside the name, user@host and uptime lines.
-        .user => .{ @intCast(USER_W), @intCast(2 * CARD_PAD + @max(USER_AVATAR_D, userLines() * lh)) },
+        // Logo tile beside the heading, hairline and uptime line.
+        .user => .{ @intCast(USER_W), @intCast(2 * CARD_PAD + @max(USER_TILE, userTextH(font))) },
         .network => .{ @intCast(NET_W), @intCast(2 * CARD_PAD + 2 * lh + NET_GAP + (if (network_graph) NET_GRAPH_H + NET_GAP else 0)) },
     };
 }
@@ -350,16 +350,32 @@ const NET_GRAPH_H: i64 = 44;
 
 // --- user card geometry ------------------------------------------------------
 
-/// shell.json user_host / user_uptime_short, set by the host before cards
-/// are measured.
+/// shell.json user_host / user_uptime_short / user_show_name, set by the
+/// host before cards are measured.
 pub var user_host: bool = true;
 pub var user_uptime_short: bool = false;
-const USER_W: i64 = 240;
-const USER_AVATAR_D: i64 = 44;
-const USER_GAP: i64 = 12; // avatar → text column
+pub var user_show_name: bool = false;
+// User card: the distro logo in a rounded square tile, then "user@host" as
+// a larger bold heading over a hairline, then the uptime line.
+const USER_W: i64 = 336;
+const USER_TILE: i64 = 64;
+const USER_LOGO_INSET: i64 = 8; // tile edge → logo
+const USER_GAP: i64 = 16; // tile → text column
+const USER_RULE_GAP: i64 = 6; // heading → hairline → next line
+/// Decoded once at this size and box-filtered down at paint, so a zoomed
+/// card stays sharp up to about 2.5x.
+const USER_LOGO_SRC: u32 = 128;
 
-fn userLines() i64 {
-    return if (user_host) 3 else 2;
+/// Heading pixel size for a body font size (about 4/3 of it).
+fn userHeadPx(body_px: u32) u32 {
+    return @max(body_px + 1, (body_px * 4 + 1) / 3);
+}
+
+/// Height of the text column: heading, hairline, optional name, uptime.
+fn userTextH(font: *const font_mod.Font) i64 {
+    const lh = lineH(font);
+    const head: i64 = @divTrunc(lh * userHeadPx(font.pixel_size), font.pixel_size);
+    return head + 2 * USER_RULE_GAP + 1 + (if (user_show_name) lh else 0) + lh;
 }
 
 // Fastfetch-card geometry: logo column (text logo or distro glyph), then
@@ -2100,18 +2116,59 @@ pub const NetworkWidget = struct {
     }
 };
 
-/// Who is logged in and for how long: an initial-letter disc in the accent
-/// colour, the display name, login@host, and the uptime (the long wording
-/// falls back to the short one when it doesn't fit).
+/// Who is logged in and for how long, after the reference's user card: the
+/// distro logo in a rounded square tile (os-release LOGO= through the icon
+/// theme; else the distro glyph the Fastfetch card uses; else the initial
+/// on an accent disc), "user@host" as a bold heading over a hairline, and
+/// "Uptime  2 hours, 39 mins" with a small clock icon.
 pub const UserWidget = struct {
     svc: usvc.Service = .{},
+    logo: Logo = .pending,
+    /// The decoded logo (USER_LOGO_SRC square, ARGB), owned (c_allocator).
+    logo_px: ?[]u32 = null,
+    logo_w: u32 = 0,
+    logo_h: u32 = 0,
+    glyph: u32 = 0,
+
+    const Logo = enum { pending, image, glyph, letter };
 
     /// Due checks only; userinfo.zig reads the uptime every 30 s and
     /// reports a change once a minute.
     pub const interval_ms: i64 = 5000;
 
     pub fn tick(self: *UserWidget) bool {
-        return self.svc.tick(monoMs());
+        const changed = self.svc.tick(monoMs());
+        if (self.logo == .pending and self.svc.loaded) {
+            self.loadLogo();
+            return true;
+        }
+        return changed;
+    }
+
+    /// Once, off the paint path: the os-release LOGO icon, decoded.
+    fn loadLogo(self: *UserWidget) void {
+        self.logo = .letter;
+        const name = self.svc.logo.slice();
+        if (name.len > 0) {
+            var pb: [512]u8 = undefined;
+            if (icontheme.resolveIconPath(name, pb[0 .. pb.len - 1])) |p| {
+                pb[p.len] = 0;
+                if (icontheme.decodeIcon(std.heap.c_allocator, pb[0..p.len :0], USER_LOGO_SRC)) |d| {
+                    self.logo_px = d.pixels;
+                    self.logo_w = d.width;
+                    self.logo_h = d.height;
+                    self.logo = .image;
+                    return;
+                } else |_| {}
+            }
+        }
+        // The Fastfetch card's distro glyph, when the distro is one it knows.
+        const id = self.svc.distro_id.slice();
+        const cp = ffsvc.distroGlyph(id);
+        if (id.len > 0 and cp != ffsvc.distroGlyph("")) {
+            self.glyph = cp;
+            self.logo = .glyph;
+        }
     }
 
     pub fn paint(self: *const UserWidget, c: Canvas, r: Rect) void {
@@ -2125,46 +2182,201 @@ pub const UserWidget = struct {
         const right: i64 = r.x + @as(i64, @intCast(r.w)) - pad;
         const inner_h: i64 = @as(i64, @intCast(r.h)) - 2 * pad;
 
-        // Avatar: the display name's first letter on an accent disc.
-        const d = c.zx(USER_AVATAR_D);
-        const cy: f64 = @floatFromInt(r.y + pad + @divTrunc(inner_h, 2));
-        const cx: f64 = @floatFromInt(left + @divTrunc(d, 2));
-        c.fillCircleAA(cx, cy, @as(f64, @floatFromInt(d)) / 2.0, dim(accent, 0xDD));
-        const name = s.display.slice();
-        if (name.len > 0) {
-            var lb: [8]u8 = undefined;
-            const first_len = std.unicode.utf8ByteSequenceLength(name[0]) catch 1;
-            const first = name[0..@min(first_len, name.len)];
-            @memcpy(lb[0..first.len], first);
-            if (first.len == 1) lb[0] = std.ascii.toUpper(lb[0]);
-            const letter = lb[0..first.len];
-            const lw = c.textWidth(letter);
-            const base: i64 = @as(i64, @intFromFloat(cy)) + @divTrunc(asc, 2) - c.zx(1);
-            _ = c.drawText(@as(i64, @intFromFloat(cx)) - @divTrunc(lw, 2), base, letter, c.theme.bg_color | 0xFF000000);
+        // Logo tile, vertically centred.
+        const t = c.zx(USER_TILE);
+        const ty = r.y + pad + @divTrunc(inner_h - t, 2);
+        const tile = Rect{ .x = @intCast(left), .y = @intCast(ty), .w = @intCast(t), .h = @intCast(t) };
+        switch (self.logo) {
+            .image, .glyph => {
+                var tc = c;
+                var th = c.theme.*;
+                th.radius_px = @intCast(@max(c.zx(14), 4));
+                tc.theme = &th;
+                tc.card(tile, dim(c.theme.bg_color, 0xD9), dim(text_col, 0x1C));
+                const inset = c.zx(USER_LOGO_INSET);
+                const box = t - 2 * inset;
+                if (self.logo == .image) {
+                    if (self.logo_px) |px| blitArgbBox(c, left + inset, ty + inset, box, px, self.logo_w, self.logo_h);
+                } else {
+                    var px: u32 = @intCast(@max(box - c.zx(6), 8));
+                    while (px >= 8) : (px -= 2) {
+                        const big = c.font.glyphAtPx(self.glyph, px) catch break;
+                        defer c.font.gpa.free(big.pixels);
+                        if (@as(i64, big.width) > box or @as(i64, big.height) > box) continue;
+                        const gx = left + @divTrunc(t - @as(i64, big.width), 2) - big.bitmap_left;
+                        _ = drawBigIcon(c, gx, ty + @divTrunc(t - @as(i64, big.height), 2), &big, accent);
+                        break;
+                    }
+                }
+            },
+            .pending, .letter => {
+                // No logo anywhere: the initial on an accent disc.
+                const cx: f64 = @floatFromInt(left + @divTrunc(t, 2));
+                const cy: f64 = @floatFromInt(ty + @divTrunc(t, 2));
+                c.fillCircleAA(cx, cy, @as(f64, @floatFromInt(t)) * 0.4, dim(accent, 0xDD));
+                const name = s.display.slice();
+                if (name.len > 0) {
+                    var lb: [8]u8 = undefined;
+                    const first_len = std.unicode.utf8ByteSequenceLength(name[0]) catch 1;
+                    const first = name[0..@min(first_len, name.len)];
+                    @memcpy(lb[0..first.len], first);
+                    if (first.len == 1) lb[0] = std.ascii.toUpper(lb[0]);
+                    const letter = lb[0..first.len];
+                    const lw = c.textWidth(letter);
+                    const base: i64 = @as(i64, @intFromFloat(cy)) + @divTrunc(asc, 2) - c.zx(1);
+                    _ = c.drawText(@as(i64, @intFromFloat(cx)) - @divTrunc(lw, 2), base, letter, c.theme.bg_color | 0xFF000000);
+                }
+            },
         }
 
-        // Text column, centred against the avatar.
-        const tx = left + d + c.zx(USER_GAP);
+        // Text column, centred against the tile.
+        const tx = left + t + c.zx(USER_GAP);
         const tw = right - tx;
-        const lines = userLines();
-        var b = r.y + pad + @divTrunc(inner_h - lines * lh, 2) + asc;
+        if (tw <= 0) return;
+        const head_px = userHeadPx(c.font.pixel_size);
+        const head_lh: i64 = @divTrunc(lh * head_px, c.font.pixel_size);
+        const head_asc: i64 = @divTrunc(asc * head_px, c.font.pixel_size);
+        const text_h = head_lh + 2 * c.zx(USER_RULE_GAP) + 1 + (if (user_show_name) lh else 0) + lh;
+        var y = r.y + pad + @divTrunc(inner_h - text_h, 2);
+
+        var hb: [112]u8 = undefined;
+        const heading = if (user_host)
+            (std.fmt.bufPrint(&hb, "{s}@{s}", .{ s.login.slice(), s.host.slice() }) catch s.login.slice())
+        else
+            s.login.slice();
+        drawHeading(c, tx, y + head_asc, heading, head_px, tw, text_col);
+        y += head_lh + c.zx(USER_RULE_GAP);
+        c.fillRect(tx, y, @intCast(tw), 1, dim(text_col, 0x30));
+        y += 1 + c.zx(USER_RULE_GAP);
+
         var fit: [96]u8 = undefined;
-        _ = c.drawText(tx, b, fitText(c, name, tw, &fit), text_col);
-        b += lh;
-        if (user_host) {
-            var hb: [112]u8 = undefined;
-            const uh = std.fmt.bufPrint(&hb, "{s}@{s}", .{ s.login.slice(), s.host.slice() }) catch s.login.slice();
-            var fit2: [120]u8 = undefined;
-            _ = c.drawText(tx, b, fitText(c, uh, tw, &fit2), dim(text_col, 0x99));
-            b += lh;
+        if (user_show_name) {
+            _ = c.drawTextA(tx, y + asc, fitText(c, s.display.slice(), tw, &fit), dim(text_col, 0xB3));
+            y += lh;
         }
         if (!s.have_uptime) return;
-        var ub: [64]u8 = undefined;
-        var up = if (user_uptime_short) usvc.fmtShort(&ub, s.uptime_s) else usvc.fmtLong(&ub, s.uptime_s);
-        if (!user_uptime_short and c.textWidth(up) > tw) up = usvc.fmtShort(&ub, s.uptime_s);
-        _ = c.drawText(tx, b, up, accent);
+        // Clock icon and "Uptime" dimmed, the value in the text colour.
+        const b = y + asc;
+        var x = tx;
+        x += c.drawTextA(x, b, "\u{F0150}", dim(text_col, 0x99));
+        x += c.zx(6);
+        x += c.drawTextA(x, b, "Uptime", dim(text_col, 0x99));
+        x += c.zx(14);
+        var ub: [48]u8 = undefined;
+        var up = usvc.fmtValue(&ub, s.uptime_s, user_uptime_short);
+        if (!user_uptime_short and c.textWidth(up) > right - x) up = usvc.fmtValue(&ub, s.uptime_s, true);
+        var fit2: [64]u8 = undefined;
+        _ = c.drawText(x, b, fitText(c, up, right - x, &fit2), text_col);
     }
 };
+
+/// The User card's heading: `text` at `px` pixels, bold (drawn twice, a
+/// pixel apart), cut with an ellipsis to `max_w`. Glyphs are rasterised
+/// per paint (the card repaints once a minute), nothing is cached.
+fn drawHeading(c: Canvas, x: i64, baseline: i64, text: []const u8, px: u32, max_w: i64, color: u32) void {
+    // Measure first, so a long host name is cut instead of overflowing.
+    const ell: u32 = 0x2026;
+    var widths: [96]i64 = undefined;
+    var cps: [96]u32 = undefined;
+    var n: usize = 0;
+    var total: i64 = 0;
+    var i: usize = 0;
+    while (nextUtf8Codepoint(text, &i)) |cp| {
+        if (n == cps.len) break;
+        const g = c.font.glyphAtPx(cp, px) catch continue;
+        c.font.gpa.free(g.pixels);
+        cps[n] = cp;
+        widths[n] = g.advance_x;
+        total += g.advance_x;
+        n += 1;
+    }
+    var shown = n;
+    var add_ell = false;
+    if (total + 1 > max_w) {
+        const eg = c.font.glyphAtPx(ell, px) catch null;
+        const ew: i64 = if (eg) |g| g.advance_x else 0;
+        if (eg) |g| c.font.gpa.free(g.pixels);
+        var w: i64 = 0;
+        shown = 0;
+        while (shown < n and w + widths[shown] + ew + 1 <= max_w) : (shown += 1) w += widths[shown];
+        add_ell = true;
+    }
+    var pen = x;
+    var k: usize = 0;
+    while (k < shown + @as(usize, if (add_ell) 1 else 0)) : (k += 1) {
+        const cp = if (k < shown) cps[k] else ell;
+        const g = c.font.glyphAtPx(cp, px) catch continue;
+        defer c.font.gpa.free(g.pixels);
+        const top = baseline - g.bitmap_top;
+        inline for (.{ 0, 1 }) |dx| {
+            for (0..g.height) |row| {
+                for (0..g.width) |col| {
+                    const cov: u32 = g.pixels[row * g.width + col];
+                    if (cov == 0) continue;
+                    const ppx = pen + g.bitmap_left + @as(i64, @intCast(col)) + dx;
+                    const ppy = top + @as(i64, @intCast(row));
+                    if (ppx < 0 or ppy < 0 or ppx >= c.width or ppy >= c.height) continue;
+                    const idx: usize = @intCast(ppy * @as(i64, c.width) + ppx);
+                    c.pixels[idx] = Canvas.blendOver(c.pixels[idx], (cov << 24) | (color & 0x00FFFFFF));
+                }
+            }
+        }
+        pen += g.advance_x;
+    }
+}
+
+/// Draws an ARGB image box-filtered into a `size` square at (x, y),
+/// centred with its aspect kept: each target pixel averages the source
+/// pixels it covers (premultiplied), so a large decode scales down
+/// cleanly.
+fn blitArgbBox(c: Canvas, x: i64, y: i64, size: i64, src: []const u32, sw: u32, sh: u32) void {
+    if (size <= 0 or sw == 0 or sh == 0) return;
+    const fs: f64 = @floatFromInt(size);
+    const scale = @min(fs / @as(f64, @floatFromInt(sw)), fs / @as(f64, @floatFromInt(sh)));
+    const dw: i64 = @max(1, @as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(sw)) * scale))));
+    const dh: i64 = @max(1, @as(i64, @intFromFloat(@round(@as(f64, @floatFromInt(sh)) * scale))));
+    const ox = x + @divTrunc(size - dw, 2);
+    const oy = y + @divTrunc(size - dh, 2);
+    const inv = 1.0 / scale;
+    var dy: i64 = 0;
+    while (dy < dh) : (dy += 1) {
+        const sy0: usize = @intFromFloat(@floor(@as(f64, @floatFromInt(dy)) * inv));
+        const sy1: usize = @min(sh, @max(sy0 + 1, @as(usize, @intFromFloat(@ceil(@as(f64, @floatFromInt(dy + 1)) * inv)))));
+        var dx: i64 = 0;
+        while (dx < dw) : (dx += 1) {
+            const sx0: usize = @intFromFloat(@floor(@as(f64, @floatFromInt(dx)) * inv));
+            const sx1: usize = @min(sw, @max(sx0 + 1, @as(usize, @intFromFloat(@ceil(@as(f64, @floatFromInt(dx + 1)) * inv)))));
+            var ar: u64 = 0;
+            var ag: u64 = 0;
+            var ab: u64 = 0;
+            var aa: u64 = 0;
+            var cnt: u64 = 0;
+            var sy = sy0;
+            while (sy < sy1) : (sy += 1) {
+                var sx = sx0;
+                while (sx < sx1) : (sx += 1) {
+                    const p = src[sy * sw + sx];
+                    const a: u64 = (p >> 24) & 0xFF;
+                    ar += ((p >> 16) & 0xFF) * a;
+                    ag += ((p >> 8) & 0xFF) * a;
+                    ab += (p & 0xFF) * a;
+                    aa += a;
+                    cnt += 1;
+                }
+            }
+            if (aa == 0 or cnt == 0) continue;
+            const out_a: u32 = @intCast(aa / cnt);
+            const rr: u32 = @intCast(ar / aa);
+            const gg: u32 = @intCast(ag / aa);
+            const bb: u32 = @intCast(ab / aa);
+            const px = ox + dx;
+            const py = oy + dy;
+            if (px < 0 or py < 0 or px >= c.width or py >= c.height) continue;
+            const idx: usize = @intCast(py * @as(i64, c.width) + px);
+            c.pixels[idx] = Canvas.blendOver(c.pixels[idx], (out_a << 24) | (rr << 16) | (gg << 8) | bb);
+        }
+    }
+}
 
 // --- monotonic clock (same hand-bound libc approach as main.zig) -----------
 

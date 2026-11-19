@@ -135,14 +135,15 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
   `network_interval_seconds` can be 1 to 10. With `network_graph: false` the card is just the header and the two speeds.
 
-- The User card shows the first letter of your name on an accent-coloured circle, your name (from your account's full name, or your login name), `user@host`, and how long the computer has been up (`up 3 hours, 5 minutes`, or `up 3h 5m` when the long form doesn't fit). Your name and the host name are read once at startup, and the uptime from `/proc/uptime`. The card redraws once a minute. Settings in `shell.json`:
+- The User card shows your distro's logo on a rounded square tile, `user@host` as a bold heading with a thin line under it, and how long the computer has been up (`Uptime  2 hours, 39 mins`, or `2h 39m` when the long form doesn't fit) next to a small clock. The logo is the icon your `/etc/os-release` names in `LOGO=` (on Perihelion, Fedora's `fedora-logo-icon`), found through your icon theme; without one, the distro symbol the Fastfetch card uses, and failing that the first letter of your name on an accent-coloured circle. Your name, the host name and the logo are read once at startup, and the uptime from `/proc/uptime`. The card redraws once a minute. Settings in `shell.json`:
 
   ```json
   "user_host": true,
-  "user_uptime_short": false
+  "user_uptime_short": false,
+  "user_show_name": false
   ```
 
-  `user_host: false` hides the `user@host` line. `user_uptime_short: true` always uses the short form.
+  `user_host: false` makes the heading just your user name. `user_uptime_short: true` always uses the short form. `user_show_name: true` adds your full name (from your account, or your login name) under the heading.
 
 **Overview (`Alt + W`):** GNOME-style grid of live window screenshots with search + workspace strip + favorites dash. `perihelionbar-shell overview toggle` works from scripts too.
 
