@@ -5,10 +5,9 @@
 //! scroll animation redraws.
 
 const std = @import("std");
-const c = @cImport({
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-});
+// FreeType through hand-written Zig declarations (freetype.zig): Zig 0.17
+// has no @cImport.
+const c = @import("freetype.zig");
 
 /// A Nerd Font covers both ordinary text and the icon glyphs waybar's
 /// config uses (Private Use Area codepoints) — same icon set regardless of

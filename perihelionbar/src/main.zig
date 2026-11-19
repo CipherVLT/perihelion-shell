@@ -6781,7 +6781,7 @@ fn realMain() !void {
     // shipping builds. Both choices stay paired with every free below.
     var gpa_state = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_state.deinit();
-    const gpa: std.mem.Allocator = if (builtin.mode == .Debug)
+    const gpa: std.mem.Allocator = if (builtin.mode == .debug)
         gpa_state.allocator()
     else
         std.heap.c_allocator;
