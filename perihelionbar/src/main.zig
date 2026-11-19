@@ -944,6 +944,9 @@ const tsvc = @import("temps");
 const blsvc = @import("backlight");
 // Notification-center data (makoctl history parsing, state file): src/notifs.zig.
 const nsvc = @import("notifs");
+// Control Center parsers: src/radios.zig, src/powerprof.zig.
+const radiosvc = @import("radios");
+const ppsvc = @import("powerprof");
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
@@ -2349,6 +2352,8 @@ const Action = union(enum) {
     open_volume_mixer,
     /// Opens/closes the notifications panel (the bell's click).
     toggle_notifications,
+    /// Opens/closes the Control Center (the sliders icon's click).
+    toggle_control_center,
 };
 
 /// What a vertical scroll wheel does over a ClickRegion. Separate from Action
@@ -2449,6 +2454,93 @@ const ClickRegions = struct {
 // comment above) — bind it ourselves.
 const libc_proc = struct {
     extern "c" fn fork() c_int;
+    extern "c" fn setpgid(pid: c_int, pgid: c_int) c_int;
+};
+
+/// One short-lived shell command whose output the bar collects without
+/// blocking: forked into its own process group, stdout on a nonblocking
+/// pipe (an fd in the poll set while it runs), output capped at `buf.len`
+/// (the rest is drained and dropped). expire() kills the whole group, so
+/// a hung child under the shell (makoctl, bluetoothctl, nmcli) goes too.
+/// Exited children are reaped by reapChildren on the 1 s tick.
+const Job = struct {
+    buf: []u8,
+    fd: posix.fd_t = -1,
+    pid: c_int = -1,
+    started_ms: i64 = 0,
+    len: usize = 0,
+
+    fn busy(self: *const Job) bool {
+        return self.fd >= 0;
+    }
+
+    fn output(self: *const Job) []const u8 {
+        return self.buf[0..self.len];
+    }
+
+    /// Starts `script` under /bin/sh. False when busy or fork/pipe failed.
+    fn start(self: *Job, script: [:0]const u8) bool {
+        if (self.fd >= 0) return false;
+        var pipe_fds: [2]posix.fd_t = undefined;
+        if (std.c.pipe(&pipe_fds) != 0) return false;
+        setCloexec(pipe_fds[0]);
+        _ = std.c.fcntl(pipe_fds[0], posix.F.SETFL, @as(c_int, 0o4000)); // O_NONBLOCK
+        const pid = libc_proc.fork();
+        if (pid < 0) {
+            _ = posix.system.close(pipe_fds[0]);
+            _ = posix.system.close(pipe_fds[1]);
+            return false;
+        }
+        if (pid == 0) {
+            _ = libc_proc.setpgid(0, 0);
+            _ = std.c.dup2(pipe_fds[1], 1);
+            _ = posix.system.close(pipe_fds[1]);
+            _ = posix.system.close(pipe_fds[0]);
+            var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", script.ptr, null };
+            _ = std.c.execve("/bin/sh", &argv, std.c.environ);
+            std.c._exit(127);
+        }
+        _ = libc_proc.setpgid(pid, pid); // no race with the child's own call
+        _ = posix.system.close(pipe_fds[1]);
+        self.fd = pipe_fds[0];
+        self.pid = pid;
+        self.started_ms = monoNowMs();
+        self.len = 0;
+        return true;
+    }
+
+    /// Reads what's there. True once the command finished (EOF); the
+    /// caller then uses output() and the job is idle again.
+    fn pump(self: *Job) bool {
+        if (self.fd < 0) return false;
+        while (true) {
+            var chunk: [4096]u8 = undefined;
+            const n = posix.read(self.fd, &chunk) catch |err| {
+                if (err == error.WouldBlock) return false;
+                break;
+            };
+            if (n == 0) break;
+            const take = @min(n, self.buf.len - self.len);
+            @memcpy(self.buf[self.len .. self.len + take], chunk[0..take]);
+            self.len += take;
+        }
+        self.finish();
+        return true;
+    }
+
+    /// True (and the job killed and idle) when it ran past `timeout_ms`.
+    fn expire(self: *Job, timeout_ms: i64) bool {
+        if (self.fd < 0 or monoNowMs() - self.started_ms <= timeout_ms) return false;
+        if (self.pid > 0) _ = std.c.kill(-self.pid, std.c.SIG.KILL);
+        self.finish();
+        return true;
+    }
+
+    fn finish(self: *Job) void {
+        if (self.fd >= 0) _ = posix.system.close(self.fd);
+        self.fd = -1;
+        self.pid = -1;
+    }
 };
 
 /// Runs `command` through `sh -c`, detached via the standard double-fork so
@@ -2604,6 +2696,10 @@ const ModuleKind = enum {
     /// without mako) opening the mako history panel. On unless a config
     /// sets it "enabled": false (see withNotifications).
     notifications,
+    /// Control Center: a sliders icon opening volume/brightness sliders
+    /// and Wi-Fi, Bluetooth, power profile, keep-awake and DND pills. On
+    /// unless a config sets it "enabled": false.
+    control_center,
 };
 
 /// One entry in a left/center/right module list. Flat + all-optional
@@ -2874,6 +2970,7 @@ const DEFAULT_RIGHT = [_]ModuleEntry{
     .{ .kind = .volume, .enabled = true, .in_drawer = true },
     .{ .kind = .tray, .enabled = true, .in_drawer = true },
     .{ .kind = .notifications, .enabled = true },
+    .{ .kind = .control_center, .enabled = true },
     .{ .kind = .weather, .enabled = true },
 };
 
@@ -3424,7 +3521,7 @@ fn loadConfigFromFile() ?Config {
         .modules = .{
             .left = parsed.modules.left,
             .center = parsed.modules.center,
-            .right = withNotifications(allocator, parsed.modules.right),
+            .right = withDefaultOn(allocator, withNotifications(allocator, parsed.modules.right)),
         },
         .launchers = parsed.launchers,
         .dock = parsed.dock,
@@ -4089,6 +4186,9 @@ const PopupMenu = struct {
     dock_addr_buf: [20]u8 = undefined,
     dock_addr_len: usize = 0,
     dock_ws: i32 = -1,
+    /// Control Center: what the pointer is over (ccHoverId), for
+    /// redraw-on-change hover.
+    cc_hover: u8 = 0,
 
     fn dest(self: *const PopupMenu) []const u8 {
         return self.dest_buf[0..self.dest_len];
@@ -4115,7 +4215,7 @@ const PopupMenu = struct {
 
 /// What a PopupMenu's rows are sourced from; selects the draw and click
 /// paths in drawPopup / the pointer-button handler.
-const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu, brightness_osd, notifications };
+const PopupKind = enum { dbusmenu, layout_picker, volume, volume_osd, dock_menu, brightness_osd, notifications, control_center };
 
 /// The timed, click-through feedback popups (volume and brightness).
 fn isOsd(kind: PopupKind) bool {
@@ -4993,6 +5093,34 @@ fn spawnVolumeSet(entry_idx: usize, delta_pct: i8) void {
     spawnDetached(cmd);
 }
 
+/// A left release over a popup with an armed press: the mixer mutes the
+/// row on a clean click or commits the dragged level; the Control Center
+/// does the same for its sliders (see ccRelease).
+fn popupDragRelease(bar: *Bar) void {
+    const m = &(bar.popup orelse return);
+    const pr = m.vol_drag_row orelse return;
+    const val = m.vol_drag_val;
+    const moved = m.vol_drag_moved;
+    m.vol_drag_row = null;
+    m.vol_drag_moved = false;
+    switch (m.kind) {
+        .volume => {
+            // A 1s refresh may have reordered rows mid-press; the pressed
+            // pactl id staying put is what makes the release act on the
+            // right entry.
+            if (pr >= vol_count or vol_entries[pr].id != m.vol_press_id) return;
+            if (moved) {
+                spawnVolumeSetAbs(pr, val);
+            } else {
+                spawnVolumeSet(pr, 0);
+            }
+            startVolumeListFetch();
+        },
+        .control_center => ccRelease(bar, pr, val, moved),
+        else => {},
+    }
+}
+
 /// Fires an absolute pactl set at one entry (slider commit). Same
 /// injection-safety contract as spawnVolumeSet.
 fn spawnVolumeSetAbs(entry_idx: usize, pct: u8) void {
@@ -5248,12 +5376,10 @@ var g_mako_pid: u32 = 0;
 /// The last makoctl run failed (mako gone, makoctl missing) or hung.
 var g_makoctl_failed: bool = false;
 var g_makoctl_timed_out: bool = false;
-var g_notif_fd: posix.fd_t = -1;
-var g_notif_child: c_int = -1;
-var g_notif_started_ms: i64 = 0;
 var g_notif_job: NotifJob = .refresh;
 var g_notif_buf: [nsvc.MAX_READ]u8 = undefined;
-var g_notif_len: usize = 0;
+/// The makoctl child (poll slot 33).
+var g_notif_proc: Job = .{ .buf = &g_notif_buf };
 /// The bar whose bell asked for the panel; it opens once makoctl answers.
 var g_notif_open_bar: ?*Bar = null;
 var g_notif_last_scan: i64 = 0;
@@ -5299,9 +5425,9 @@ fn saveNotifState() void {
 }
 
 /// Starts one makoctl script (no-op while one is running). Its output is
-/// capped by `head -c` and again by the read buffer.
+/// capped by `head -c` and again by the job's buffer.
 fn startMakoctl(job: NotifJob) void {
-    if (g_notif_fd >= 0) return;
+    if (g_notif_proc.busy()) return;
     const history = "{ makoctl history -j 2>/dev/null || echo '" ++ nsvc.FAIL_MARK ++ "'; } | head -c 65536";
     const script: [:0]const u8 = switch (job) {
         .refresh => history,
@@ -5309,55 +5435,20 @@ fn startMakoctl(job: NotifJob) void {
         .dnd_on => "makoctl mode -a " ++ nsvc.DND_MODE ++ " >/dev/null 2>&1; " ++ history,
         .dnd_off => "makoctl mode -r " ++ nsvc.DND_MODE ++ " >/dev/null 2>&1; " ++ history,
     };
-    var pipe_fds: [2]posix.fd_t = undefined;
-    if (std.c.pipe(&pipe_fds) != 0) return;
-    setCloexec(pipe_fds[0]);
-    _ = std.c.fcntl(pipe_fds[0], posix.F.SETFL, @as(c_int, 0o4000)); // O_NONBLOCK
-    const pid = libc_proc.fork();
-    if (pid < 0) {
-        _ = posix.system.close(pipe_fds[0]);
-        _ = posix.system.close(pipe_fds[1]);
-        return;
-    }
-    if (pid == 0) {
-        _ = std.c.dup2(pipe_fds[1], 1);
-        _ = posix.system.close(pipe_fds[1]);
-        _ = posix.system.close(pipe_fds[0]);
-        var argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", script.ptr, null };
-        _ = std.c.execve("/bin/sh", &argv, std.c.environ);
-        std.c._exit(127);
-    }
-    _ = posix.system.close(pipe_fds[1]);
-    g_notif_fd = pipe_fds[0];
-    g_notif_child = pid;
-    g_notif_started_ms = monoNowMs();
+    if (!g_notif_proc.start(script)) return;
     g_notif_job = job;
-    g_notif_len = 0;
     g_makoctl_timed_out = false;
 }
 
 /// The makoctl pipe is readable: collect, and finish at EOF.
 fn onMakoctlReadable(bars_slice: []Bar) void {
-    while (true) {
-        var chunk: [4096]u8 = undefined;
-        const n = posix.read(g_notif_fd, &chunk) catch |err| {
-            if (err == error.WouldBlock) return;
-            break;
-        };
-        if (n == 0) break;
-        const room = g_notif_buf.len - g_notif_len;
-        const take = @min(n, room);
-        @memcpy(g_notif_buf[g_notif_len .. g_notif_len + take], chunk[0..take]);
-        g_notif_len += take;
-    }
-    finishMakoctl(bars_slice, false);
+    if (g_notif_proc.pump()) finishMakoctl(bars_slice, false);
 }
 
 /// The 1 s tick: a makoctl past NOTIF_TIMEOUT_MS is killed and reported;
 /// every NOTIF_PID_SCAN_S, look for mako.
 fn notifTick(bars_slice: []Bar) void {
-    if (g_notif_fd >= 0 and monoNowMs() - g_notif_started_ms > NOTIF_TIMEOUT_MS) {
-        if (g_notif_child > 0) _ = std.c.kill(g_notif_child, std.c.SIG.KILL);
+    if (g_notif_proc.expire(NOTIF_TIMEOUT_MS)) {
         logging.warn("notifications: makoctl did not answer in {d} ms, killed", .{NOTIF_TIMEOUT_MS});
         finishMakoctl(bars_slice, true);
         return;
@@ -5370,11 +5461,8 @@ fn notifTick(bars_slice: []Bar) void {
 }
 
 fn finishMakoctl(bars_slice: []Bar, timed_out: bool) void {
-    _ = posix.system.close(g_notif_fd);
-    g_notif_fd = -1;
-    g_notif_child = -1; // reaped by reapChildren on the 1 s tick
     g_makoctl_timed_out = timed_out;
-    const out = nsvc.splitFail(g_notif_buf[0..g_notif_len]);
+    const out = nsvc.splitFail(if (timed_out) "" else g_notif_proc.output());
     g_makoctl_failed = timed_out or out.failed;
     if (g_makoctl_failed) {
         g_notif_hist = .{};
@@ -5597,6 +5685,274 @@ fn notifPanelClick(bars_slice: []Bar, id: i32) void {
     drawAllBars(bars_slice);
 }
 
+// --- control center ------------------------------------------------------------
+//
+// The sliders icon (module `control_center`) opens one panel: Volume and
+// Brightness sliders over a 2-column grid of pills (Wi-Fi, Bluetooth, Power
+// profile, Keep awake, Do not disturb). Its own layout and x+y hit-test
+// (popup rows are full-width, y only). States are read only while the panel
+// is open (see the wiring below); closed, it costs nothing.
+
+const CC_W: i32 = 380;
+const CC_PAD: i64 = 14;
+const CC_SLIDER_H: i32 = 40;
+const CC_PILL_H: i32 = 56;
+const CC_PILL_GAP: i32 = 10;
+const CC_ICON_ZONE: i64 = 32;
+const CC_VALUE_W: i64 = 46;
+const CC_PILL_RADIUS: i32 = 16;
+const CC_ICON = "\u{F062E}";
+
+const CcPill = enum(u8) { wifi, bluetooth, power, awake, dnd };
+const CC_PILLS = [_]CcPill{ .wifi, .bluetooth, .power, .awake, .dnd };
+
+const CcHit = union(enum) { none, vol_icon, vol_track, bri_track, pill: CcPill };
+
+/// What one pill shows: on = accent tint, avail false = dimmed, inert.
+const PillView = struct { icon: []const u8, label: []const u8, state: []const u8, on: bool, avail: bool };
+
+fn ccPanelHeight() i32 {
+    return @as(i32, @intCast(2 * CC_PAD)) + 2 * CC_SLIDER_H + POPUP_SEPARATOR_HEIGHT + 3 * CC_PILL_H + 2 * CC_PILL_GAP;
+}
+
+fn ccTrack(pm_width: u32) struct { x0: i64, x1: i64 } {
+    return .{ .x0 = CC_PAD + CC_ICON_ZONE, .x1 = @as(i64, pm_width) - CC_PAD - CC_VALUE_W };
+}
+
+fn ccSliderTop(row: i64) i64 {
+    return CC_PAD + row * CC_SLIDER_H;
+}
+
+fn ccPillRect(pm_width: u32, i: usize) struct { x0: i64, y0: i64, x1: i64, y1: i64 } {
+    const top = CC_PAD + 2 * CC_SLIDER_H + POPUP_SEPARATOR_HEIGHT;
+    const w = @divTrunc(@as(i64, pm_width) - 2 * CC_PAD - CC_PILL_GAP, 2);
+    const col: i64 = @intCast(i % 2);
+    const row: i64 = @intCast(i / 2);
+    const x0 = CC_PAD + col * (w + CC_PILL_GAP);
+    const y0 = top + row * (CC_PILL_H + CC_PILL_GAP);
+    return .{ .x0 = x0, .y0 = y0, .x1 = x0 + w, .y1 = y0 + CC_PILL_H };
+}
+
+fn ccHitTest(pm: *const PopupMenu, x: i64, y: i64) CcHit {
+    const tr = ccTrack(pm.width);
+    inline for (.{ 0, 1 }) |row| {
+        const t = ccSliderTop(row);
+        if (y >= t and y < t + CC_SLIDER_H) {
+            if (row == 0 and x >= CC_PAD and x < tr.x0) return .vol_icon;
+            if (x >= tr.x0 - 6 and x <= tr.x1 + 6) return if (row == 0) .vol_track else .bri_track;
+            return .none;
+        }
+    }
+    for (CC_PILLS, 0..) |p, i| {
+        const r = ccPillRect(pm.width, i);
+        if (x >= r.x0 and x < r.x1 and y >= r.y0 and y < r.y1) return .{ .pill = p };
+    }
+    return .none;
+}
+
+/// Hover id for redraw-on-change: 0 none, 1 vol icon, 2/3 tracks, 10+ pills.
+fn ccHoverId(h: CcHit) u8 {
+    return switch (h) {
+        .none => 0,
+        .vol_icon => 1,
+        .vol_track => 2,
+        .bri_track => 3,
+        .pill => |p| 10 + @intFromEnum(p),
+    };
+}
+
+fn openControlCenter(bar: *Bar) void {
+    if (bar.popup != null) return;
+    const ps = createPopupSurface(bar, CC_W, ccPanelHeight(), false) orelse return;
+    bar.popup = PopupMenu{
+        .surface = ps.surface,
+        .xdg_surface = ps.xdg_surface,
+        .popup = ps.popup,
+        .kind = .control_center,
+    };
+    wirePopup(bar, ps, true);
+    ccOpened();
+}
+
+/// The sliders icon's click: toggle the panel (an OSD gives way to it).
+fn toggleControlCenter(bar: *Bar) void {
+    if (bar.popup) |pm| {
+        if (pm.kind == .control_center) {
+            closePopup(bar);
+            return;
+        }
+        if (!isOsd(pm.kind)) return;
+        closePopup(bar);
+    }
+    openControlCenter(bar);
+}
+
+fn anyControlCenterOpen(bars_slice: []Bar) bool {
+    for (bars_slice) |*b| {
+        if (b.popup) |pm| {
+            if (pm.kind == .control_center) return true;
+        }
+    }
+    return false;
+}
+
+fn redrawControlCenters(bars_slice: []Bar) void {
+    for (bars_slice) |*b| {
+        if (b.popup) |pm| {
+            if (pm.kind == .control_center) drawPopup(b) catch |err| logging.err("popup draw failed: {}", .{err});
+        }
+    }
+}
+
+fn ccDrawText(pixels: [*]u32, pm: *PopupMenu, font: *font_mod.Font, x: i64, baseline: i64, text: []const u8, max_w: i64, color: u32) i64 {
+    return drawTextFit(pixels, pm, font, x, baseline, text, max_w, color);
+}
+
+/// One slider row: an icon on the left, the track, the value on the right.
+fn ccDrawSlider(bar: *Bar, pm: *PopupMenu, pixels: [*]u32, row: i64, icon: []const u8, pct: u8, value: []const u8, avail: bool, dimmed_fill: bool) void {
+    const ap = current_config.appearance;
+    const top = ccSliderTop(row);
+    const mid = top + @divTrunc(CC_SLIDER_H, 2);
+    const baseline = mid + @divTrunc(@as(i64, bar.font.ascentPx()) - @as(i64, bar.font.descentPx()), 2);
+    const col = if (avail) ap.text_color else ap.popup_disabled_color;
+    _ = ccDrawText(pixels, pm, bar.font, CC_PAD + 2, baseline, icon, CC_ICON_ZONE, col);
+    const tr = ccTrack(pm.width);
+    const th: i64 = 6;
+    const ty = mid - @divTrunc(th, 2);
+    fillRoundedRect(pixels, pm.width, pm.height, tr.x0, ty, tr.x1, ty + th, 3, ap.popup_separator_color);
+    if (avail) {
+        const fx = volSliderValToX(tr.x0, tr.x1, pct);
+        const fill = if (dimmed_fill) ap.popup_disabled_color else ap.workspace_active_color;
+        if (fx > tr.x0) fillRoundedRect(pixels, pm.width, pm.height, tr.x0, ty, fx, ty + th, 3, fill);
+        const r: i64 = 7;
+        fillRoundedRect(pixels, pm.width, pm.height, fx - r, mid - r, fx + r, mid + r, @intCast(r), fill);
+    }
+    const vw = textPixelWidth(bar.font, value);
+    _ = ccDrawText(pixels, pm, bar.font, @as(i64, pm.width) - CC_PAD - vw, baseline, value, CC_VALUE_W, col);
+}
+
+fn drawControlCenter(bar: *Bar, pm: *PopupMenu, pixels: [*]u32) void {
+    const ap = current_config.appearance;
+    const font = bar.font;
+
+    // Volume: the master level from the wpctl poll (the drag shows its
+    // own value until released).
+    var pbuf: [16]u8 = undefined;
+    const vol = parseVolumePoll(bar.volume.text(), &pbuf);
+    const dragging_vol = pm.vol_drag_row != null and pm.vol_drag_row.? == 0 and pm.vol_drag_moved;
+    const vpct: u8 = if (dragging_vol) pm.vol_drag_val else vol.pct;
+    var vb: [8]u8 = undefined;
+    const vtext = if (!vol.ok) "\u{2014}" else if (vol.muted and !dragging_vol) "muted" else std.fmt.bufPrint(&vb, "{d}%", .{vpct}) catch "";
+    const vicon: []const u8 = if (vol.muted) "\u{F0581}" else "\u{F057E}";
+    ccDrawSlider(bar, pm, pixels, 0, vicon, vpct, vtext, vol.ok, vol.muted);
+
+    // Brightness: the backlight level (backlight.zig); none = dimmed.
+    const dragging_bri = pm.vol_drag_row != null and pm.vol_drag_row.? == 1 and pm.vol_drag_moved;
+    const bpct: u8 = if (dragging_bri) pm.vol_drag_val else g_bright_pct;
+    var bb: [16]u8 = undefined;
+    const have_bl = g_backlight.present();
+    const btext = if (!have_bl) "none" else std.fmt.bufPrint(&bb, "{d}%", .{bpct}) catch "";
+    const bicon: []const u8 = if (bpct < 34) "\u{F00DE}" else if (bpct < 67) "\u{F00DF}" else "\u{F00E0}";
+    ccDrawSlider(bar, pm, pixels, 1, bicon, bpct, btext, have_bl, false);
+
+    drawNotifSeparator(pixels, pm, @intCast(CC_PAD + 2 * CC_SLIDER_H));
+
+    // Pills.
+    const asc: i64 = font.ascentPx();
+    const desc: i64 = font.descentPx();
+    const lh = asc + desc;
+    for (CC_PILLS, 0..) |p, i| {
+        var sbuf: [64]u8 = undefined;
+        const v = ccPillView(p, &sbuf);
+        const r = ccPillRect(pm.width, i);
+        const hovered = v.avail and pm.cc_hover == 10 + @intFromEnum(p);
+        var fill = if (!v.avail)
+            lerpColor(ap.popup_bg_color, ap.popup_hover_color, 0.45)
+        else if (v.on)
+            lerpColor(ap.popup_bg_color, ap.workspace_active_color, 0.30)
+        else
+            lerpColor(ap.popup_bg_color, ap.popup_hover_color, 0.85);
+        if (hovered) fill = lerpColor(fill, ap.text_color, 0.08);
+        fillRoundedRectAA(pixels, pm.width, pm.height, r.x0, r.y0, r.x1, r.y1, CC_PILL_RADIUS, fill);
+        const text_col = if (v.avail) ap.text_color else ap.popup_disabled_color;
+        const icon_col = if (!v.avail) ap.popup_disabled_color else if (v.on) ap.workspace_active_color else ap.text_color;
+        const b1 = r.y0 + @divTrunc(CC_PILL_H - 2 * lh - 2, 2) + asc;
+        const b2 = b1 + lh + 2;
+        const icon_b = r.y0 + @divTrunc(CC_PILL_H + asc - desc, 2);
+        _ = ccDrawText(pixels, pm, font, r.x0 + 14, icon_b, v.icon, 24, icon_col);
+        const tx = r.x0 + 14 + 28;
+        _ = ccDrawText(pixels, pm, font, tx, b1, v.label, r.x1 - tx - 10, text_col);
+        _ = ccDrawText(pixels, pm, font, tx, b2, v.state, r.x1 - tx - 10, ap.popup_disabled_color);
+    }
+}
+
+// --- control center state (filled by the wiring below) ---
+
+var g_cc_wifi: radiosvc.Wifi = .{};
+var g_cc_bt: radiosvc.Avail = .unknown;
+var g_cc_prof: ppsvc.Profiles = .{};
+/// Keep awake: an idle inhibitor on the bar's surface (session only).
+var g_keep_awake: bool = false;
+/// The first state read since the panel opened has answered.
+var g_cc_read: bool = false;
+
+fn ccPillView(p: CcPill, buf: []u8) PillView {
+    const reading = !g_cc_read;
+    return switch (p) {
+        .wifi => switch (g_cc_wifi.state) {
+            .on => .{ .icon = "\u{F05A9}", .label = "Wi-Fi", .state = if (g_cc_wifi.ssid().len > 0) (std.fmt.bufPrint(buf, "{s}", .{g_cc_wifi.ssid()}) catch "On") else "On", .on = true, .avail = true },
+            .off => .{ .icon = "\u{F05AA}", .label = "Wi-Fi", .state = "Off", .on = false, .avail = true },
+            .absent => .{ .icon = "\u{F05AA}", .label = "Wi-Fi", .state = "No Wi-Fi", .on = false, .avail = false },
+            .unknown => .{ .icon = "\u{F05AA}", .label = "Wi-Fi", .state = if (reading) "\u{2026}" else "Unavailable", .on = false, .avail = false },
+        },
+        .bluetooth => switch (g_cc_bt) {
+            .on => .{ .icon = "\u{F00AF}", .label = "Bluetooth", .state = "On", .on = true, .avail = true },
+            .off => .{ .icon = "\u{F00B2}", .label = "Bluetooth", .state = "Off", .on = false, .avail = true },
+            .absent => .{ .icon = "\u{F00B2}", .label = "Bluetooth", .state = "No adapter", .on = false, .avail = false },
+            .unknown => .{ .icon = "\u{F00B2}", .label = "Bluetooth", .state = if (reading) "\u{2026}" else "Unavailable", .on = false, .avail = false },
+        },
+        .power => if (g_cc_prof.available()) blk: {
+            const n = g_cc_prof.activeName();
+            const icon: []const u8 = if (std.mem.eql(u8, n, "power-saver")) "\u{F032A}" else if (std.mem.eql(u8, n, "performance")) "\u{F14DE}" else "\u{F05D1}";
+            break :blk .{ .icon = icon, .label = "Power", .state = ppsvc.label(n), .on = !std.mem.eql(u8, n, "balanced"), .avail = ppsvc.next(&g_cc_prof) != null };
+        } else .{ .icon = "\u{F04C5}", .label = "Power", .state = if (reading) "\u{2026}" else "Unavailable", .on = false, .avail = false },
+        .awake => .{ .icon = if (g_keep_awake) "\u{F0176}" else "\u{F0FAA}", .label = "Keep awake", .state = if (g_keep_awake) "On" else "Off", .on = g_keep_awake, .avail = idleInhibitAvailable() },
+        .dnd => .{ .icon = if (g_notif_state.dnd) NOTIF_ICON_BELL_OFF else NOTIF_ICON_BELL, .label = "Do not disturb", .state = if (g_notif_state.dnd) "On" else "Off", .on = g_notif_state.dnd, .avail = true },
+    };
+}
+
+// Wiring stubs (filled in by the next change).
+fn ccOpened() void {}
+fn idleInhibitAvailable() bool {
+    return false;
+}
+
+/// A press in the panel: arm a slider (commit on release), or act on a pill.
+fn ccPress(bar: *Bar, pm: *PopupMenu) void {
+    const hit = ccHitTest(pm, pm.pointer_x, pm.pointer_y);
+    switch (hit) {
+        .vol_track, .bri_track => {
+            const row: usize = if (hit == .vol_track) 0 else 1;
+            if (row == 1 and !g_backlight.present()) return;
+            const tr = ccTrack(pm.width);
+            pm.vol_drag_row = row;
+            pm.vol_drag_val = volSliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
+            pm.vol_press_x = pm.pointer_x;
+            pm.vol_press_y = pm.pointer_y;
+            pm.vol_drag_moved = true; // a click on the track sets that level
+            drawPopup(bar) catch {};
+        },
+        else => {},
+    }
+}
+
+fn ccRelease(bar: *Bar, row: usize, val: u8, moved: bool) void {
+    _ = row;
+    _ = val;
+    _ = moved;
+    drawPopup(bar) catch {};
+}
+
 fn drawPopup(bar: *Bar) !void {
     var pm = &(bar.popup orelse return);
     if (!pm.configured or pm.width == 0 or pm.height == 0) return;
@@ -5622,6 +5978,7 @@ fn drawPopup(bar: *Bar) !void {
         .volume_osd => drawVolumeOSD(bar, pm, pixels),
         .brightness_osd => drawBrightnessOSD(bar, pm, pixels),
         .notifications => drawNotifPanel(bar, pm, pixels),
+        .control_center => drawControlCenter(bar, pm, pixels),
         .dock_menu => drawDockMenuRows(bar, pm, pixels),
     }
 
@@ -6605,14 +6962,14 @@ fn realMain() !void {
         poll_fds[30].fd = vol_fetch_fd;
         poll_fds[31].fd = vol_sub_fd;
         poll_fds[32].fd = g_backlight.pollFd();
-        poll_fds[33].fd = g_notif_fd;
+        poll_fds[33].fd = g_notif_proc.fd;
 
         _ = try posix.poll(&poll_fds, -1);
 
         if (poll_fds[32].revents & (posix.POLL.PRI | posix.POLL.ERR) != 0) {
             checkBacklight(bars[0..bar_count]);
         }
-        if (g_notif_fd >= 0 and poll_fds[33].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
+        if (g_notif_proc.busy() and poll_fds[33].revents & (posix.POLL.IN | posix.POLL.HUP | posix.POLL.ERR) != 0) {
             onMakoctlReadable(bars[0..bar_count]);
         }
 
@@ -7549,6 +7906,26 @@ fn withNotifications(allocator: std.mem.Allocator, right: []const ModuleEntry) [
     const out = allocator.alloc(ModuleEntry, right.len + 1) catch return right;
     @memcpy(out[0..after], right[0..after]);
     out[after] = .{ .kind = .notifications, .enabled = true };
+    @memcpy(out[after + 1 ..], right[after..]);
+    return out;
+}
+
+/// Same default-on rule for the Control Center: a right group that doesn't
+/// name the kind gets an enabled entry right after the bell (or volume, or
+/// at the end).
+fn withDefaultOn(allocator: std.mem.Allocator, right: []const ModuleEntry) []const ModuleEntry {
+    var after: usize = right.len;
+    var saw_bell = false;
+    for (right, 0..) |e, i| {
+        if (e.kind == .control_center) return right;
+        if (e.kind == .notifications) {
+            after = i + 1;
+            saw_bell = true;
+        } else if (e.kind == .volume and !saw_bell) after = i + 1;
+    }
+    const out = allocator.alloc(ModuleEntry, right.len + 1) catch return right;
+    @memcpy(out[0..after], right[0..after]);
+    out[after] = .{ .kind = .control_center, .enabled = true };
     @memcpy(out[after + 1 ..], right[after..]);
     return out;
 }
@@ -11355,6 +11732,16 @@ fn drawRightGroup(
                     _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, net_label, color, null, click_regions, if (entry.in_drawer) &island_now else null, null);
                 }
             },
+            .control_center => {
+                // Sliders icon; the click opens the Control Center.
+                if (!dock_mode) {
+                    if (!first) x_end -= MODULE_GAP;
+                    first = false;
+                    const cell = reserveRightCell(x_end, textPixelWidth(font, CC_ICON), center_start_x);
+                    x_end = cell.next_pen;
+                    _ = drawRightAligned(pixels, buf_width, buf_height, font, y0, cell.content_end, CC_ICON, if (entry.in_drawer) drawer_color else text_color, .toggle_control_center, click_regions, if (entry.in_drawer) &island_now else null, null);
+                }
+            },
             .notifications => {
                 // Bell: crossed out in Do not disturb, dimmed when mako
                 // isn't running (or the last makoctl failed). The click
@@ -11654,6 +12041,21 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                     // Mixer slider drag: past threshold it stops being a
                     // mute click; the value tracks the pointer live (commit
                     // on release), repainting only on value change.
+                    if (pm.kind == .control_center) {
+                        const hid = ccHoverId(ccHitTest(pm, pm.pointer_x, pm.pointer_y));
+                        if (hid != pm.cc_hover) {
+                            pm.cc_hover = hid;
+                            drawPopup(bar) catch {};
+                        }
+                        if (pm.vol_drag_row != null) {
+                            const tr = ccTrack(pm.width);
+                            const v = volSliderXToVal(tr.x0, tr.x1, @as(i64, pm.pointer_x));
+                            if (v != pm.vol_drag_val) {
+                                pm.vol_drag_val = v;
+                                drawPopup(bar) catch {};
+                            }
+                        }
+                    }
                     if (pm.kind == .volume and pm.vol_drag_row != null) {
                         const dx = pm.pointer_x - pm.vol_press_x;
                         const dy = pm.pointer_y - pm.vol_press_y;
@@ -11713,6 +12115,11 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                 if (e.button == BTN_LEFT and bar.launch_press_li != null) {
                     releaseLauncherPress(bar);
                 }
+                // A press armed in a popup (mixer row, Control Center
+                // slider) resolves here: click vs drag commit. Releases
+                // used to stop above, so mixer clicks and drags never
+                // committed.
+                if (e.button == BTN_LEFT) popupDragRelease(bar);
                 return;
             }
 
@@ -11729,6 +12136,11 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                 // The OSDs are pure feedback: any click dismisses them.
                 if (isOsd(pm.kind)) {
                     closePopup(bar);
+                    return;
+                }
+                // The Control Center hit-tests its own grid (no rows).
+                if (pm.kind == .control_center) {
+                    ccPress(bar, pm);
                     return;
                 }
                 const row = pm.hitTestRow(pm.pointer_y) orelse return;
@@ -11764,34 +12176,18 @@ fn pointerListener(_: *wl.Pointer, event: wl.Pointer.Event, router: *BarRouter) 
                                 if (mp.kind == .volume) mpm = mp;
                             }
                             const m = mpm orelse return;
-                            if (e.state == .pressed) {
-                                if (idx >= vol_count) return;
-                                m.vol_drag_row = idx;
-                                m.vol_drag_val = vol_entries[idx].vol_pct;
-                                m.vol_press_id = vol_entries[idx].id;
-                                m.vol_press_x = m.pointer_x;
-                                m.vol_press_y = m.pointer_y;
-                                m.vol_drag_moved = false;
-                                return;
-                            }
-                            const pr = m.vol_drag_row orelse return;
-                            const val = m.vol_drag_val;
-                            const moved = m.vol_drag_moved;
-                            m.vol_drag_row = null;
+                            // The release lands in popupDragRelease.
+                            if (idx >= vol_count) return;
+                            m.vol_drag_row = idx;
+                            m.vol_drag_val = vol_entries[idx].vol_pct;
+                            m.vol_press_id = vol_entries[idx].id;
+                            m.vol_press_x = m.pointer_x;
+                            m.vol_press_y = m.pointer_y;
                             m.vol_drag_moved = false;
-                            // A 1s refresh may have reordered rows mid-press;
-                            // the pressed pactl id staying put is what makes
-                            // the release act on the right entry.
-                            if (pr >= vol_count or vol_entries[pr].id != m.vol_press_id) return;
-                            if (moved) {
-                                spawnVolumeSetAbs(pr, val);
-                            } else {
-                                spawnVolumeSet(pr, 0);
-                            }
-                            startVolumeListFetch();
                             return;
                         },
                         .volume_osd, .brightness_osd => {}, // dismissed before hit-test above; unreachable here
+                        .control_center => {}, // handled before the row hit-test
                         .notifications => {
                             // Do not disturb / Clear all; the panel stays open.
                             notifPanelClick(router.bars, id);
@@ -12032,6 +12428,7 @@ fn handleAction(bar: *Bar, action: Action) void {
             openVolumeMixerFetch(bar);
         },
         .toggle_notifications => toggleNotifPanel(bar),
+        .toggle_control_center => toggleControlCenter(bar),
         .set_layout => |index| {
             if (index >= MANGO_LAYOUTS.len) return;
             bar.workspaces.setLayout(MANGO_LAYOUTS[index].name) catch |err| {
@@ -12093,6 +12490,7 @@ fn actionName(a: Action) []const u8 {
         .open_layout_picker => "open_layout_picker",
         .open_volume_mixer => "open_volume_mixer",
         .toggle_notifications => "toggle_notifications",
+        .toggle_control_center => "toggle_control_center",
         .set_layout => "set_layout",
         .launcher => "launcher",
         .focus_client => "focus_client",
