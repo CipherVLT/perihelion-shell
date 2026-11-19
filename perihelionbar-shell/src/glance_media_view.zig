@@ -90,8 +90,10 @@ pub const MediaTab = struct {
     /// When the tab must be looked at again: the next probe, or the next
     /// whole second of the progress while playing.
     pub fn deadline(self: *const MediaTab, now: i64) i64 {
-        var d = self.next_probe_ms;
-        if (self.st.status == .playing and self.st.len_us > 0) {
+        // A probe in flight wakes the loop through its pipe; a due time in
+        // the past would only spin the loop until it finishes.
+        var d: i64 = if (self.probe.busy()) std.math.maxInt(i64) else self.next_probe_ms;
+        if (self.st.status == .playing) {
             const p = self.shownPos(now);
             d = @min(d, now + @as(i64, @intCast((1_000_000 - p % 1_000_000) / 1000)) + 5);
         }
@@ -437,11 +439,19 @@ pub const MediaTab = struct {
         var b2: [16]u8 = undefined;
         const left = gm.formatTime(pos, &b1);
         const right: []const u8 = if (len > 0) gm.formatTime(len, &b2) else "--:--";
-        const ty = l.times_y - widgetsDesc(c) + 0;
         _ = asc;
+        const ty = l.times_y - widgetsDesc(c);
         const tc = widgets.dim(th.text_color, 0xAA);
         _ = c.drawTextA(r.x, ty, left, tc);
         _ = c.drawTextA(r.x + r.w - @as(i32, @intCast(c.textWidth(right))), ty, right, tc);
+    }
+
+    /// A button glyph at twice the font size, centred in `r` (only a few
+    /// glyphs, rasterised when the panel repaints).
+    fn drawIcon(c: widgets.Canvas, r: g.Rect, glyph: []const u8, color: u32, asc: i32) void {
+        const w: i32 = @intCast(2 * c.textWidth(glyph));
+        const base = r.y + @divTrunc(r.h, 2) + asc - widgetsDesc(c);
+        _ = widgets.drawScaledText(c, r.x + @divTrunc(r.w - w, 2), base, glyph, 2, color);
     }
 
     fn widgetsDesc(c: widgets.Canvas) i32 {
@@ -468,8 +478,7 @@ pub const MediaTab = struct {
                 };
                 col = if (on == null) widgets.dim(th.text_color, 0x40) else if (on.?) (if (ctl == .shuffle or ctl == .loop) th.border_color else th.text_color) else widgets.dim(th.text_color, 0x80);
             }
-            const gw: i32 = @intCast(c.textWidth(glyphs[i]));
-            _ = c.drawTextA(r.x + @divTrunc(r.w - gw, 2), r.y + @divTrunc(r.h + asc - widgetsDesc(c), 2), glyphs[i], col);
+            drawIcon(c, r, glyphs[i], col, asc);
             if (ctl == .loop and self.st.loop == .track) {
                 // Repeat one: a small "1" under the glyph.
                 _ = c.drawTextA(r.x + @divTrunc(r.w, 2) + 6, r.y + r.h - 6, "1", th.border_color);
@@ -485,10 +494,9 @@ pub const MediaTab = struct {
         const muted = self.st.muted;
         const mhov = self.hover == .mute;
         if (mhov) gv.fillRounded(c, l.mute, @divTrunc(l.mute.w, 2), 0x1AFFFFFF, 0);
-        // The Control Center's speaker tiers (shared volume module).
+        // The Control Center's speaker tiers (shared volume module), at 2x.
         const glyph = if (muted) GLYPH_MUTED else gm.volmath.iconFor(vol orelse 0);
-        const gw: i32 = @intCast(c.textWidth(glyph));
-        _ = c.drawTextA(l.mute.x + @divTrunc(l.mute.w - gw, 2), l.mute.y + @divTrunc(l.mute.h + asc - widgetsDesc(c), 2), glyph, if (muted) widgets.dim(th.text_color, 0x80) else th.text_color);
+        drawIcon(c, l.mute, glyph, if (muted) widgets.dim(th.text_color, 0x80) else th.text_color, asc);
         const r = l.volume;
         gv.fillRounded(c, r, @divTrunc(r.h, 2), 0x2EFFFFFF, 0);
         var pb: [8]u8 = undefined;
