@@ -14186,3 +14186,24 @@ test "notifications module: on by default, after volume; off stays off" {
     const end = withNotifications(a, &no_vol);
     try std.testing.expectEqual(ModuleKind.notifications, end[1].kind);
 }
+
+test "control center module: on by default, after the bell; off stays off" {
+    var buf: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buf);
+    const a = fba.allocator();
+    const right = [_]ModuleEntry{ .{ .kind = .power }, .{ .kind = .volume }, .{ .kind = .tray } };
+    // Both defaults the way loadConfig applies them: bell after volume,
+    // Control Center after the bell.
+    const got = withDefaultOn(a, withNotifications(a, &right));
+    try std.testing.expectEqual(@as(usize, 5), got.len);
+    try std.testing.expectEqual(ModuleKind.notifications, got[2].kind);
+    try std.testing.expectEqual(ModuleKind.control_center, got[3].kind);
+    try std.testing.expect(got[3].enabled);
+    try std.testing.expectEqual(ModuleKind.tray, got[4].kind);
+    const off = [_]ModuleEntry{ .{ .kind = .power }, .{ .kind = .control_center, .enabled = false } };
+    const same = withDefaultOn(a, &off);
+    try std.testing.expectEqual(@as(usize, 2), same.len);
+    try std.testing.expect(!same[1].enabled);
+    const bare = [_]ModuleEntry{.{ .kind = .clock }};
+    try std.testing.expectEqual(ModuleKind.control_center, withDefaultOn(a, &bare)[1].kind);
+}

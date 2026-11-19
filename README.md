@@ -158,6 +158,17 @@ What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picke
 
 makoctl runs only when you open the panel or press one of the two buttons, never on a timer, and is stopped if it doesn't answer within 3 seconds. Without mako running, the bell is dimmed and the panel says so. The bell shows no unread count: that would mean asking mako every few seconds.
 
+**Control Center:** a sliders icon (module `control_center`, on unless `config.json` gives it `"enabled": false`) opens one panel:
+
+- **Volume** slider for the main output (click the speaker to mute), and **Brightness** for the screen backlight (`brightnessctl`). While the panel is open the volume and brightness OSDs stay away, since the sliders already show the level. Without a backlight the Brightness slider is dimmed.
+- **Wi-Fi**: turns the Wi-Fi radio on or off (`nmcli radio wifi`) and shows the network you're on. Dimmed with "No Wi-Fi" when there's no Wi-Fi hardware.
+- **Bluetooth**: powers the adapter on or off (`bluetoothctl power`, unblocking it with `rfkill` first). Dimmed with "No adapter" when there is none or bluetoothd isn't running.
+- **Power**: each click moves to the next profile power-profiles-daemon offers (Saver, Balanced, Performance). Dimmed without the daemon.
+- **Keep awake**: stops the screen from locking and the session from going idle (swayidle's 10-minute lock) while it's on. The bar holds an idle inhibitor on its own surface, so when the bar quits the inhibitor goes with it and the machine can't stay awake by accident. It only lasts for the session, and it doesn't stop a lock when you suspend yourself. Mango counts an inhibitor only while its surface is shown, which the bar always is; with the bar switched off there's no Control Center either. Dimmed if the compositor doesn't offer idle inhibiting.
+- **Do not disturb**: the same switch as in the notifications panel (mako's do-not-disturb mode); changing it in either place changes both and the bell.
+
+Pills that are on wear your accent colour. The states are read only while the panel is open: once when it opens and every 2 seconds after, each command stopped if it hangs for 3 seconds. Nothing runs while it's closed.
+
 ## Welcome & Config
 
 **Perihelion Bar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.

@@ -102,6 +102,9 @@ const ModuleKind = enum {
     /// Notification center bell (main.zig's ModuleKind.notifications). On
     /// unless config.json sets it "enabled": false.
     notifications,
+    /// Control Center (main.zig's ModuleKind.control_center): sliders and
+    /// quick toggles. On unless config.json sets it "enabled": false.
+    control_center,
 };
 
 // Every ModuleKind valid in the "right" group per main.zig's drawRightGroup
@@ -119,6 +122,7 @@ const RIGHT_MODULE_KINDS = [_]ModuleKind{
     // Perihelion: the clock can sit on the right too (superdock style).
     .clock,
     .notifications,
+    .control_center,
 };
 
 // The kind set shared by the Left and Center groups. main.zig now draws
@@ -179,6 +183,7 @@ const DEFAULT_RIGHT = [_]ModuleEntry{
     .{ .kind = .pacman, .enabled = true, .in_drawer = true },
     .{ .kind = .tray, .enabled = true, .in_drawer = true },
     .{ .kind = .notifications, .enabled = true },
+    .{ .kind = .control_center, .enabled = true },
     .{ .kind = .weather, .enabled = true },
 };
 const CENTER_LAUNCHERS = [_]LauncherButton{
@@ -847,9 +852,10 @@ const ModuleGroup = struct {
                 }
             }
             if (found or self.len >= self.rows.len) continue;
-            // The bell is on unless config.json says otherwise (the bar
-            // adds it the same way), so a missing entry shows enabled.
-            self.rows[self.len] = .{ .entry = .{ .kind = kind, .enabled = kind == .notifications } };
+            // The bell and the Control Center are on unless config.json
+            // says otherwise (the bar adds them the same way), so a
+            // missing entry shows enabled.
+            self.rows[self.len] = .{ .entry = .{ .kind = kind, .enabled = kind == .notifications or kind == .control_center } };
             self.len += 1;
         }
     }
@@ -4188,6 +4194,7 @@ fn moduleKindDisplayName(kind: ModuleKind) [:0]const u8 {
         .layout => "Mango Layout",
         .distro => "App Launcher (distro logo)",
         .notifications => "Notifications",
+        .control_center => "Control Center",
     };
 }
 
