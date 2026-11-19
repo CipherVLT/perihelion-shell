@@ -265,10 +265,27 @@ pub fn build(b: *Build) !void {
     const glance_media_test_run = b.addRunArtifact(glance_media_tests);
     glance_media_test_step.dependOn(&glance_media_test_run.step);
 
+    // `zig build test-glance-weather`: src/glance_weather.zig's unit tests —
+    // the Weather tab's layout, hit-testing, empty states and text (units,
+    // 12/24-hour labels, compass, range bars). The answer parsing is tested
+    // with the service itself (test-weather in ../perihelionbar).
+    const glance_weather_mod = b.createModule(.{
+        .root_source_file = b.path("src/glance_weather.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true, // weather.zig binds time/getenv from libc
+    });
+    glance_weather_mod.addImport("weather", weather_mod);
+    const glance_weather_tests = b.addTest(.{ .root_module = glance_weather_mod, .use_llvm = true, .use_lld = true });
+    const glance_weather_test_step = b.step("test-glance-weather", "Run src/glance_weather.zig unit tests");
+    const glance_weather_test_run = b.addRunArtifact(glance_weather_tests);
+    glance_weather_test_step.dependOn(&glance_weather_test_run.step);
+
     // `zig build test`: every unit test in this package, so both packages
     // answer the same command.
     const test_step = b.step("test", "Run all perihelionbar-shell unit tests");
     test_step.dependOn(&widgets_test_run.step);
     test_step.dependOn(&glance_test_run.step);
     test_step.dependOn(&glance_media_test_run.step);
+    test_step.dependOn(&glance_weather_test_run.step);
 }
