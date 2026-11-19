@@ -2817,6 +2817,13 @@ pub const MediaWidget = struct {
     /// Left-click inside the card: transport controls act, anything else is a
     /// play-pause toggle like before. State flips optimistically; the next
     /// metadata refetch (<= 2 s) confirms it.
+    /// True when (px, py) lands on the control row's buttons (and there is a
+    /// track to control) — Glance keeps those clicks and sends the rest of
+    /// the card to its Media tab.
+    pub fn hitsControl(self: *const MediaWidget, r: Rect, font: *font_mod.Font, zoom: f32, px: i32, py: i32) bool {
+        return self.has_track and controlAt(r, font, zoom, px, py) != null;
+    }
+
     pub fn clickAt(self: *MediaWidget, r: Rect, font: *font_mod.Font, zoom: f32, px: i32, py: i32) void {
         const now = monoMs();
         if (self.has_track) {
@@ -6492,6 +6499,23 @@ pub const Widget = union(WidgetId) {
             .fastfetch => |*f| f.fetch.fd(),
             else => -1,
         };
+    }
+
+    /// Drops an in-flight fetch's pipe before the widget is freed (Glance
+    /// frees its cards on close). The child finishes on its own and the
+    /// host's waitpid sweep reaps it.
+    pub fn release(self: *Widget) void {
+        const f: ?*Fetcher = switch (self.*) {
+            .weather => |*w| &w.fetch,
+            .system => |*s| &s.fetch,
+            .media => |*m| &m.fetch,
+            .calendar => |*k| &k.fetch,
+            .fastfetch => |*f| &f.fetch,
+            else => null,
+        };
+        if (f) |fe| {
+            if (fe.busy()) fe.closeFd();
+        }
     }
 
     /// A fetch pipe became readable. Returns true when the widget consumed a
