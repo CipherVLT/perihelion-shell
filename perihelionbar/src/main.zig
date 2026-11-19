@@ -10314,7 +10314,7 @@ fn blitIcon16(pixels: [*]u32, buf_width: u32, buf_height: u32, x0: i64, icon: []
     blitIcon16Lit(pixels, buf_width, buf_height, x0, icon, 0.0);
 }
 
-/// How far a hovered dock icon lights up (Event Horizon style: the icon
+/// How far a hovered dock icon lights up (the icon
 /// itself brightens, no shape behind it). Gain keeps the icon's hues (a
 /// plain fade to white would wash them out); the small white lift makes
 /// dark icons visibly respond too.
@@ -10342,7 +10342,7 @@ fn litColor(c: u32, lit: f32) u32 {
 /// Peak opacity (of 255) of the soft wash behind a fully hovered dock icon.
 const DOCK_GLOW_ALPHA: f32 = 46.0;
 
-/// Event Horizon's hover tile: a faint, light rounded square behind the
+/// The hover tile: a faint, light rounded square behind the
 /// icon, tinted with the icon's own colour (grey behind a monochrome icon,
 /// warm behind a red one). Composited over the glass, so it can only lift
 /// it, never darken it: no dark pill.
@@ -10490,8 +10490,8 @@ const BAR_MODE_DOCK = "dock";
 /// Dock-mode gaps: edge = space between the dock and its screen edge,
 /// side = inset from the left/right screen edges. Taskbar keeps today's
 /// exact zeros (MARGIN_SIDE).
-// Perihelion: the dock floats just off the bottom edge (Event Horizon's
-// superdock sits about this close); windows still stop dock.window_gap px
+// Perihelion: the dock floats just off the bottom edge (the reference
+// design's dock sits about this close); windows still stop dock.window_gap px
 // above it (the exclusive zone math is independent of this margin).
 const DOCK_MARGIN_EDGE: i32 = 4;
 const DOCK_MARGIN_SIDE: i32 = 16;

@@ -1,8 +1,6 @@
 //! perihelionbar-shell's "paint-only desktop widget" model.
 //!
-//! This is a direct port of the idea behind Event-Horizon-Shell's
-//! `DesktopWidget` base class (C++, MIT — github.com/Event-Horizon-desktop-
-//! environment/Event-Horizon-Shell): a widget owns no window; it is a small
+//! The model is a classic `DesktopWidget` base class: a widget owns no window; it is a small
 //! struct that paints its current state into a shared ARGB surface buffer
 //! on demand, reports the cadence at which it needs repainting, and reacts
 //! to clicks over its rect. The host (main.zig) draws every widget into one

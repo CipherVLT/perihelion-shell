@@ -29,7 +29,7 @@ Settings, ~/.config/perihelionbar/theme (Perihelion Settings writes it):
   palette=catppuccin-auto   catppuccin-auto|-latte|-frappe|-macchiato|-mocha,
                      gruvbox-auto|-dark|-light, rose-pine-auto, rose-pine,
                      rose-pine-moon, rose-pine-dawn, nord, tokyo-night, or a
-                     palette file: Event Horizon's colour themes and your own
+                     palette file: the shipped colour themes and your own
                      (catppuccin/mocha-sky, google/tokyo-night, custom/NAME;
                      see theme/README.md and --list-palettes)
   tint=on            Wallpaper tint: the palette's backgrounds, surfaces and
@@ -37,7 +37,7 @@ Settings, ~/.config/perihelionbar/theme (Perihelion Settings writes it):
                      lightness steps stay the palette's)
   accent=wallpaper   wallpaper (the palette's accents nearest the image's
                      colors) or flavor (the palette's own defaults)
-  scheme=scheme-content   Material You: matugen's --type (Event Horizon's default)
+  scheme=scheme-content   Material You: matugen's --type (the default)
   mode=dark          dark, light or auto. Material You: its scheme. With any
                      palette, Dark keeps GTK windows (Perihelion Settings
                      too) dark, Light keeps them light
@@ -237,7 +237,7 @@ PALETTE_CHOICES = ("catppuccin-auto", "catppuccin-latte", "catppuccin-frappe", "
                    "nord", "tokyo-night")
 
 
-# --- palette files: Event Horizon's colour themes and your own --------------
+# --- palette files: the shipped colour themes and your own ------------------
 # One JSON file per palette, id = its path below a palettes folder without
 # ".json" (catppuccin/mocha-sky, google/tokyo-night). Searched in this order,
 # so a file of yours with the same id wins:
@@ -315,7 +315,7 @@ def load_palette_file(path, pid):
     light = doc.get("light")
     if not isinstance(light, bool):
         light = _relative_luminance(bg) > 0.18
-    # Event Horizon's 16 roles onto the 12 neutral steps the writers know
+    # The palette's 16 roles onto the 12 neutral steps the writers know
     # (Catppuccin's names): the roles where they exist, steps between mixed.
     neutrals = {
         "crust": mix(bg, c["shadow"], 0.45), "mantle": mix(bg, c["shadow"], 0.25), "base": bg,
@@ -333,7 +333,7 @@ def load_palette_file(path, pid):
         term = {n: "#" + ansi[i].lstrip("#").lower() for i, n in
                 enumerate(("black", "red", "green", "yellow", "blue", "magenta", "cyan"), 0)}
     else:
-        # No terminal colors (Event Horizon's themes have none): Catppuccin's,
+        # No terminal colors (the shipped themes have none): Catppuccin's,
         # as Material You does, so `ls` colors still read.
         ref = PALETTES["latte" if light else "mocha"]
         term = {"red": "#" + ref["red"], "green": "#" + ref["green"], "yellow": "#" + ref["yellow"],
@@ -364,7 +364,7 @@ def ensure_palette(pid):
 
 def list_palettes(include_flagged=False):
     """Every palette file as (id, label, light, yours), yours and then the
-    shipped ones, each sorted by family and name. Palettes Event Horizon ships
+    shipped ones, each sorted by family and name. Shipped palettes
     with unreadable text (low_contrast) are left out unless asked for."""
     seen, out = set(), []
     for d, yours in palette_dirs():
@@ -733,7 +733,7 @@ def mango_conf(t):
 
 
 # --- GTK frosted glass (Mango) ---------------------------------------------
-# Event Horizon's frosted GTK apps, adapted to Mango. Hyprland gets there by
+# Frosted GTK apps on Mango. Hyprland gets there by
 # fading the whole window (opacity 0.82) and blurring behind it, which also
 # fades the text. Here only the backgrounds go see-through, so text, icons
 # and images stay fully crisp, and the tint is the theme's own base color.
@@ -919,7 +919,7 @@ def set_color_scheme(mode, t):
 
 def gtk_css_ours(path):
     """gtk.css is ours to manage while it's missing or still the stub we wrote
-    (Event Horizon, matugen or your own gtk.css are left alone: add the
+    (another desktop's, matugen's or your own gtk.css are left alone: add the
     GLASS_IMPORT line to the top of yours to get the glass there too)."""
     cur = read(path)
     return cur is None or f"Written by {MARKER}" in cur
@@ -975,7 +975,7 @@ def refresh_gtk():
 
 def glass_wanted():
     """Window glass needs Mango's blur behind windows; elsewhere (Niri, or
-    Hyprland, which Event Horizon styles itself) it stays off."""
+    Hyprland, whose desktop styles itself) it stays off."""
     return os.path.isdir(os.path.join(CONFIG, "mango")) and (
         shutil.which("mango") is not None or os.environ.get("PERIHELION_GLASS_FORCE") == "1")
 
@@ -1110,7 +1110,7 @@ def update_fastfetch(path, t, default_path):
     """Keep Perihelion's fastfetch on Veyl OS's terminal-color layout: OS
     section color1, WM color2, PC and after color3, the logo in fastfetch's
     own colors (Fedora: 4 and 7). The wallpaper reaches it through kitty's
-    palette (kitty_colors), like Event Horizon. Older Perihelion files with
+    palette (kitty_colors). Older Perihelion files with
     24-bit colors written in are turned back into that layout."""
     cur = read(path)
     if cur is None:
@@ -1168,7 +1168,7 @@ def ok_band(h, lo, hi, cmin=0.10, cmax=0.20):
 
 def terminal_md(t):
     """The Material roles the terminal palette is made of: matugen's own
-    DARK scheme (Content by default, like Event Horizon) when it ran, else
+    DARK scheme (Content by default) when it ran, else
     tones of the theme's three accents. The terminal stays dark on a light
     theme too, so light Material roles are never used here (their light
     "fixed" colors on a light background are what washed fastfetch out)."""
@@ -1214,7 +1214,7 @@ def terminal_opacity(wall_l):
 
 
 def kitty_colors(t):
-    """kitty's colors, laid out like Event Horizon's matugen kitty template,
+    """kitty's colors, laid out like a matugen kitty template,
     so Perihelion's fastfetch (Veyl OS's layout: OS = color1, WM = color2,
     PC and after = color3, Fedora logo = colors 4 and 7) follows the
     wallpaper the same way, as on Veyl OS: color1 is matugen's base16 base08
@@ -1254,7 +1254,7 @@ def kitty_colors(t):
         ("active_border_color", g("primary")), ("inactive_border_color", c["overlay0"]),
     ]
     head = [f"# kitty colors written by {MARKER} on every wallpaper change ({t['name']}),",
-            "# laid out like Event Horizon's matugen template. kitty.conf includes this",
+            "# laid out like a matugen kitty template. kitty.conf includes this",
             "# file; remove that line to keep your own colors."]
     return "\n".join(head + [f"{k:<24}{v}" for k, v in rows]) + "\n"
 
@@ -1613,8 +1613,8 @@ def main(argv=None):
         theme = build_theme(preset, accents, tint if tint_on else None)
     flavor = preset[len("catppuccin-"):] if preset.startswith("catppuccin-") else preset
     # The terminal (and so fastfetch) is Material from the wallpaper in both
-    # styles, like Event Horizon: matugen, dark, with the chosen scheme
-    # (Content by default; Fruit salad gives Event Horizon's red OS section).
+    # styles: matugen, dark, with the chosen scheme
+    # (Content by default; Fruit salad gives a red OS section).
     if theme["flavor"] != "material" and kind and matugen_bin():
         try:
             theme["md"] = theme["md_term"] = run_matugen(kind, value, scheme, "dark")

@@ -9,7 +9,7 @@
 // the file back atomically), and call `mmsg dispatch reload_config` to apply.
 //
 // Layout mirrors hypr_pages.zig deliberately:
-//   - Its own page list (Event Horizon's settings order); config_main sizes
+//   - Its own page list (the reference settings order); config_main sizes
 //     the sidebar from `pages.names` at runtime.
 //   - "boxed-list" GtkListBox for the multi-value rule/bind/autostart/env
 //     lists, AdwPreferencesGroup form rows for the scalar settings.
@@ -720,7 +720,7 @@ fn addRulePage(outer: *gtk.GtkBox, rp: *const RulePage) void {
 }
 
 // ---------------------------------------------------------------------
-// Monitors page — Event-Horizon-style editor for MangoWM.
+// Monitors page — capability-aware editor for MangoWM.
 // monitor_rule lines keep their flat `key:value` format; the page adds:
 //   - a visual arrange canvas (click to select, drag to move, snap +
 //     normalize on drop),
@@ -3323,7 +3323,7 @@ fn rebuildAll() void {
 }
 
 pub const pages = struct {
-    // Event Horizon's settings order first, then the pages that edit lists.
+    // The reference settings order first, then the pages that edit lists.
     pub const names = [_][:0]const u8{
         "General",      "Display",    "Decoration",  "Keyboards",        "Mouse & Touchpad",
         "Binds",        "Layouts",    "Animations",  "Misc",             "Render",

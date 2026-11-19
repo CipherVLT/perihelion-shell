@@ -1,7 +1,7 @@
 // Shared monitor helpers for perihelionbar-config (Hyprland + MangoWM).
 //
-// Ported from Event-Horizon-shell-zig's monitors_state.zig /
-// monitors_tab_helpers.zig data layer (mode strings, OutputCaps from
+// Modelled on a reference design's monitor-state /
+// monitor-tab helper data layer (mode strings, OutputCaps from
 // availableModes / wlr-randr, position strings, canvas fit + drag finalize),
 // adapted to perihelionbar-config's GTK pages:
 //

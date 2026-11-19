@@ -1,5 +1,4 @@
-//! perihelionbar-shell — desktop widgets for Wayland, the Event-Horizon-Shell idea
-//! rewritten in Zig.
+//! perihelionbar-shell — desktop widgets for Wayland, written in Zig.
 //!
 //! One full-output layer-shell surface per monitor on the `bottom` layer
 //! (above the wallpaper, behind your windows, rainmeter-style), painted

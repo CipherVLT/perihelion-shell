@@ -47,10 +47,10 @@ In Material You, accent 1 / 2 / 3 are primary / secondary / tertiary.
 
 Palette: https://catppuccin.com/palette (MIT).
 
-## Event Horizon's colour themes, and your own palettes
+## Shipped colour themes, and your own palettes
 
-`palettes/` holds Event Horizon's built-in colour themes (its "Custom Theme"
-catalog: Catppuccin, Gruvbox, Rosé Pine, Dracula, Nord, Tokyo Night,
+`palettes/` holds an imported catalog of colour themes (credited in
+`palettes/NOTICE.md`: Catppuccin, Gruvbox, Rosé Pine, Dracula, Nord, Tokyo Night,
 Solarized, Everforest, Kanagawa, Ayu, Atom, Night Owl, Sonokai, Andromeda
 and the big Google set), one JSON file each, with stable ids from the path:
 `catppuccin/mocha-sky`, `google/tokyo-night`, `google/tokyo-night-light`.
@@ -58,20 +58,20 @@ They come after the 14 built-in choices in Perihelion Settings' Palette row
 (type to search) and work like the built-in palettes: the wallpaper orders
 the three accents and, with Wallpaper tint on, tints the backgrounds.
 
-Re-import after an Event Horizon release (one command; reads the table with
+Re-import after an upstream release (one command; reads the table with
 `git show`, so local patches in the checkout don't leak in):
 
 ```
-theme/import-eh-palettes.py ~/src/Event-Horizon --ref <commit>
+theme/import-eh-palettes.py <upstream-checkout> --ref <commit>
 ```
 
 It writes the files, `SOURCE.json` (commit, counts, flagged palettes) and
-`NOTICE.md` (credits). Hex values are converted exactly as Event Horizon
+`NOTICE.md` (credits). Hex values are converted exactly as upstream
 does (`rgbToHex`). Palettes whose text is hard to read (`low_contrast`,
-WCAG below 4.5:1) or that Event Horizon files under Light on a dark
+WCAG below 4.5:1) or that upstream files under Light on a dark
 background (`light_mismatch`) are flagged; `perihelion-theme
 --list-palettes` leaves the low-contrast ones out (`--all` shows them).
-Licence: GPL-3.0 like Event Horizon, credits in `palettes/NOTICE.md`.
+Licence: GPL-3.0 like the upstream data, credits in `palettes/NOTICE.md`.
 
 **Your own palettes:** put files of the same format in
 `~/.local/share/perihelion/palettes/` (`$XDG_DATA_HOME/perihelion/palettes`).
@@ -94,7 +94,7 @@ Only `background`, `foreground` and `accent` are required:
 }
 ```
 
-| Key in `colors` | Event Horizon role | Used for |
+| Key in `colors` | Upstream role | Used for |
 |---|---|---|
 | background | surface | base: bar, popups (mantle/crust are it mixed toward `shadow`) |
 | foreground | on_surface | text |
@@ -109,7 +109,7 @@ Only `background`, `foreground` and `accent` are required:
 
 Left out, `light` comes from the background; missing roles are mixed from
 background and foreground. `ansi` (16 colors) sets the terminal's red to
-cyan when Material You isn't there to; without it (all of Event Horizon's
+cyan when Material You isn't there to; without it (all of the imported
 themes) Catppuccin's are used, as in the Material You style.
 
 Installed copies of `perihelion-theme` look in `/usr/share/perihelion/palettes`
@@ -119,8 +119,8 @@ checkout finds `theme/palettes/` next to the script.
 
 ## The terminal and fastfetch
 
-Like Event Horizon, the terminal's palette is Material from the wallpaper in
-both styles (matugen, dark, the chosen scheme: Content by default), laid out as Event Horizon's
+The terminal's palette is Material from the wallpaper in
+both styles (matugen, dark, the chosen scheme: Content by default), laid out as a
 matugen kitty template: color1 = base16 base08 darkened 20, color2/3 =
 secondary/tertiary fixed-dim, color4-6 their dark tones. fastfetch keeps
 Veyl OS's layout, which names terminal colors (OS 31, WM 32, PC and after 33,
