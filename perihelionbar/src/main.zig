@@ -551,25 +551,10 @@ fn ensureTailIcons() void {
                 continue;
             }
         }
-        var short = id;
-        if (std.mem.lastIndexOfScalar(u8, id, '.')) |dot| short = id[dot + 1 ..];
-        const cand = desktopIndexLookupDeep(id) orelse short;
-        if (decodeIconIntoPixels(cand, &s.pixels)) {
-            s.has_icon = true;
-            continue;
-        }
-        // Last resorts, in order: the full appid as a literal icon name,
-        // then each DNS component (a theme may ship "spotify" while the
-        // running id is the full "com.spotify.client").
-        if (!std.mem.eql(u8, cand, id) and decodeIconIntoPixels(id, &s.pixels)) {
-            s.has_icon = true;
-            continue;
-        }
-        var parts = std.mem.splitScalar(u8, id, '.');
-        while (parts.next()) |part| {
-            if (part.len <= 2 or std.mem.eql(u8, part, short)) continue;
-            if (std.mem.eql(u8, part, "com") or std.mem.eql(u8, part, "org") or std.mem.eql(u8, part, "net") or std.mem.eql(u8, part, "app")) continue;
-            if (decodeIconIntoPixels(part, &s.pixels)) {
+        // The icon names to try, in order (src/apps.zig, shared with Glance).
+        const names = appsvc.runningIconNames(id);
+        for (names.slice()) |name| {
+            if (decodeIconIntoPixels(name, &s.pixels)) {
                 s.has_icon = true;
                 break;
             }

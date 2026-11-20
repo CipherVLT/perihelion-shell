@@ -484,3 +484,60 @@ pub fn pinIconName(command: []const u8, probe: Probe, out: []u8) ?[]const u8 {
     @memcpy(out[0..l], icon[0..l]);
     return out[0..l];
 }
+
+/// Icon names to try for a running window's appid (lowercased), first hit
+/// wins: the desktop index's answer (else the last dotted part), then the
+/// full appid as a literal icon name, then each DNS component (a theme may
+/// ship "spotify" while the running id is the full "com.spotify.client").
+/// The bar tries Steam's library cache before these; Glance does the same.
+pub const IconNames = struct {
+    names: [16][]const u8 = undefined,
+    len: usize = 0,
+
+    pub fn slice(self: *const IconNames) []const []const u8 {
+        return self.names[0..self.len];
+    }
+
+    fn add(self: *IconNames, n: []const u8) void {
+        if (self.len == self.names.len) return;
+        self.names[self.len] = n;
+        self.len += 1;
+    }
+};
+
+pub fn runningIconNames(id: []const u8) IconNames {
+    var out = IconNames{};
+    var short = id;
+    if (std.mem.lastIndexOfScalar(u8, id, '.')) |dot| short = id[dot + 1 ..];
+    const cand = desktopIndexLookupDeep(id) orelse short;
+    out.add(cand);
+    if (!std.mem.eql(u8, cand, id)) out.add(id);
+    var parts = std.mem.splitScalar(u8, id, '.');
+    while (parts.next()) |part| {
+        if (part.len <= 2 or std.mem.eql(u8, part, short)) continue;
+        if (std.mem.eql(u8, part, "com") or std.mem.eql(u8, part, "org") or std.mem.eql(u8, part, "net") or std.mem.eql(u8, part, "app")) continue;
+        out.add(part);
+    }
+    return out;
+}
+
+test "runningIconNames: index answer, full id, then DNS parts" {
+    const t = std.testing;
+    const saved = desktop_idx_len;
+    defer desktop_idx_len = saved;
+    desktop_idx_len = 0;
+    desktopIndexAdd("spotify", "spotify-client");
+    const a = runningIconNames("com.spotify.client");
+    try t.expectEqual(@as(usize, 3), a.len);
+    try t.expectEqualStrings("spotify-client", a.names[0]);
+    try t.expectEqualStrings("com.spotify.client", a.names[1]);
+    try t.expectEqualStrings("spotify", a.names[2]);
+    const b = runningIconNames("foot");
+    try t.expectEqual(@as(usize, 1), b.len); // short == id: tried once
+    try t.expectEqualStrings("foot", b.names[0]);
+    const c = runningIconNames("org.gnome.texteditor");
+    try t.expectEqualStrings("texteditor", c.names[0]);
+    try t.expectEqualStrings("org.gnome.texteditor", c.names[1]);
+    try t.expectEqualStrings("gnome", c.names[2]);
+    try t.expectEqual(@as(usize, 3), c.len);
+}
