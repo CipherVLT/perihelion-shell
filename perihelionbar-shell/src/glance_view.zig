@@ -17,6 +17,9 @@
 //!   - The cards are separate instances from the desktop's, ticked only
 //!     while Glance is open; weather comes from the cache file the bar and
 //!     the desktop card share, so opening Glance doesn't refetch it.
+//!   - The Weather tab reads that same weather card instance and pumps its
+//!     schedule only while the tab is shown, waking at the service's next
+//!     due time rather than on a timer.
 
 const std = @import("std");
 const posix = std.posix;
@@ -29,6 +32,7 @@ const widgets = @import("widgets");
 const glass = @import("glass.zig");
 const g = @import("glance.zig");
 const media_view = @import("glance_media_view.zig");
+const weather_view = @import("glance_weather_view.zig");
 
 const BTN_LEFT: u32 = 0x110;
 const SETTINGS_CMD: [:0]const u8 = "exec perihelion-settings";
@@ -53,6 +57,10 @@ pub const Cards = [g.CARD_COUNT]widgets.Widget;
 /// place and units, calendar holidays and reminders, temperature sensors),
 /// the same way it configures the desktop's.
 pub const SetupFn = *const fn (cards: *Cards) void;
+
+/// Shortest gap between two pumps of the weather schedule on the Weather
+/// tab, so a due time the service doesn't move can never spin the loop.
+const WEATHER_PUMP_MIN_MS: i64 = 250;
 
 /// What the weather card showed last, so a fetch schedule tick that changed
 /// nothing doesn't repaint the panel.
@@ -89,6 +97,9 @@ pub const Glance = struct {
     media: ?*media_view.MediaTab = null,
     next_tick: [g.CARD_COUNT]i64 = @as([g.CARD_COUNT]i64, @splat(0)),
     weather_seen: WeatherSeen = .{},
+    /// The Weather tab's pointer state and last layout (no data of its own).
+    wx: weather_view.WeatherTab = .{},
+    wx_pumped_ms: i64 = 0,
     panel_px: ?[]u32 = null,
     /// The panel's glass alone (the frosted wallpaper is per-pixel float
     /// work): rendered on open, resize and palette change, then copied
@@ -163,6 +174,8 @@ pub const Glance = struct {
         self.panel_dirty = true;
         // Back on the Overview: the cards were resting, so refresh them now.
         if (t == .overview) self.next_tick = @as([g.CARD_COUNT]i64, @splat(0));
+        self.wx = .{};
+        self.wx_pumped_ms = 0;
         self.syncMedia();
     }
 
@@ -211,6 +224,8 @@ pub const Glance = struct {
         self.cards = cards;
         self.next_tick = @as([g.CARD_COUNT]i64, @splat(0)); // all due on the first tick
         self.weather_seen = .{};
+        self.wx = .{};
+        self.wx_pumped_ms = 0;
 
         const surface = self.compositor.createSurface() catch |err| {
             logging.err("glance: createSurface failed: {}", .{err});
@@ -341,7 +356,10 @@ pub const Glance = struct {
                 return d;
             },
             .media => return if (self.media) |m| m.deadline(nowMs()) else null,
-            .weather => return null,
+            .weather => {
+                const w = self.weatherCard() orelse return null;
+                return self.weatherDue(w);
+            },
         }
     }
 
@@ -369,7 +387,14 @@ pub const Glance = struct {
     pub fn onPipes(self: *Glance) void {
         if (self.cards) |cards| {
             for (cards) |*c| {
-                if (c.onPipe() and self.tab == .overview) self.panel_dirty = true;
+                if (!c.onPipe()) continue;
+                if (c.* == .weather) {
+                    // Note what's shown now, so the next pump doesn't
+                    // count the same answer as a second change.
+                    _ = self.weatherChanged(&c.weather);
+                    if (self.tab == .weather) self.panel_dirty = true;
+                }
+                if (self.tab == .overview) self.panel_dirty = true;
             }
         }
         if (self.media) |m| {
@@ -389,6 +414,16 @@ pub const Glance = struct {
         }
         if (self.media) |m| {
             if (self.anim.takesInput() and m.tick(now)) self.panel_dirty = true;
+        }
+        // The Weather tab drives the Overview's weather card schedule (its
+        // cache and refresh period) while it's the page shown.
+        if (self.anim.takesInput() and self.tab == .weather) {
+            if (self.weatherCard()) |w| {
+                if (now >= self.weatherDue(w)) {
+                    self.wx_pumped_ms = now;
+                    if (self.pumpWeather(w, now)) self.panel_dirty = true;
+                }
+            }
         }
         if (self.cards) |cards| {
             // The cards tick only while the Overview is the page shown.
@@ -411,8 +446,25 @@ pub const Glance = struct {
         if (self.frame_dirty) self.paintFrame();
     }
 
+    fn weatherCard(self: *const Glance) ?*widgets.WeatherWidget {
+        const cards = self.cards orelse return null;
+        return &cards[@backingInt(g.Card.weather)].weather;
+    }
+
+    /// When the Weather tab must pump next: never while a request runs (its
+    /// pipe wakes the loop), else the service's own due time.
+    fn weatherDue(self: *const Glance, w: *const widgets.WeatherWidget) i64 {
+        if (w.fetch.busy()) return std.math.maxInt(i64);
+        return @max(w.svc.next_due_ms, self.wx_pumped_ms + WEATHER_PUMP_MIN_MS);
+    }
+
     fn pumpWeather(self: *Glance, w: *widgets.WeatherWidget, now: i64) bool {
         w.pump(now);
+        return self.weatherChanged(w);
+    }
+
+    /// True when the card's reading or status differs from the last look.
+    fn weatherChanged(self: *Glance, w: *const widgets.WeatherWidget) bool {
         const seen = WeatherSeen{
             .fetched_s = w.svc.data_fetched_s,
             .available = w.svc.data.available,
@@ -436,6 +488,9 @@ pub const Glance = struct {
             if (m.motion(x - self.layout.panel.x, y - self.layout.panel.y)) self.panel_dirty = true;
             if (m.drag.active()) return;
         }
+        if (self.tab == .weather) {
+            if (self.wx.motion(x - self.layout.panel.x, y - self.layout.panel.y)) self.panel_dirty = true;
+        }
         const h = g.hitTest(&self.layout, self.tab, x, y);
         if (h.eql(self.hover)) return;
         // Only the tab row reacts to hover; cards keep their desktop look.
@@ -446,6 +501,7 @@ pub const Glance = struct {
     pub fn leave(self: *Glance) void {
         if (isChrome(self.hover)) self.panel_dirty = true;
         self.hover = .backdrop;
+        if (self.wx.leave()) self.panel_dirty = true;
         if (self.media) |m| {
             // The pointer is gone without a release (output unplugged, the
             // surface closing): drop the drag rather than guess a value.
@@ -485,6 +541,7 @@ pub const Glance = struct {
                 if (self.media) |m| {
                     if (m.press(lx, ly)) self.panel_dirty = true;
                 }
+                if (self.tab == .weather) self.wx.press(lx, ly);
             }
             return;
         }
@@ -493,8 +550,11 @@ pub const Glance = struct {
         if (!pr.eql(h)) return;
         switch (h) {
             .backdrop => _ = self.apply(self.anim.close(nowMs())),
-            .panel => if (self.media) |m| {
-                if (m.release(lx, ly)) self.panel_dirty = true;
+            .panel => {
+                if (self.media) |m| {
+                    if (m.release(lx, ly)) self.panel_dirty = true;
+                }
+                if (self.tab == .weather) self.weatherAction(self.wx.release(lx, ly));
             },
             .tab => |t| self.setTab(t),
             .settings => {
@@ -502,6 +562,25 @@ pub const Glance = struct {
                 _ = self.apply(self.anim.close(nowMs()));
             },
             .card => |c| self.clickCard(c),
+        }
+    }
+
+    fn weatherAction(self: *Glance, a: weather_view.Action) void {
+        const w = self.weatherCard() orelse return;
+        switch (a) {
+            .none => {},
+            .refresh => {
+                // Now, subject to the service's 30 s floor between requests.
+                const now = nowMs();
+                w.svc.forceRefresh(now);
+                self.wx_pumped_ms = now;
+                _ = self.pumpWeather(w, now);
+                self.panel_dirty = true;
+            },
+            .forecast => {
+                w.openForecast();
+                _ = self.apply(self.anim.close(nowMs()));
+            },
         }
     }
 
@@ -600,7 +679,7 @@ pub const Glance = struct {
         switch (self.tab) {
             .overview => self.renderCards(c),
             .media => if (self.media) |m| m.render(c, self.layout.content, self.font),
-            .weather => self.renderPlaceholder(c, "Weather", "Details, the 7-day outlook and an hourly strip arrive in a later update."),
+            .weather => if (self.weatherCard()) |w| self.wx.render(c, self.layout.content, self.font, w),
         }
         self.panel_dirty = false;
     }
@@ -615,18 +694,6 @@ pub const Glance = struct {
             fillRounded(c, r, radius, 0x0FFFFFFF, 0x1CFFFFFF);
             card.paint(c, toRect(r));
         }
-    }
-
-    fn renderPlaceholder(self: *Glance, c: widgets.Canvas, title: []const u8, line: []const u8) void {
-        const r = self.layout.content;
-        const lh: i64 = widgets.lineH(self.font);
-        const cy: i64 = r.y + @divTrunc(r.h, 2);
-        const heading = "Coming soon";
-        // Three centred lines: the page name in the accent, the heading,
-        // and a dimmer sentence under it.
-        _ = c.drawTextA(r.x + @divTrunc(r.w - self.textWidth(title), 2), cy - lh, title, self.theme.border_color);
-        _ = c.drawTextA(r.x + @divTrunc(r.w - self.textWidth(heading), 2), cy + 8, heading, self.theme.text_color);
-        _ = c.drawTextA(r.x + @divTrunc(r.w - self.textWidth(line), 2), cy + lh + 22, line, widgets.dim(self.theme.text_color, 0x99));
     }
 
     /// One full-output frame: the dim, then the panel at the animation's
