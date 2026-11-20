@@ -163,6 +163,9 @@ jobs:
       - name: Unit-test Glance's Weather tab (layout, hit-testing, empty states, units)
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build test-glance-weather
+      - name: Unit-test Glance's Apps tab (pins, Mango clients, merge, argv, layout)
+        working-directory: perihelionbar-shell
+        run: /opt/zig/zig build test-glance-apps
       - name: Check the app drawer's QML parses
         run: |
           dnf5 install -y --setopt=install_weak_deps=False qt6-qtdeclarative-devel

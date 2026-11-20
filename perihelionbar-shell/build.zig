@@ -180,6 +180,15 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
 
+    // The dock's pin/window logic and icon index, from the bar's sources like
+    // volume.zig: Glance's Apps tab matches pins to windows exactly as the
+    // dock does.
+    const apps_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/apps.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
@@ -199,6 +208,7 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("overview", overview_mod);
     exe_mod.addImport("art", art_mod); // Glance's large cover (glance_media_view.zig)
     exe_mod.addImport("volume", volume_mod); // Glance's Media tab (glance_media.zig)
+    exe_mod.addImport("apps", apps_mod); // Glance's Apps tab (glance_apps.zig)
     // No EGL/GL stack: everything renders CPU-side into wl_shm ARGB buffers,
     // exactly like the bar.
     exe_mod.linkSystemLibrary("wayland-client", .{});
@@ -281,6 +291,20 @@ pub fn build(b: *Build) !void {
     const glance_weather_test_run = b.addRunArtifact(glance_weather_tests);
     glance_weather_test_step.dependOn(&glance_weather_test_run.step);
 
+    // `zig build test-glance-apps`: src/glance_apps.zig's unit tests — the
+    // Apps tab's pin list, Mango client parsing, the pinned/running merge
+    // (the dock's matcher), argv splitting, layout and hit-testing.
+    const glance_apps_mod = b.createModule(.{
+        .root_source_file = b.path("src/glance_apps.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    glance_apps_mod.addImport("apps", apps_mod);
+    const glance_apps_tests = b.addTest(.{ .root_module = glance_apps_mod, .use_llvm = true, .use_lld = true });
+    const glance_apps_test_step = b.step("test-glance-apps", "Run src/glance_apps.zig unit tests");
+    const glance_apps_test_run = b.addRunArtifact(glance_apps_tests);
+    glance_apps_test_step.dependOn(&glance_apps_test_run.step);
+
     // `zig build test`: every unit test in this package, so both packages
     // answer the same command.
     const test_step = b.step("test", "Run all perihelionbar-shell unit tests");
@@ -288,4 +312,5 @@ pub fn build(b: *Build) !void {
     test_step.dependOn(&glance_test_run.step);
     test_step.dependOn(&glance_media_test_run.step);
     test_step.dependOn(&glance_weather_test_run.step);
+    test_step.dependOn(&glance_apps_test_run.step);
 }
