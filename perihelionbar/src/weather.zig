@@ -4,9 +4,9 @@
 //! Shared by both binaries: the desktop card (perihelionbar-shell widgets.zig
 //! WeatherWidget), Glance's Weather tab (which also reads the hourly series,
 //! sea-level pressure and wind direction) and the top-bar indicator
-//! (perihelionbar main.zig BarWeather). No rendering, no font, no fds of its own: each host owns its
-//! curl child and its drawing; this file decides *what* to fetch and *when*,
-//! and turns the answer into a `Weather` snapshot.
+//! (perihelionbar main.zig BarWeather). No rendering, no font, no fds of its
+//! own: each host owns its curl child and its drawing; this file decides
+//! *what* to fetch and *when*, and turns the answer into a `Weather` snapshot.
 //!
 //! The two processes stay in step through the same shell.json keys
 //! (ShellJsonKeys) and a small cache file (defaultCachePath): whoever
