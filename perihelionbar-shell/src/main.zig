@@ -581,7 +581,7 @@ fn loadConfig(gpa: std.mem.Allocator) ShellConfig {
     if (parsed.glance_enabled) |v| cfg.glance_enabled = v;
     if (parsed.glance_start_tab) |v| {
         cfg.glance_start_tab = glance.Tab.parse(v) orelse blk: {
-            logging.warn("config: glance_start_tab \"{s}\" unknown (overview|media|weather) — using overview", .{v});
+            logging.warn("config: glance_start_tab \"{s}\" unknown (overview|media|weather|apps) — using overview", .{v});
             break :blk .overview;
         };
     }
@@ -2412,9 +2412,9 @@ fn ipcAccept(listen_fd: posix.fd_t, host: *Host) void {
 
 fn ipcHandle(host: *Host, data: []const u8) []const u8 {
     const trimmed = std.mem.trim(u8, data, " \t\r\n");
-    // `glance [toggle|open|close] [overview|media|weather]` (Super+I).
+    // `glance [toggle|open|close] [overview|media|weather|apps]` (Super+I).
     if (glance.parseLine(trimmed)) |parsed| {
-        const cmd = parsed catch return "err usage: glance [toggle|open|close] [overview|media|weather]\n";
+        const cmd = parsed catch return "err usage: glance [toggle|open|close] [overview|media|weather|apps]\n";
         const gl = host.glance orelse return "err glance is off (shell.json glance_enabled)\n";
         return if (gl.command(cmd)) "ok\n" else "err glance could not open\n";
     }
@@ -2440,7 +2440,7 @@ fn cliPrint(fd: c_int, msg: []const u8) void {
 
 const CLI_USAGE =
     "usage: perihelion-shell [overview [toggle|open|close]]\n" ++
-    "       perihelion-shell glance [toggle|open|close] [overview|media|weather]\n";
+    "       perihelion-shell glance [toggle|open|close] [overview|media|weather|apps]\n";
 
 fn cliOverview(action: []const u8) noreturn {
     if (!std.mem.eql(u8, action, "toggle") and

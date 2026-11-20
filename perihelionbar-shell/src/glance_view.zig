@@ -20,6 +20,9 @@
 //!   - The Weather tab reads that same weather card instance and pumps its
 //!     schedule only while the tab is shown, waking at the service's next
 //!     due time rather than on a timer.
+//!   - The Apps tab exists only while shown (like Media): the dock's pins
+//!     and icons are read on the way in, Mango's window list follows its
+//!     events plus a 2 s re-read, and everything is freed on the way out.
 
 const std = @import("std");
 const posix = std.posix;
@@ -33,6 +36,7 @@ const glass = @import("glass.zig");
 const g = @import("glance.zig");
 const media_view = @import("glance_media_view.zig");
 const weather_view = @import("glance_weather_view.zig");
+const apps_view = @import("glance_apps_view.zig");
 
 const BTN_LEFT: u32 = 0x110;
 const SETTINGS_CMD: [:0]const u8 = "exec perihelion-settings";
@@ -95,6 +99,8 @@ pub const Glance = struct {
     cards: ?*Cards = null,
     /// The Media tab's live state: only while that tab is the one shown.
     media: ?*media_view.MediaTab = null,
+    /// The Apps tab's live state: only while that tab is the one shown.
+    apps: ?*apps_view.AppsTab = null,
     next_tick: [g.CARD_COUNT]i64 = @as([g.CARD_COUNT]i64, @splat(0)),
     weather_seen: WeatherSeen = .{},
     /// The Weather tab's pointer state and last layout (no data of its own).
@@ -177,6 +183,29 @@ pub const Glance = struct {
         self.wx = .{};
         self.wx_pumped_ms = 0;
         self.syncMedia();
+        self.syncApps();
+    }
+
+    /// The Apps tab's state exists only while it is the visible page of an
+    /// open Glance: read on the way in, freed (icons, icon index, Mango's
+    /// event connection) on the way out.
+    fn syncApps(self: *Glance) void {
+        const want = self.tab == .apps and self.surface != null;
+        if (want and self.apps == null) {
+            const a = self.gpa.create(apps_view.AppsTab) catch |err| {
+                logging.err("glance: no memory for the Apps tab: {}", .{err});
+                return;
+            };
+            a.* = .{ .gpa = self.gpa };
+            a.open();
+            self.apps = a;
+        } else if (!want) {
+            if (self.apps) |a| {
+                a.deinit();
+                self.gpa.destroy(a);
+            }
+            self.apps = null;
+        }
     }
 
     /// The Media tab's state exists only while it is the visible page of an
@@ -249,6 +278,7 @@ pub const Glance = struct {
         ls.setListener(*Glance, layerListener, self);
         surface.commit();
         self.syncMedia();
+        self.syncApps();
         logging.step("glance: opening on {s}", .{@tagName(self.tab)});
         return true;
     }
@@ -260,6 +290,7 @@ pub const Glance = struct {
         if (self.surface) |s| s.destroy();
         self.surface = null;
         self.syncMedia(); // no surface: frees the Media tab
+        self.syncApps(); // and the Apps tab
         if (self.cards) |cards| {
             for (cards) |*c| c.release();
             self.gpa.destroy(cards);
@@ -360,12 +391,13 @@ pub const Glance = struct {
                 const w = self.weatherCard() orelse return null;
                 return self.weatherDue(w);
             },
+            .apps => return if (self.apps) |a| a.deadline() else null,
         }
     }
 
     /// The cards' fetch pipes for the host's poll set (none while closed).
     /// Up to this many fds from pollFds: the cards' and the Media tab's.
-    pub const MAX_FDS = g.CARD_COUNT + 2;
+    pub const MAX_FDS = g.CARD_COUNT + 3;
 
     pub fn pollFds(self: *const Glance, out: []posix.fd_t) usize {
         var n: usize = 0;
@@ -380,6 +412,7 @@ pub const Glance = struct {
             }
         }
         if (self.media) |m| n += m.pollFds(out[n..]);
+        if (self.apps) |a| n += a.pollFds(out[n..]);
         return n;
     }
 
@@ -400,6 +433,9 @@ pub const Glance = struct {
         if (self.media) |m| {
             if (m.onPipes()) self.panel_dirty = true;
         }
+        if (self.apps) |a| {
+            if (a.onPipes()) self.panel_dirty = true;
+        }
     }
 
     /// Every loop pass: animation, due card cadences, then at most one frame.
@@ -414,6 +450,9 @@ pub const Glance = struct {
         }
         if (self.media) |m| {
             if (self.anim.takesInput() and m.tick(now)) self.panel_dirty = true;
+        }
+        if (self.apps) |a| {
+            if (self.anim.takesInput() and a.tick(now)) self.panel_dirty = true;
         }
         // The Weather tab drives the Overview's weather card schedule (its
         // cache and refresh period) while it's the page shown.
@@ -491,6 +530,9 @@ pub const Glance = struct {
         if (self.tab == .weather) {
             if (self.wx.motion(x - self.layout.panel.x, y - self.layout.panel.y)) self.panel_dirty = true;
         }
+        if (self.apps) |a| {
+            if (a.motion(x - self.layout.panel.x, y - self.layout.panel.y)) self.panel_dirty = true;
+        }
         const h = g.hitTest(&self.layout, self.tab, x, y);
         if (h.eql(self.hover)) return;
         // Only the tab row reacts to hover; cards keep their desktop look.
@@ -502,6 +544,9 @@ pub const Glance = struct {
         if (isChrome(self.hover)) self.panel_dirty = true;
         self.hover = .backdrop;
         if (self.wx.leave()) self.panel_dirty = true;
+        if (self.apps) |a| {
+            if (a.leave()) self.panel_dirty = true;
+        }
         if (self.media) |m| {
             // The pointer is gone without a release (output unplugged, the
             // surface closing): drop the drag rather than guess a value.
@@ -542,6 +587,7 @@ pub const Glance = struct {
                     if (m.press(lx, ly)) self.panel_dirty = true;
                 }
                 if (self.tab == .weather) self.wx.press(lx, ly);
+                if (self.apps) |a| a.press(lx, ly);
             }
             return;
         }
@@ -555,6 +601,10 @@ pub const Glance = struct {
                     if (m.release(lx, ly)) self.panel_dirty = true;
                 }
                 if (self.tab == .weather) self.weatherAction(self.wx.release(lx, ly));
+                if (self.apps) |a| {
+                    // Launched or raised something: close to show it.
+                    if (a.release(lx, ly)) _ = self.apply(self.anim.close(nowMs()));
+                }
             },
             .tab => |t| self.setTab(t),
             .settings => {
@@ -680,6 +730,7 @@ pub const Glance = struct {
             .overview => self.renderCards(c),
             .media => if (self.media) |m| m.render(c, self.layout.content, self.font),
             .weather => if (self.weatherCard()) |w| self.wx.render(c, self.layout.content, self.font, w),
+            .apps => if (self.apps) |a| a.render(c, self.layout.content, self.font),
         }
         self.panel_dirty = false;
     }

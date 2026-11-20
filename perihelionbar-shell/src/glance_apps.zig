@@ -419,14 +419,14 @@ fn rowsFor(n: usize, cols: usize) usize {
     return (n + cols - 1) / cols;
 }
 
-/// Places `n` cells row by row in `r` below its heading; when they don't
+/// Places `n` cells row by row in `r` below its heading, from the left; when they don't
 /// all fit, the last shown cell becomes "+N".
 fn placeCells(out: []Rect, r: Rect, n: usize, cols: usize, rows: usize, lh: i32) struct { shown: usize, more: usize } {
     const cap = cols * rows;
     const shown = @min(n, cap);
     const ch = cellH(lh);
-    const grid_w: i32 = @as(i32, @intCast(cols)) * CELL_W + (@as(i32, @intCast(cols)) - 1) * CELL_GAP;
-    const x0 = r.x + PAD + @divTrunc(@max(r.w - 2 * PAD - grid_w, 0), 2);
+    // Left-aligned under the section's heading.
+    const x0 = r.x + PAD;
     const y0 = r.y + PAD + lh + TITLE_GAP;
     for (0..shown) |i| {
         const col: i32 = @intCast(i % cols);

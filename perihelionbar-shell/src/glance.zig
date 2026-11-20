@@ -14,6 +14,7 @@ pub const Tab = enum {
     overview,
     media,
     weather,
+    apps,
 
     pub fn parse(s: []const u8) ?Tab {
         for (std.meta.tags(Tab)) |t| {
@@ -27,6 +28,7 @@ pub const Tab = enum {
             .overview => "Overview",
             .media => "Media",
             .weather => "Weather",
+            .apps => "Apps",
         };
     }
 };
@@ -43,7 +45,7 @@ pub const Verb = enum {
     }
 };
 
-/// `perihelion-shell glance [toggle|open|close] [overview|media|weather]`.
+/// `perihelion-shell glance [toggle|open|close] [overview|media|weather|apps]`.
 /// The tab picks the page an open shows; without one Glance opens on
 /// shell.json's glance_start_tab.
 pub const Command = struct {
@@ -419,7 +421,8 @@ test "parseArgs: verbs, tabs, defaults and errors" {
     try tt.expectEqual(Command{ .verb = .close }, try parseArgs(&.{"close"}));
     try tt.expectError(error.UnknownVerb, parseArgs(&.{"show"}));
     try tt.expectError(error.UnknownVerb, parseArgs(&.{"Open"})); // verbs are exact
-    try tt.expectError(error.UnknownTab, parseArgs(&.{ "open", "apps" }));
+    try tt.expectEqual(Command{ .verb = .open, .tab = .apps }, try parseArgs(&.{ "open", "apps" }));
+    try tt.expectError(error.UnknownTab, parseArgs(&.{ "open", "dock" }));
     try tt.expectError(error.TooManyArgs, parseArgs(&.{ "close", "media" }));
     try tt.expectError(error.TooManyArgs, parseArgs(&.{ "open", "media", "now" }));
 }
@@ -444,6 +447,8 @@ test "Tab.parse and labels" {
     try tt.expectEqual(Tab.media, Tab.parse("MEDIA").?);
     try tt.expect(Tab.parse("") == null);
     try tt.expectEqualStrings("Weather", Tab.weather.label());
+    try tt.expectEqualStrings("Apps", Tab.apps.label());
+    try tt.expectEqual(Tab.apps, Tab.parse("apps").?);
 }
 
 /// Base sizes close to the 13 px font's real cards.
@@ -455,7 +460,7 @@ const SIZES = [CARD_COUNT]Size{
     .{ .w = 340, .h = 158 }, // media
     .{ .w = 340, .h = 138 }, // system
 };
-const TAB_W = [TAB_COUNT]i32{ 64, 40, 56 };
+const TAB_W = [TAB_COUNT]i32{ 64, 40, 56, 32 };
 
 fn inside(outer: Rect, inner: Rect) bool {
     return inner.x >= outer.x and inner.y >= outer.y and
