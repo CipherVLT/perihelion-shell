@@ -1641,11 +1641,11 @@ pub const WeatherWidget = struct {
     pub fn openForecast(self: *const WeatherWidget) void {
         var ub: [160]u8 = undefined;
         const url = self.svc.forecastUrl(&ub) orelse return; // place not known yet
-        var cb: [200]u8 = undefined;
-        // The URL is digits, letters and URL punctuation only (no
-        // quote), so single quotes keep it one argument.
-        const cmd = std.fmt.bufPrintSentinel(&cb, "exec xdg-open '{s}'", .{url}, 0) catch return;
-        spawnDetached(cmd);
+        var zb: [161]u8 = undefined;
+        const url_z = std.fmt.bufPrintSentinel(&zb, "{s}", .{url}, 0) catch return;
+        // argv, no shell: the URL is one argument to xdg-open.
+        var argv = [_:null]?[*:0]const u8{ "env", "xdg-open", url_z.ptr, null };
+        spawnDetachedArgv("/usr/bin/env", &argv);
     }
 
     pub fn paint(self: *const WeatherWidget, c: Canvas, r: Rect) void {
