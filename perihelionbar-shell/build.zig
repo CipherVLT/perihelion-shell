@@ -209,6 +209,16 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("art", art_mod); // Glance's large cover (glance_media_view.zig)
     exe_mod.addImport("volume", volume_mod); // Glance's Media tab (glance_media.zig)
     exe_mod.addImport("apps", apps_mod); // Glance's Apps tab (glance_apps.zig)
+    // Glance's Apps tab draws the dock's icons: the theme lookup and the
+    // .desktop scan that fills the icon index, both from the bar's sources.
+    exe_mod.addImport("icontheme", icontheme_mod);
+    const desktop_entries_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/desktop_entries.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("desktop_entries", desktop_entries_mod);
     // No EGL/GL stack: everything renders CPU-side into wl_shm ARGB buffers,
     // exactly like the bar.
     exe_mod.linkSystemLibrary("wayland-client", .{});
