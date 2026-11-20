@@ -887,6 +887,31 @@ fn drawBigIcon(c: Canvas, x0: i64, y0: i64, big: *const font_mod.BigGlyph, color
     return big.advance_x;
 }
 
+/// A weather glyph as large as fits a `box_w` x `box_h` box (from
+/// `max_scale` down to 2x, then 1x text), centred in it, with the card's
+/// warm halo behind a clear-day sun when `glow` is set. The Weather card's
+/// own icon painter, for Glance's Weather tab. Returns the drawn width.
+pub fn drawIconFit(c: Canvas, clip: Rect, cp: u32, x: i64, top: i64, box_w: i64, box_h: i64, max_scale: u32, color: u32, glow: bool) i64 {
+    var si: u32 = max_scale;
+    while (si >= 2) : (si -= 1) {
+        const big = c.font.glyphScaled(cp, si) catch continue;
+        defer c.font.gpa.free(big.pixels);
+        const bw: i64 = big.width;
+        const bh: i64 = big.height;
+        if (bw > box_w or bh > box_h) continue;
+        const ix = x + @divTrunc(box_w - bw, 2) - big.bitmap_left;
+        const iy = top + @divTrunc(box_h - bh, 2);
+        if (glow) drawSunGlow(c, clip, x + @divTrunc(box_w, 2), iy + @divTrunc(bh, 2), @divTrunc(@max(bw, bh), 2) + c.zx(10));
+        _ = drawBigIcon(c, ix, iy, &big, color);
+        return bw;
+    }
+    var ib: [4]u8 = undefined;
+    const il = utf8Encode(cp, &ib);
+    const tw = c.textWidth(ib[0..il]);
+    _ = c.drawTextA(x + @divTrunc(box_w - tw, 2), top + @divTrunc(box_h + c.font.ascentPx() - c.font.descentPx(), 2), ib[0..il], color);
+    return tw;
+}
+
 /// Condition effect kinds for the weather card animation — mirrors the
 /// bar's WeatherFx table (the shell can't import the bar's main.zig).
 const WeatherFx = enum { none, rain, snow, storm, clear, cloud, fog, wind };
@@ -1606,16 +1631,21 @@ pub const WeatherWidget = struct {
                 self.svc.units = self.svc.units.toggled();
                 self.units_changed = true;
             },
-            .forecast => {
-                var ub: [160]u8 = undefined;
-                const url = self.svc.forecastUrl(&ub) orelse return; // place not known yet
-                var cb: [200]u8 = undefined;
-                // The URL is digits, letters and URL punctuation only (no
-                // quote), so single quotes keep it one argument.
-                const cmd = std.fmt.bufPrintSentinel(&cb, "exec xdg-open '{s}'", .{url}, 0) catch return;
-                spawnDetached(cmd);
-            },
+            .forecast => self.openForecast(),
         }
+    }
+
+    /// The full forecast for the place in the browser (weather.gov in the
+    /// US, Windy elsewhere); nothing until the place is known. Glance's
+    /// Weather tab opens it too.
+    pub fn openForecast(self: *const WeatherWidget) void {
+        var ub: [160]u8 = undefined;
+        const url = self.svc.forecastUrl(&ub) orelse return; // place not known yet
+        var cb: [200]u8 = undefined;
+        // The URL is digits, letters and URL punctuation only (no
+        // quote), so single quotes keep it one argument.
+        const cmd = std.fmt.bufPrintSentinel(&cb, "exec xdg-open '{s}'", .{url}, 0) catch return;
+        spawnDetached(cmd);
     }
 
     pub fn paint(self: *const WeatherWidget, c: Canvas, r: Rect) void {

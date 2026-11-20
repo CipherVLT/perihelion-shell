@@ -131,8 +131,8 @@ fn columns(out: []Rect, n: usize, x: i32, w: i32, y: i32, h: i32) void {
 }
 
 /// Lays the tab out in the content rect `c`:
-///   top     hero (current conditions, refresh and full-forecast buttons)
-///           beside a 3 x 2 grid of detail tiles
+///   top     hero (current conditions; full-forecast and refresh buttons
+///           in its bottom-right corner) beside a 3 x 2 grid of detail tiles
 ///   middle  the hourly strip, as many consecutive hours as fit (up to 24)
 ///   bottom  the 7-day row
 /// Headings and 2x strip icons are dropped, in that order, when the content
@@ -162,7 +162,7 @@ pub fn layout(c: Rect, lh: i32, hours_avail: usize, days_avail: usize) Layout {
             l.details[r * DETAIL_COLS + k] = .{ .x = gx + cr.x + @as(i32, @intCast(k)) * DETAIL_GAP, .y = cr.y, .w = cr.w, .h = cr.h };
         }
     }
-    l.refresh = .{ .x = l.hero.x + l.hero.w - TILE_PAD - BTN, .y = l.hero.y + TILE_PAD, .w = BTN, .h = BTN };
+    l.refresh = .{ .x = l.hero.x + l.hero.w - TILE_PAD - BTN, .y = l.hero.y + l.hero.h - TILE_PAD - BTN, .w = BTN, .h = BTN };
     l.forecast = .{ .x = l.refresh.x - BTN_GAP - BTN, .y = l.refresh.y, .w = BTN, .h = BTN };
 
     // The two strips share what's left below the band, evenly.
@@ -279,9 +279,11 @@ pub fn emptyRetryRect(c: Rect, text_bottom: i32, w: i32) Rect {
 
 // --- text ----------------------------------------------------------------------
 
-/// "Now" for the first cell, then "17:00" or "5 PM".
-pub fn hourLabel(hour: u8, index: usize, h24: bool, buf: []u8) []const u8 {
+/// "Now" for the first cell, then "17:00" or "5 PM"; midnight says which
+/// day starts (`next_day`, e.g. "Fri") when that's known.
+pub fn hourLabel(hour: u8, index: usize, h24: bool, next_day: []const u8, buf: []u8) []const u8 {
     if (index == 0) return "Now";
+    if (hour == 0 and next_day.len > 0) return next_day;
     if (h24) return std.fmt.bufPrint(buf, "{d:0>2}:00", .{hour}) catch "";
     const h12: u8 = if (hour % 12 == 0) 12 else hour % 12;
     return std.fmt.bufPrint(buf, "{d} {s}", .{ h12, if (hour < 12) "AM" else "PM" }) catch "";
@@ -354,14 +356,14 @@ pub fn hiLoText(w: *const wsvc.Weather, units: wsvc.Units, buf: []u8) []const u8
     return std.fmt.bufPrint(buf, "H {d}\u{00B0}  L {d}\u{00B0}", .{ wsvc.roundi(days[0].max(units)), wsvc.roundi(days[0].min(units)) }) catch "";
 }
 
-/// "Updated 5:45 PM", or "Offline · from 5:45 PM" when the last refresh
-/// failed and an older reading is shown.
+/// "Updated 5:45 PM", or "Offline · 5:45 PM" (when the reading shown is
+/// from) once a refresh has failed.
 pub fn updatedText(w: *const wsvc.Weather, h24: bool, buf: []u8) []const u8 {
     var cb: [16]u8 = undefined;
     const t = clockText(w.observed.slice(), h24, &cb);
     if (w.stale) {
         if (w.observed.len == 0) return "Offline";
-        return std.fmt.bufPrint(buf, "Offline \u{00B7} from {s}", .{t}) catch "Offline";
+        return std.fmt.bufPrint(buf, "Offline \u{00B7} {s}", .{t}) catch "Offline";
     }
     if (w.observed.len == 0) return "";
     return std.fmt.bufPrint(buf, "Updated {s}", .{t}) catch "";
@@ -461,9 +463,11 @@ test "layout: the default panel fits everything, 2x icons, no headings" {
     try tt.expectEqual(l.hero.y + l.hero.h + GAP, l.hourly.y);
     try tt.expectEqual(l.hourly.y + l.hourly.h + GAP, l.daily.y);
     try tt.expectEqual(CONTENT.y + CONTENT.h, l.daily.y + l.daily.h);
-    // Buttons in the hero's top-right corner, side by side.
+    // Buttons in the hero's bottom-right corner, side by side.
     try tt.expect(inside(l.hero, l.refresh) and inside(l.hero, l.forecast));
     try tt.expect(!overlaps(l.refresh, l.forecast));
+    try tt.expectEqual(l.hero.y + l.hero.h - TILE_PAD, l.refresh.y + l.refresh.h);
+    try tt.expectEqual(l.hero.x + l.hero.w - TILE_PAD, l.refresh.x + l.refresh.w);
 }
 
 test "layout: as many consecutive hours as fit, all seven days" {
@@ -547,12 +551,16 @@ test "empty states say what's wrong, never blank" {
 
 test "hour, clock and day labels" {
     var b: [16]u8 = undefined;
-    try tt.expectEqualStrings("Now", hourLabel(17, 0, false, &b));
-    try tt.expectEqualStrings("5 PM", hourLabel(17, 1, false, &b));
-    try tt.expectEqualStrings("12 AM", hourLabel(0, 3, false, &b));
-    try tt.expectEqualStrings("12 PM", hourLabel(12, 3, false, &b));
-    try tt.expectEqualStrings("9 AM", hourLabel(9, 3, false, &b));
-    try tt.expectEqualStrings("07:00", hourLabel(7, 2, true, &b));
+    try tt.expectEqualStrings("Now", hourLabel(17, 0, false, "Fri", &b));
+    try tt.expectEqualStrings("Now", hourLabel(0, 0, false, "Fri", &b)); // now beats midnight
+    try tt.expectEqualStrings("5 PM", hourLabel(17, 1, false, "Fri", &b));
+    try tt.expectEqualStrings("Fri", hourLabel(0, 3, false, "Fri", &b));
+    try tt.expectEqualStrings("Fri", hourLabel(0, 3, true, "Fri", &b));
+    try tt.expectEqualStrings("12 AM", hourLabel(0, 3, false, "", &b));
+    try tt.expectEqualStrings("00:00", hourLabel(0, 3, true, "", &b));
+    try tt.expectEqualStrings("12 PM", hourLabel(12, 3, false, "Fri", &b));
+    try tt.expectEqualStrings("9 AM", hourLabel(9, 3, false, "Fri", &b));
+    try tt.expectEqualStrings("07:00", hourLabel(7, 2, true, "Fri", &b));
     try tt.expectEqualStrings("6:42 AM", clockText("06:42", false, &b));
     try tt.expectEqualStrings("4:28 PM", clockText("16:28", false, &b));
     try tt.expectEqualStrings("12:05 AM", clockText("00:05", false, &b));
@@ -629,7 +637,7 @@ test "hero lines: high/low, updated, place" {
     try tt.expectEqualStrings("Updated 5:45 PM", updatedText(&w, false, &b));
     try tt.expectEqualStrings("Updated 17:45", updatedText(&w, true, &b));
     w.stale = true;
-    try tt.expectEqualStrings("Offline \u{00B7} from 5:45 PM", updatedText(&w, false, &b));
+    try tt.expectEqualStrings("Offline \u{00B7} 5:45 PM", updatedText(&w, false, &b));
     w.observed = .{};
     try tt.expectEqualStrings("Offline", updatedText(&w, false, &b));
     w.stale = false;
