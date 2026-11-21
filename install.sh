@@ -847,6 +847,21 @@ if [ ! -f "/tmp/perihelionbar-temp/perihelion-shell-main/appdrawer.desktop" ]; t
 fi
 cp /tmp/perihelionbar-temp/perihelion-shell-main/appdrawer.desktop ~/.local/share/perihelionbar/appdrawer.desktop
 
+# MangoWM: the lock screen's entry script (Super+L, the power menu and
+# swayidle run it) and its PAM stack, staged for the install step after the
+# build. perihelion-lockscreen itself is built with the shell below.
+if [ "$WM_IS_MANGO" -eq 1 ]; then
+    for f in perihelion-lock pam/perihelion-lock; do
+        if [ ! -f "/tmp/perihelionbar-temp/perihelion-shell-main/$f" ]; then
+            rm -rf /tmp/perihelionbar-temp
+            die "Downloaded archive did not contain $f — layout may have changed upstream."
+        fi
+    done
+    mkdir -p ~/.local/share/perihelionbar/lock
+    cp /tmp/perihelionbar-temp/perihelion-shell-main/perihelion-lock ~/.local/share/perihelionbar/lock/perihelion-lock
+    cp /tmp/perihelionbar-temp/perihelion-shell-main/pam/perihelion-lock ~/.local/share/perihelionbar/lock/perihelion-lock.pam
+fi
+
 rm -rf /tmp/perihelionbar-temp
 
 # ── Step 5: set up Chaotic-AUR ─────────────────────────────────────
@@ -969,6 +984,12 @@ else
     # NOTE: no terminal here — TERMINAL_CHOICE below adds exactly one, so
     # mango's old hardcoded alacritty doesn't double-install or fight the pick.
     PACMAN_PKGS+=(easyeffects)
+    # The lock screen (perihelion-lockscreen): swayidle locks after 10 idle
+    # minutes and before suspend; cairo + pango draw the screen, pam checks
+    # the password (all three also carry the headers the build needs on
+    # Arch), and Inter is the screen's typeface (Noto Sans stands in
+    # without it).
+    PACMAN_PKGS+=(swayidle cairo pango pam inter-font)
 fi
 
 if reuse_detected FILE_MANAGER_CHOICE '1:nautilus' '2:nemo' '3:dolphin'; then
@@ -1289,6 +1310,52 @@ run_spinner "Installing perihelion-shell to /usr/bin" \
     install_perihelion_bin "$HOME/.local/share/perihelionbar/perihelionbar-shell/zig-out/bin" perihelion-shell perihelionbar-shell \
     || die "Failed to install the perihelion-shell binary to /usr/bin."
 ok "perihelion-shell built and installed to /usr/bin/perihelion-shell (perihelionbar-shell links to it)"
+
+# MangoWM: the lock screen. perihelion-lockscreen was built with the shell
+# above; /usr/bin/perihelion-lock is the entry point Super+L, the power menu
+# and swayidle run (it adds -f). The PAM stack is a copy of `login`'s
+# password check; an existing /etc/pam.d/perihelion-lock that differs is
+# only replaced after asking.
+install_lock_pam() {
+    local src=~/.local/share/perihelionbar/lock/perihelion-lock.pam dst=/etc/pam.d/perihelion-lock answer=""
+    if [ -e "$dst" ]; then
+        if cmp -s "$src" "$dst"; then
+            ok "$dst already up to date"
+            return 0
+        fi
+        warn "$dst exists and differs from Perihelion's (auth include login)"
+        if [ -r /dev/tty ]; then
+            printf '  Replace it? [y/N] ' > /dev/tty
+            read -r answer < /dev/tty || answer=""
+        fi
+        case "$answer" in
+            y|Y|yes|YES) ;;
+            *) ok "Kept your $dst"; return 0 ;;
+        esac
+    fi
+    sudo install -Dm644 "$src" "$dst"
+}
+if [ "$WM_IS_MANGO" -eq 1 ]; then
+    run_spinner "Installing perihelion-lockscreen to /usr/bin" \
+        install_perihelion_bin "$HOME/.local/share/perihelionbar/perihelionbar-shell/zig-out/bin" perihelion-lockscreen \
+        || die "Failed to install the perihelion-lockscreen binary to /usr/bin."
+    run_spinner "Installing perihelion-lock to /usr/bin" \
+        sudo install -Dm755 ~/.local/share/perihelionbar/lock/perihelion-lock /usr/bin/perihelion-lock \
+        || die "Failed to install /usr/bin/perihelion-lock."
+    # Not under run_spinner: it may need to ask.
+    install_lock_pam || die "Failed to install /etc/pam.d/perihelion-lock."
+    if ldd /usr/bin/perihelion-lockscreen | grep -F 'not found'; then
+        die "/usr/bin/perihelion-lockscreen is missing shared libraries"
+    fi
+    ok "Lock screen installed: Super+L, the power menu, and swayidle (10 idle minutes, before suspend) run perihelion-lock"
+    # Configs are deployed no-clobber, so a Mango config that existed before
+    # keeps its own lock setup. Say what to add rather than editing it.
+    if ! grep -rqs 'perihelion-lock' ~/.config/mango/; then
+        warn "Your ~/.config/mango doesn't run the lock screen yet. To use it, add:"
+        printf '      %s\n' "cfg/keybinds.conf:  bind = SUPER, l, spawn, perihelion-lock" \
+            "cfg/autostart.conf: exec_once=swayidle -w timeout 600 perihelion-lock before-sleep perihelion-lock"
+    fi
+fi
 
 # Seed the calendar widget's reminders file with its format reference on
 # first install (the widget appends it on demand too — this just documents
