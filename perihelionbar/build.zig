@@ -119,6 +119,16 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
     exe_mod.addImport("volume", volume_mod);
+    // Version and commit for --version and Settings > Updates.
+    const info_mod = buildInfoModule(b);
+    const cli_version_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli_version.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    cli_version_mod.addImport("build_info", info_mod);
+    exe_mod.addImport("cli_version", cli_version_mod);
     // Coming back after Mango closes the bar's layer surface (output gone,
     // e.g. on resume): src/respawn.zig, shared with the shell.
     const respawn_mod = b.createModule(.{
@@ -270,6 +280,17 @@ pub fn build(b: *Build) !void {
     const volume_tests = b.addTest(.{ .root_module = volume_mod, .use_llvm = true, .use_lld = true });
     const volume_test_step = b.step("test-volume", "Run src/volume.zig unit tests");
     volume_test_step.dependOn(&b.addRunArtifact(volume_tests).step);
+    // `zig build test-updater`: Settings > Updates' rules (versions, release
+    // JSON, URLs and the redirect host, SHA256SUMS, tar listing, manifest
+    // against the allowlist, argv, buttons), on made-up data only.
+    const updater_core_mod = b.createModule(.{
+        .root_source_file = b.path("src/updater_core.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const updater_tests = b.addTest(.{ .root_module = updater_core_mod, .use_llvm = true, .use_lld = true });
+    const updater_test_step = b.step("test-updater", "Run src/updater_core.zig unit tests");
+    updater_test_step.dependOn(&b.addRunArtifact(updater_tests).step);
     // `zig build test-respawn`: the restart rule after an output goes away.
     const respawn_tests = b.addTest(.{ .root_module = respawn_mod, .use_llvm = true, .use_lld = true });
     const respawn_test_step = b.step("test-respawn", "Run src/respawn.zig unit tests");
@@ -322,6 +343,7 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    welcome_mod.addImport("cli_version", cli_version_mod);
     welcome_mod.linkSystemLibrary("gtk4", .{});
     welcome_mod.linkSystemLibrary("libadwaita-1", .{});
     welcome_mod.linkSystemLibrary("gobject-2.0", .{});
@@ -351,6 +373,7 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    config_mod.addImport("cli_version", cli_version_mod);
     config_mod.linkSystemLibrary("gtk4", .{});
     config_mod.linkSystemLibrary("libadwaita-1", .{});
     config_mod.linkSystemLibrary("gobject-2.0", .{});
@@ -369,4 +392,24 @@ pub fn build(b: *Build) !void {
     run_config_cmd.step.dependOn(b.getInstallStep());
     const run_config_step = b.step("run-config", "Run perihelionbar-config");
     run_config_step.dependOn(&run_config_cmd.step);
+}
+
+/// The version every program reports (`--version`, Settings > Updates).
+/// Release builds pass -Dversion=<tag without v> and -Dcommit=<sha>; local
+/// builds say this and ask git for the commit. Keep in step with the other
+/// package's build.zig.
+const DEFAULT_VERSION = "0.1.0-dev";
+
+fn buildInfoModule(b: *Build) *Build.Module {
+    const version = b.option([]const u8, "version", "Version compiled into the programs") orelse DEFAULT_VERSION;
+    const commit = b.option([]const u8, "commit", "Commit compiled into the programs (default: git)") orelse blk: {
+        var code: u8 = 0;
+        const out = b.runAllowFail(&.{ "git", "rev-parse", "--short=7", "HEAD" }, &code, .ignore) catch break :blk "unknown";
+        const t = std.mem.trim(u8, out, " \t\r\n");
+        break :blk if (t.len > 0) t else "unknown";
+    };
+    const opts = b.addOptions();
+    opts.addOption([]const u8, "version", version);
+    opts.addOption([]const u8, "commit", commit);
+    return opts.createModule();
 }
