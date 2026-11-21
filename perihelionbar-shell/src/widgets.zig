@@ -5790,6 +5790,9 @@ pub const IconsWidget = struct {
     /// Insertion sort over the (≤64) items — alphabetical by name, the
     /// classic auto-arranged desktop order.
     fn sortItems(items: []DesktopItem) void {
+        // `1..0` is an invalid range: an empty (or missing) ~/Desktop
+        // panicked here in Debug and corrupted memory in release builds.
+        if (items.len < 2) return;
         for (1..items.len) |i| {
             var j = i;
             while (j > 0 and nameLess(&items[j], &items[j - 1])) {
@@ -6800,4 +6803,11 @@ test "notes: up/down walk wrapped lines" {
     try std.testing.expectEqual(@as(usize, 5), note.caret);
     try std.testing.expectEqual(K.handled, note.keyPress(m, 40, 6, KEY_DOWN, 0));
     try std.testing.expectEqual(K.ignored, note.keyPress(m, 40, 6, KEY_DOWN, 0));
+}
+
+test "icons: sorting an empty or one-item desktop is a no-op (no 1..0 range)" {
+    var none: [0]DesktopItem = .{};
+    IconsWidget.sortItems(&none);
+    var one: [1]DesktopItem = .{.{}};
+    IconsWidget.sortItems(&one);
 }
