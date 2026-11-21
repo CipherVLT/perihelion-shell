@@ -27,10 +27,12 @@ fails=0
 pass() { echo "  ok    $*"; }
 fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
 live() { [[ -e /proc/$1 ]] && [[ $(awk '/^State:/{print $2}' "/proc/$1/status" 2>/dev/null) != Z ]]; }
-pids() { local p; for p in $(pgrep -x "$1"); do live "$p" && echo "$p"; done; }
+# pgrep -x matches the kernel's process name, cut to 15 characters
+# (perihelion-shell is 16).
+pids() { local p; for p in $(pgrep -x "${1:0:15}"); do live "$p" && echo "$p"; done; }
 cleanup() {
     pkill -x perihelion-bar 2>/dev/null
-    pkill -x perihelion-shell 2>/dev/null
+    pkill -x perihelion-shel 2>/dev/null
     [[ -n ${sway_pid:-} ]] && kill "${sway_pid}" 2>/dev/null
     if (( fails > 0 )); then
         echo "--- sway.log"; tail -n 30 "${work}/sway.log" 2>/dev/null
@@ -54,15 +56,15 @@ for _ in $(seq 1 100); do
     sleep 0.1
 done
 if [[ -z ${sock:-} || -z ${ipc:-} ]]; then fails=1; echo "  FAIL  no compositor came up"; exit 1; fi
-export WAYLAND_DISPLAY=$(basename "${sock}")
+WAYLAND_DISPLAY=$(basename "${sock}"); export WAYLAND_DISPLAY
 msg() { "${SWAYMSG:-swaymsg}" -s "${ipc}" "$@" >/dev/null 2>&1; }
 outputs() { "${SWAYMSG:-swaymsg}" -s "${ipc}" -t get_outputs -r 2>/dev/null | grep -o '"name": *"HEADLESS-[0-9]*"' | grep -o 'HEADLESS-[0-9]*'; }
 
 # Waits up to $2 tenths of a second for exactly one live copy of $1 whose
 # pid is not $3; prints it.
 wait_new() {
-    local i p
-    for i in $(seq 1 "$2"); do
+    local p
+    for _ in $(seq 1 "$2"); do
         p=$(pids "$1")
         if [[ -n ${p} && ${p} != *$'\n'* && ${p} != "$3" ]]; then echo "${p}"; return 0; fi
         sleep 0.1

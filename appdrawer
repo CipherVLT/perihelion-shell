@@ -1,5 +1,8 @@
 #!/bin/sh
-# Toggle the quickshell app drawer (~/.config/quickshell/appdrawer).
+# Toggle the quickshell app drawer. Its QML runs from
+# ~/.local/share/perihelionbar/appdrawer when that copy exists (install.sh
+# stages it there and Settings > Updates refreshes it, never touching
+# ~/.config), else from ~/.config/quickshell/appdrawer as before.
 #
 # Normally this is a single IPC round trip to the already-running daemon, which
 # measures ~25ms. The cold path matters too: if the daemon is not up (crashed,
@@ -9,6 +12,7 @@
 #
 #   appdrawer            toggle the drawer (self-healing)
 #   appdrawer start      start the daemon in the background, do not toggle
+#   appdrawer restart    stop the daemon and start it again (after an update)
 #   appdrawer open       open the drawer on the Apps tab
 #   appdrawer close      close the drawer
 #   appdrawer wallpapers open the drawer straight on the Wallpapers tab
@@ -29,20 +33,38 @@ set -u
 
 CFG=appdrawer
 QS=quickshell
+LOCAL_QML="${XDG_DATA_HOME:-$HOME/.local/share}/perihelionbar/appdrawer"
+# The instance selector every quickshell call below uses.
+if [ -f "$LOCAL_QML/shell.qml" ]; then
+    SEL_FLAG=-p
+    SEL_VAL=$LOCAL_QML
+else
+    SEL_FLAG=-c
+    SEL_VAL=$CFG
+fi
 
 if [ "$#" -gt 0 ]; then
     case "$1" in
         start)
             # -d detaches, so this returns immediately instead of blocking the
             # compositor's startup path.
-            "$QS" -c "$CFG" -d >/dev/null 2>&1
+            "$QS" "$SEL_FLAG" "$SEL_VAL" -d >/dev/null 2>&1
+            exit $?
+            ;;
+        restart)
+            # Both selectors: a daemon started before the QML moved to
+            # ~/.local/share runs under -c.
+            "$QS" kill -c "$CFG" >/dev/null 2>&1
+            [ "$SEL_FLAG" = -p ] && "$QS" kill -p "$SEL_VAL" >/dev/null 2>&1
+            sleep 0.3
+            "$QS" "$SEL_FLAG" "$SEL_VAL" -d >/dev/null 2>&1
             exit $?
             ;;
         open|close|toggle|wallpapers|apps|bluetooth|power)
             ACTION="$1"
             ;;
         *)
-            printf 'usage: %s [toggle|open|close|start|wallpapers|apps|bluetooth|power]\n' "$0" >&2
+            printf 'usage: %s [toggle|open|close|start|restart|wallpapers|apps|bluetooth|power]\n' "$0" >&2
             exit 2
             ;;
     esac
@@ -61,18 +83,18 @@ if ! command -v "$QS" >/dev/null 2>&1; then
 fi
 
 # Fast path: daemon already running.
-if "$QS" ipc -c "$CFG" call "drawer" "$ACTION" >/dev/null 2>&1; then
+if "$QS" ipc "$SEL_FLAG" "$SEL_VAL" call "drawer" "$ACTION" >/dev/null 2>&1; then
     exit 0
 fi
 
 # Cold path: bring the daemon up, then retry until its IPC target is registered.
 # The handler is registered during config load, well before the icon scan and
 # app catalogue finish, so this normally succeeds in well under a second.
-"$QS" -c "$CFG" -d >/dev/null 2>&1 &
+"$QS" "$SEL_FLAG" "$SEL_VAL" -d >/dev/null 2>&1 &
 
 waited=0
 while [ "$waited" -lt 60 ]; do
-    if "$QS" ipc -c "$CFG" call "drawer" "$ACTION" >/dev/null 2>&1; then
+    if "$QS" ipc "$SEL_FLAG" "$SEL_VAL" call "drawer" "$ACTION" >/dev/null 2>&1; then
         exit 0
     fi
     sleep 0.1

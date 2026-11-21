@@ -21,6 +21,33 @@ Interactive — answers a few questions, asks for sudo **once**, then installs e
 
 What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picker with matugen auto-theming, foot, rofi, swaync, fish, Neovim, browser/Discord of your choice, OBS/video tools optional. Gaming launchers (Steam/Lutris/Heroic) come from the Xero installer's GAMING picks.
 
+### Installing on Arch, step by step
+
+1. Run the command above in a terminal (not as root). Answer the questions; give your password once when asked.
+2. Reboot: `systemctl reboot`. Log in to MangoWM (or Hyprland, if that's what you picked).
+3. Check what you have: `perihelion-bar --version` prints the version and commit, for example `perihelion-bar 0.1.0-dev (20034aa)`. **Perihelion Settings → System → Updates** shows the same, and *Installed with: install.sh*.
+
+## Updates
+
+**Perihelion Settings → System → Updates** keeps Perihelion Shell current from its GitHub releases.
+
+- **This device:** the installed version and commit, how it was installed (*install.sh*, *Release update* or *Perihelion Linux*), **Check automatically** (on by default) with **Check every N hours** (6 by default; `"updates"` in `config.json`), and when it last checked.
+- **Software update:** a status line and four buttons, each live only when it makes sense: **Check now**, **Download**, **Install update**, **Restart shell**.
+- **Release notes:** the latest release's notes, after a check.
+
+To check for and apply an update on Arch:
+
+1. Open **Perihelion Settings → System → Updates** and press **Check now** (or wait: the `perihelion-update-check` timer checks in the background and sends a notification when a new release is out).
+2. If it says *vX.Y.Z is available*, read the release notes and press **Download**. It downloads the release and checks it before anything changes: the SHA-256 checksum, that the tarball holds only the known program files, the release's manifest against the updater's built-in list of files and destinations, and that every program actually starts on your system (`--version`). Any failure stops here, says why, and installs nothing.
+3. Press **Install update** and give your password (one `pkexec` prompt). The programs go to `/usr/bin`; the app drawer's QML goes to `~/.local/share/perihelionbar/appdrawer`. Your settings in `~/.config` and `/etc/pam.d` are never touched.
+4. Press **Restart shell**: the bar, the dock, the desktop and the app drawer restart on the new version. `perihelion-bar --version` now shows it.
+
+From a terminal, the same steps: `perihelion-settings --check-updates`, then `perihelion-settings --download-update` (prints `ready <folder>`), then `perihelion-settings --install-update <folder> <tag>`, then `perihelion-bar-start` (restarts the bar and the dock) and `appdrawer restart`.
+
+Safety: downloads come only from this repository's GitHub releases over HTTPS. The one redirect GitHub answers with is checked by hand and must go to `release-assets.githubusercontent.com`. Nothing goes through a shell. Downloads go to a new folder in `/tmp`. Releases are built on Arch Linux for any x86_64 CPU. On **Perihelion Linux** the page shows and checks releases, but the shell is updated with the system.
+
+To turn the background check off: switch off **Check automatically**, or `systemctl --user disable --now perihelion-update-check.timer`.
+
 ## Desktop widgets
 
 `perihelionbar-shell` paints widget cards on the wallpaper layer: clock, weather, media controls, system monitor, top processes, network speed, user and uptime, fastfetch, calendar with reminders, sticky note.
@@ -194,6 +221,8 @@ Pills that are on wear your accent colour. The states are read only while the pa
 - **When it runs:** `Super + L`, **Lock** in the power menu, and swayidle after 10 idle minutes and before every suspend. All three run `/usr/bin/perihelion-lock`, which starts `perihelion-lockscreen -f`. `-f` returns only once the compositor has confirmed the lock and every monitor shows it (at most 2 seconds), so a suspend can't catch the desktop unlocked. Pressing `Super + L` while locked does nothing and leaves the lock as it is.
 - **Follows your setup:** the current wallpaper (or the theme's background colour if the wallpaper can't be read), the theme's accent and red from `perihelion-theme`, and **Settings → 24-hour clock** (`clock_24h` in `shell.json`). The username is read when it starts.
 - **Safe by design:** it uses ext-session-lock-v1, so only a correct password unlocks. If the lock screen crashes or is killed, Mango keeps the session locked (see *If the lock screen crashes* below). It puts one lock surface on every monitor, including monitors plugged in while locked. The password is checked by PAM on a separate thread, using `/etc/pam.d/perihelion-lock` (`auth include login`, the same check as a console login; `login` itself if that file is missing). The typed password stays in memory that is never swapped and is wiped after every attempt and on exit. The log (`perihelion-lockscreen/` in the log folder) records only locks, unlocks, wrong attempts, PAM problems and monitors coming and going, never anything about the password.
+- **After suspend:** if the monitor is re-detected on resume (some GPUs and virtual machines do that), Mango closes everything on the old monitor; the bar, the dock and the desktop widgets now start again on the new one by themselves (at most 6 times in 5 minutes).
+- **Readable on any wallpaper:** when the wallpaper behind the date, the username or the hint is bright, a soft dark patch and a stronger shadow sit behind that line (measured once per monitor size; dark wallpapers look exactly as designed). Pictures: `assets/lock-preview/` (a bright wallpaper before and after, and a dark one).
 - **Light:** it isn't running while you're unlocked. While locked it draws a frame when the minute changes, when you type, and once a second for the caret while there's text in the field. cairo, pango and PAM are linked into this one program only.
 
 ### If the lock screen crashes

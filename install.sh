@@ -716,6 +716,10 @@ run_spinner "Downloading perihelionbar config" \
 run_spinner "Extracting archive" \
     unzip -o /tmp/perihelionbar.zip -d /tmp/perihelionbar-temp \
     || die "Could not extract perihelionbar archive."
+# GitHub stores the commit in the archive's comment: the programs report it
+# (--version, Settings > Updates), since the archive has no .git to ask.
+PERIHELION_COMMIT=$(unzip -zq /tmp/perihelionbar.zip 2>/dev/null | grep -Eo '^[0-9a-f]{40}$' | head -n 1 | cut -c1-7)
+PERIHELION_COMMIT=${PERIHELION_COMMIT:-unknown}
 rm -f /tmp/perihelionbar.zip
 
 # CONFIG_DIRS was chosen in Step 2 (hypr… for Hyprland, mango… for MangoWM);
@@ -1256,12 +1260,12 @@ fi
 
 build_perihelionbar() {
     cd "$HOME/.local/share/perihelionbar/perihelionbar" || return 1
-    zig build -Doptimize=fast "${ZIG_CPU_ARGS[@]}"
+    zig build -Doptimize=fast "-Dcommit=${PERIHELION_COMMIT}" "${ZIG_CPU_ARGS[@]}"
 }
 
 build_perihelionbar_shell() {
     cd "$HOME/.local/share/perihelionbar/perihelionbar-shell" || return 1
-    zig build -Doptimize=fast "${ZIG_CPU_ARGS[@]}"
+    zig build -Doptimize=fast "-Dcommit=${PERIHELION_COMMIT}" "${ZIG_CPU_ARGS[@]}"
 }
 
 # Build perihelionbar (the bar) and perihelionbar-welcome (the GTK4 + libadwaita
@@ -1697,7 +1701,7 @@ if command -v quickshell >/dev/null 2>&1; then
     # resolves its own path the same way, so the two always agree.
     QS_APPDRAWER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/quickshell/appdrawer"
     mkdir -p "$QS_APPDRAWER_DIR"
-    for qml in AppModel.qml AppTile.qml BluetoothDeviceRow.qml BluetoothPanel.qml Distro.qml Drawer.qml Icons.qml shell.qml Theme.qml WallpaperModel.qml WallpaperTile.qml WallhavenSearch.qml; do
+    for qml in AppModel.qml AppTile.qml BluetoothDeviceRow.qml BluetoothPanel.qml Distro.qml Drawer.qml Icons.qml ScrollIndicator.qml shell.qml SmoothWheel.qml Theme.qml WallpaperModel.qml WallpaperTile.qml WallhavenSearch.qml; do
         if [ ! -f "$HOME/.local/share/perihelionbar/appdrawer/$qml" ]; then
             warn "appdrawer $qml missing from the archive — the drawer may not load (skipped)"
         else
@@ -2114,6 +2118,37 @@ if pacman -Qq pacman-contrib >/dev/null 2>&1 && pacman -Qq libnotify >/dev/null 
 else
     warn "pacman-contrib/libnotify not fully installed — skipping the update-checker timer"
 fi
+
+
+# Settings > System > Updates: how this copy was installed (Settings shows
+# it; a release update rewrites it), and the background check. The timer
+# fires hourly; `--if-due` checks only when "Check automatically" is on and
+# its interval (6 h by default, config.json "updates") has passed, and sends
+# one notification per new release.
+mkdir -p ~/.local/state/perihelionbar
+printf 'install.sh %s\n' "${PERIHELION_COMMIT}" > ~/.local/state/perihelionbar/install-method
+cat > ~/.config/systemd/user/perihelion-update-check.service <<'UPDCHECKSVCEOF'
+[Unit]
+Description=Check for a new Perihelion Shell release
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/perihelion-settings --check-updates --if-due
+UPDCHECKSVCEOF
+cat > ~/.config/systemd/user/perihelion-update-check.timer <<'UPDCHECKTIMEREOF'
+[Unit]
+Description=Check for a new Perihelion Shell release (Settings > Updates decides how often)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UPDCHECKTIMEREOF
+run_spinner "Enabling perihelion-update-check.timer" systemctl --user enable --now perihelion-update-check.timer \
+    || warn "Could not enable perihelion-update-check.timer — enable it manually: systemctl --user enable --now perihelion-update-check.timer"
 
 
 cat > ~/.local/share/applications/perihelionbar-welcome.desktop <<'WELCOMEDESKTOPEOF'
