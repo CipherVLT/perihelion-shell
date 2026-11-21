@@ -55,6 +55,9 @@ jobs:
       - name: Unit-test the restart rule after an output goes away
         working-directory: perihelionbar
         run: /opt/zig/zig build test-respawn
+      - name: "Unit-test Settings > Updates (versions, release JSON, redirect host, SHA256SUMS, tar listing, manifest/allowlist, argv, buttons)"
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-updater
       - name: Unit-test the Network page's nmcli parser
         working-directory: perihelionbar
         run: /opt/zig/zig test src/network.zig -lc
@@ -158,6 +161,8 @@ jobs:
       - name: Build perihelionbar-shell
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build -Doptimize=fast -Dcpu=x86_64_v2
+      - name: "Updater end to end, offline: a release from this build passes --verify-update; tampered ones are refused"
+        run: bash tests/updater-verify.sh 0.1.0-dev
       - name: Unit-test the desktop cards (notes editing and pages, layout)
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build test-widgets

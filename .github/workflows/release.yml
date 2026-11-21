@@ -1,0 +1,75 @@
+# Release: on a pushed v* tag (only), builds every program on Arch Linux
+# (the system Settings > Updates installs onto), for baseline x86_64, with
+# the tag's version compiled in; packs them with tools/make-release.sh
+# (tarball + MANIFEST + SHA256SUMS); proves the result with the updater's
+# own verification (tests/updater-verify.sh); then publishes the GitHub
+# release the updater reads.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      ZIG_VERSION: 0.17.1
+      ZIG_PUBKEY: RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
+    steps:
+      - name: Install build packages
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git curl xz minisign tar github-cli \
+            wayland wayland-protocols freetype2 gdk-pixbuf2 libxkbcommon \
+            gtk4 libadwaita glib2 cairo pango pam
+      - uses: actions/checkout@v4
+      - name: Install Zig (signature checked)
+        run: |
+          mkdir -p /opt/zig && cd /opt/zig
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          curl -fsSL --retry 3 -o zig.tar.xz "$url"
+          curl -fsSL --retry 3 -o zig.tar.xz.minisig "$url.minisig"
+          minisign -V -P "$ZIG_PUBKEY" -m zig.tar.xz -x zig.tar.xz.minisig
+          tar -xJf zig.tar.xz --strip-components=1
+          test "$(/opt/zig/zig version)" = "${ZIG_VERSION}"
+      - name: Version from the tag
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          echo "TAG=${tag}" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Build (Arch, baseline x86_64)
+        run: |
+          for pkg in perihelionbar perihelionbar-shell; do
+            ( cd "$pkg" && /opt/zig/zig build -Doptimize=ReleaseFast -Dcpu=baseline \
+                "-Dversion=${VERSION}" "-Dcommit=${COMMIT}" )
+          done
+      - name: Every program starts and reports the tag
+        run: |
+          for b in perihelionbar/zig-out/bin/perihelion-bar perihelionbar/zig-out/bin/perihelion-settings \
+                   perihelionbar/zig-out/bin/perihelionbar-welcome perihelionbar-shell/zig-out/bin/perihelion-shell \
+                   perihelionbar-shell/zig-out/bin/perihelion-lockscreen; do
+            out=$("$b" --version)
+            echo "$out"
+            case "$out" in *" ${VERSION} (${COMMIT})"*) ;; *) echo "wrong version from $b"; exit 1 ;; esac
+          done
+      - name: Pack the release
+        run: tools/make-release.sh "${VERSION}" dist
+      - name: Verify it the way the updater will
+        run: |
+          useradd -m tester
+          chown -R tester: "$GITHUB_WORKSPACE"
+          runuser -u tester -- bash tests/updater-verify.sh "${VERSION}"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          gh release create "${TAG}" \
+            "dist/perihelion-shell-${VERSION}-x86_64.tar.gz" dist/SHA256SUMS \
+            --title "Perihelion Shell ${VERSION}" --notes-from-tag --verify-tag

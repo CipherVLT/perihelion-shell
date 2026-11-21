@@ -21,6 +21,10 @@
 // Modules and Shortcuts tabs are still placeholders — later steps.
 
 const std = @import("std");
+const cli_version = @import("cli_version");
+const updater_core = @import("updater_core.zig");
+const updater_run = @import("updater_run.zig");
+const updates_page = @import("updates_page.zig");
 const gtk = @import("welcome_gtk.zig");
 const hg = @import("hypr_gtk.zig");
 const hypr = @import("hyprland.zig");
@@ -332,7 +336,15 @@ const JsonConfig = struct {
     launchers: []const LauncherButton = &CENTER_LAUNCHERS,
     dock: JsonDock = .{},
     bar: JsonBar = .{},
+    updates: JsonUpdates = .{},
 };
+
+/// Settings > System > Updates (config.json "updates"): automatic checks,
+/// every `interval_hours` (1-168), done by the perihelion-update-check timer
+/// through `perihelion-settings --check-updates --if-due`.
+const JsonUpdates = struct { auto_check: bool = true, interval_hours: u32 = updater_core.DEFAULT_INTERVAL_H };
+var live_updates_auto: bool = true;
+var live_updates_interval: u32 = updater_core.DEFAULT_INTERVAL_H;
 
 // main.zig's BarSettings: brightness_osd = the brightness OSD (kept so a
 // save from here doesn't drop it; edited by hand in config.json).
@@ -1193,6 +1205,8 @@ fn loadConfigFromDisk() void {
     stripRemovedKinds(&live_center);
     live_launchers.load(parsed.launchers);
     live_dock_enabled = parsed.dock.enabled;
+    live_updates_auto = parsed.updates.auto_check;
+    live_updates_interval = updater_core.clampInterval(parsed.updates.interval_hours);
     live_bar_enabled = parsed.bar.enabled;
     live_brightness_osd = parsed.bar.brightness_osd;
     live_bar_mode = "taskbar"; // Bar Mode is retired
@@ -1476,6 +1490,11 @@ fn buildConfigJson() ![]u8 {
     // the dock's own key follows it so the two never disagree.
     try list.appendSlice(gpa, if (live_colored_glass) "true" else "false");
     try list.append(gpa, '}');
+    try list.appendSlice(gpa, ",\"updates\":{\"auto_check\":");
+    try list.appendSlice(gpa, if (live_updates_auto) "true" else "false");
+    try list.appendSlice(gpa, ",\"interval_hours\":");
+    try appendJsonInt(&list, u32, live_updates_interval);
+    try list.append(gpa, '}');
     try list.append(gpa, '}');
 
     return list.toOwnedSlice(gpa);
@@ -1576,6 +1595,25 @@ fn restartBar() void {
         }
         _ = poll(&dummy, 0, 50); // portable msleep(50) — 0 fds, just the timeout
     }
+}
+
+/// Settings > Updates: the auto-check switch or interval changed.
+fn onUpdatesSettings(auto: bool, hours: u32) void {
+    live_updates_auto = auto;
+    live_updates_interval = updater_core.clampInterval(hours);
+    saveAndSignal();
+}
+
+/// Settings > Updates > Restart shell: everything the update replaced, the
+/// same way the other switches restart them (one bar, one dock, one shell).
+fn restartEverything() void {
+    restartBar();
+    if (live_dock_enabled) {
+        singleton.stopAll(.dock);
+        launchRole(.dock);
+    }
+    restartShell();
+    launchDetached(&.{ "appdrawer", "restart" });
 }
 
 fn onRestartBarClicked(_: *gtk.GtkButton, _: ?*anyopaque) callconv(.c) void {
@@ -6624,12 +6662,13 @@ const BAR_COUNT = PAGE_NAMES.len;
 // "Hyprland"|"Mango" / "System") are inserted between the groups at build
 // time.
 const SEC_MAX = @max(hypr_pages.pages.names.len, mango_pages.pages.names.len);
-const SB_MAX = BAR_COUNT + SEC_MAX + 3;
+const SB_MAX = BAR_COUNT + SEC_MAX + 4;
 var g_sb_n: usize = 0; // rows in use
 var g_sec_n: usize = 0; // compositor pages
 var g_net_idx: usize = 0; // System deck: Network,
 var g_boot_idx: usize = 0; // Boot,
-var g_ly_idx: usize = 0; // Login
+var g_ly_idx: usize = 0; // Login,
+var g_upd_idx: usize = 0; // Updates
 var g_sb_names: [SB_MAX][:0]const u8 = undefined;
 var g_sb_icons: [SB_MAX][:0]const u8 = undefined;
 
@@ -6661,9 +6700,11 @@ fn setupSidebarNames() void {
     setSidebarEntry(at, "Network", "network-wireless-symbolic");
     g_boot_idx = at + 1;
     setSidebarEntry(at + 1, "Boot", "system-reboot-symbolic");
-    g_ly_idx = at + 2;
-    setSidebarEntry(at + 2, "Login", "system-switch-user-symbolic");
-    g_sb_n = at + 3;
+    g_upd_idx = at + 2;
+    setSidebarEntry(at + 2, "Updates", "software-update-available-symbolic");
+    g_ly_idx = at + 3;
+    setSidebarEntry(at + 3, "Login", "system-switch-user-symbolic");
+    g_sb_n = at + 4;
 }
 
 var g_sidebar_rows: [SB_MAX]*gtk.GtkListBoxRow = undefined;
@@ -7052,6 +7093,9 @@ fn buildWindow(app: *anyopaque) *gtk.AdwApplicationWindow {
     }
     network_page.parent_window = @ptrCast(window);
     page_widgets[g_net_idx] = network_page.build();
+    updates_page.on_settings = onUpdatesSettings;
+    updates_page.on_restart = restartEverything;
+    page_widgets[g_upd_idx] = updates_page.build(live_updates_auto, live_updates_interval);
     if (perihelion_system_pages) {
         // The lazy Limine/Ly setup on first visit must not run.
         limine_inited = true;
@@ -7140,6 +7184,7 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
 }
 
 pub fn main() void {
+    cli_version.handle("perihelion-settings");
     logging.init("perihelion-settings");
     realMain() catch |err| {
         logging.err("fatal: {s}", .{@errorName(err)});
@@ -7178,6 +7223,27 @@ fn realMain() !void {
     if (nparts == 2 and std.mem.eql(u8, parts[1], "--mango-keys")) {
         mango_pages.dumpDefaults();
         std.process.exit(0);
+    }
+    // Settings > Updates' working half (updater_run.zig): headless, no GTK.
+    if (nparts >= 2 and std.mem.eql(u8, parts[1], "--check-updates")) {
+        loadConfigFromDisk();
+        const if_due = nparts >= 3 and std.mem.eql(u8, parts[2], "--if-due");
+        std.process.exit(updater_run.check(if_due, live_updates_auto, live_updates_interval));
+    }
+    // The MANIFEST a release carries, straight from the allowlist, so the
+    // release script and the updater can never disagree (tools/make-release.sh).
+    if (nparts == 2 and std.mem.eql(u8, parts[1], "--release-manifest")) {
+        updater_run.printManifest();
+        std.process.exit(0);
+    }
+    if (nparts == 2 and std.mem.eql(u8, parts[1], "--download-update")) {
+        std.process.exit(updater_run.download());
+    }
+    if (nparts == 4 and std.mem.eql(u8, parts[1], "--verify-update")) {
+        std.process.exit(updater_run.verify(parts[2], parts[3]));
+    }
+    if (nparts == 4 and std.mem.eql(u8, parts[1], "--install-update")) {
+        std.process.exit(updater_run.install(parts[2], parts[3]));
     }
     if (nparts == 3 and std.mem.eql(u8, parts[1], "--page")) {
         const len = @min(parts[2].len, g_start_page_buf.len);
