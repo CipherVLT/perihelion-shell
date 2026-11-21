@@ -41,7 +41,7 @@ cleanup() {
 trap cleanup EXIT
 
 font=$(fc-match -f '%{file}' monospace)
-printf '{"appearance":{"font_path":"%s","position":"top"}}\n' "${font}" > "${HOME}/.config/perihelionbar/config.json"
+printf '{"appearance":{"font_path":"%s","position":"top"},"dock":{"enabled":true}}\n' "${font}" > "${HOME}/.config/perihelionbar/config.json"
 
 echo "Starting a headless compositor"
 WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
@@ -97,7 +97,54 @@ check() {  # $1 = program name, $2 = how to start it
     else fail "$1: no 'restarting' line in its logs"; fi
 }
 
-check perihelion-bar "exec env -u PERIHELIONBAR_DOCK perihelion-bar"
+# The bar and the dock together: after each unplug exactly one of each, with
+# new pids (the dock must come back as the dock, not as a second bar).
+role_pids() {  # $1 = bar|dock
+    local pid
+    for pid in $(pids perihelion-bar); do
+        if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -q '^PERIHELIONBAR_DOCK=1'; then
+            [[ $1 == dock ]] && echo "${pid}"
+        else
+            [[ $1 == bar ]] && echo "${pid}"
+        fi
+    done
+}
+echo "perihelion-bar and its dock:"
+( exec env -u PERIHELIONBAR_DOCK perihelion-bar ) >>"${work}/bar.out" 2>&1 &
+( PERIHELIONBAR_DOCK=1 exec perihelion-bar ) >>"${work}/dock.out" 2>&1 &
+for _ in $(seq 1 50); do
+    [[ -n $(role_pids bar) && -n $(role_pids dock) ]] && break
+    sleep 0.1
+done
+bar_pid=$(role_pids bar); dock_pid=$(role_pids dock)
+if [[ -z ${bar_pid} || -z ${dock_pid} ]]; then
+    fail "bar (${bar_pid:-none}) or dock (${dock_pid:-none}) did not start"
+else
+    sleep 1.5
+    for round in 1 2; do
+        old=$(outputs | head -n 1)
+        msg create_output
+        sleep 0.5
+        msg output "${old}" unplug
+        for _ in $(seq 1 120); do
+            nb=$(role_pids bar); nd=$(role_pids dock)
+            [[ -n ${nb} && -n ${nd} && ${nb} != "${bar_pid}" && ${nd} != "${dock_pid}" \
+               && ${nb} != *$'\n'* && ${nd} != *$'\n'* ]] && break
+            sleep 0.1
+        done
+        sleep 1
+        nb=$(role_pids bar); nd=$(role_pids dock)
+        if [[ $(echo "${nb}" | grep -c .) == 1 && $(echo "${nd}" | grep -c .) == 1 \
+              && ${nb} != "${bar_pid}" && ${nd} != "${dock_pid}" ]]; then
+            pass "unplug ${round} (${old}): one bar (pid ${nb}) and one dock (pid ${nd}) again"
+        else
+            fail "unplug ${round} (${old}): bars [${nb//$'\n'/ }] docks [${nd//$'\n'/ }] (before: ${bar_pid}, ${dock_pid})"
+        fi
+        bar_pid=${nb}; dock_pid=${nd}
+    done
+    if grep -rqs "restarting" "${PERIHELIONBAR_LOG_DIR}"; then pass "the bar logged the restart"
+    else fail "the bar: no 'restarting' line in its logs"; fi
+fi
 pkill -x perihelion-bar 2>/dev/null
 rm -rf "${PERIHELIONBAR_LOG_DIR:?}"/*
 if [[ -n ${shell_bin} ]]; then
