@@ -52,6 +52,9 @@ jobs:
       - name: Unit-test the single-copy module
         working-directory: perihelionbar
         run: /opt/zig/zig test src/singleton.zig -lc
+      - name: Unit-test the restart rule after an output goes away
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-respawn
       - name: Unit-test the Network page's nmcli parser
         working-directory: perihelionbar
         run: /opt/zig/zig test src/network.zig -lc
@@ -180,6 +183,12 @@ jobs:
           cp -r perihelionbar-shell/zig-out/bin /tmp/lock-bin && chmod -R a+rX /tmp/lock-bin
           cp tests/lock-live.sh /tmp/ && chmod a+rx /tmp/lock-live.sh
           runuser -u tester -- env SWAY=/tmp/sway bash /tmp/lock-live.sh /tmp/lock-bin /tmp/shots
+      - name: "Live test: bar and shell come back when their output goes away (resume)"
+        run: |
+          # Headless sway: add an output, unplug the old one (what a GPU
+          # re-probe on resume does), expect one bar / one shell again.
+          cp tests/output-loss-live.sh /tmp/ && chmod a+rx /tmp/output-loss-live.sh
+          runuser -u tester -- env SWAY=/tmp/sway bash /tmp/output-loss-live.sh /tmp/perihelion-bin /tmp/lock-bin
       - name: Lock screen pictures (every state, without locking)
         working-directory: perihelionbar-shell
         run: |

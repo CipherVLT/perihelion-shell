@@ -203,6 +203,14 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("gdkpixbuf", pixbuf_mod); // glass.zig: the blurred wallpaper behind the cards
     exe_mod.addImport("font", font_mod);
     exe_mod.addImport("logging", logging_mod);
+    // Restart after Mango closes the desktop surface (output gone, e.g. on
+    // resume); shared with the bar.
+    exe_mod.addImport("respawn", b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/respawn.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }));
     exe_mod.addImport("widgets", widgets_mod);
     exe_mod.addImport("weather", weather_mod); // shell.json weather_* keys (main.zig)
     exe_mod.addImport("temps", temps_mod); // shell.json system_* keys (main.zig)

@@ -18,6 +18,7 @@ const wl = wayland.client.wl;
 const zwlr = wayland.client.zwlr;
 const font_mod = @import("font");
 const logging = @import("logging");
+const respawn = @import("respawn");
 const widgets_mod = @import("widgets");
 const glass = @import("glass.zig");
 const overview_mod = @import("overview");
@@ -1605,7 +1606,17 @@ fn layerSurfaceListener(_: *zwlr.LayerSurfaceV1, event: zwlr.LayerSurfaceV1.Even
                 logging.err("draw failed: {}", .{err});
             };
         },
-        .closed => std.process.exit(0),
+        .closed => {
+            // The desktop surface's output went away (unplug, or a resume
+            // that re-probes the GPU's connectors): start again so the cards
+            // come back on the new output (see ../perihelionbar/src/respawn.zig).
+            switch (respawn.restartSelf()) {
+                .restarting => logging.step("desktop surface closed by the compositor (output gone?); restarting", .{}),
+                .gave_up => logging.warn("desktop surface closed again; {d} restarts in {d} s, not restarting", .{ respawn.MAX_IN_WINDOW, respawn.WINDOW_S }),
+                .failed => logging.err("desktop surface closed; could not restart", .{}),
+            }
+            std.process.exit(0);
+        },
     }
 }
 

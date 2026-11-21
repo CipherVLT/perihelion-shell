@@ -119,6 +119,15 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
     exe_mod.addImport("volume", volume_mod);
+    // Coming back after Mango closes the bar's layer surface (output gone,
+    // e.g. on resume): src/respawn.zig, shared with the shell.
+    const respawn_mod = b.createModule(.{
+        .root_source_file = b.path("src/respawn.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exe_mod.addImport("respawn", respawn_mod);
     const radios_mod = b.createModule(.{
         .root_source_file = b.path("src/radios.zig"),
         .target = target,
@@ -261,6 +270,10 @@ pub fn build(b: *Build) !void {
     const volume_tests = b.addTest(.{ .root_module = volume_mod, .use_llvm = true, .use_lld = true });
     const volume_test_step = b.step("test-volume", "Run src/volume.zig unit tests");
     volume_test_step.dependOn(&b.addRunArtifact(volume_tests).step);
+    // `zig build test-respawn`: the restart rule after an output goes away.
+    const respawn_tests = b.addTest(.{ .root_module = respawn_mod, .use_llvm = true, .use_lld = true });
+    const respawn_test_step = b.step("test-respawn", "Run src/respawn.zig unit tests");
+    respawn_test_step.dependOn(&b.addRunArtifact(respawn_tests).step);
     const powerprof_tests = b.addTest(.{ .root_module = powerprof_mod, .use_llvm = true, .use_lld = true });
     const powerprof_test_step = b.step("test-powerprof", "Run src/powerprof.zig unit tests");
     powerprof_test_step.dependOn(&b.addRunArtifact(powerprof_tests).step);
