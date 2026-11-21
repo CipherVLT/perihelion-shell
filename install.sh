@@ -849,9 +849,11 @@ cp /tmp/perihelionbar-temp/perihelion-shell-main/appdrawer.desktop ~/.local/shar
 
 # MangoWM: the lock screen's entry script (Super+L, the power menu and
 # swayidle run it) and its PAM stack, staged for the install step after the
-# build. perihelion-lockscreen itself is built with the shell below.
+# build. perihelion-lockscreen itself is built with the shell below. Also
+# perihelion-bar-start, which Mango's autostart runs to start the bar and
+# its dock (the same starter Perihelion Linux uses).
 if [ "$WM_IS_MANGO" -eq 1 ]; then
-    for f in perihelion-lock pam/perihelion-lock; do
+    for f in perihelion-lock pam/perihelion-lock perihelion-bar-start; do
         if [ ! -f "/tmp/perihelionbar-temp/perihelion-shell-main/$f" ]; then
             rm -rf /tmp/perihelionbar-temp
             die "Downloaded archive did not contain $f — layout may have changed upstream."
@@ -860,6 +862,7 @@ if [ "$WM_IS_MANGO" -eq 1 ]; then
     mkdir -p ~/.local/share/perihelionbar/lock
     cp /tmp/perihelionbar-temp/perihelion-shell-main/perihelion-lock ~/.local/share/perihelionbar/lock/perihelion-lock
     cp /tmp/perihelionbar-temp/perihelion-shell-main/pam/perihelion-lock ~/.local/share/perihelionbar/lock/perihelion-lock.pam
+    cp /tmp/perihelionbar-temp/perihelion-shell-main/perihelion-bar-start ~/.local/share/perihelionbar/perihelion-bar-start
 fi
 
 rm -rf /tmp/perihelionbar-temp
@@ -1348,6 +1351,10 @@ if [ "$WM_IS_MANGO" -eq 1 ]; then
         die "/usr/bin/perihelion-lockscreen is missing shared libraries"
     fi
     ok "Lock screen installed: Super+L, the power menu, and swayidle (10 idle minutes, before suspend) run perihelion-lock"
+    run_spinner "Installing perihelion-bar-start to /usr/bin" \
+        sudo install -Dm755 ~/.local/share/perihelionbar/perihelion-bar-start /usr/bin/perihelion-bar-start \
+        || die "Failed to install /usr/bin/perihelion-bar-start."
+    ok "perihelion-bar-start installed: Mango starts the bar and its dock with it (run it again to restart both)"
     # Configs are deployed no-clobber, so a Mango config that existed before
     # keeps its own lock setup. Say what to add rather than editing it.
     if ! grep -rqs 'perihelion-lock' ~/.config/mango/; then
