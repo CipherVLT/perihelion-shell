@@ -73,7 +73,7 @@ PanelWindow {
     // which reads as a no-op to the user.
     readonly property var powerActions: [
         // Under MangoWM nothing answers loginctl's lock request: Perihelion's
-        // perihelion-lock (swaylock in the wallpaper's colors) when present.
+        // perihelion-lock (Perihelion's lock screen) when present.
         { label: "Lock",     cmd: ["sh", "-c", "if command -v perihelion-lock >/dev/null 2>&1; then exec perihelion-lock; else exec loginctl lock-session; fi"] },
         { label: "Suspend",  cmd: ["loginctl", "suspend"] },
         // Compositor-aware logout: under Hyprland this is the Lua-wrapped

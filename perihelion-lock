@@ -1,0 +1,7 @@
+#!/bin/sh
+# Lock the screen (Mango): Super+L, the power menu, and swayidle (after 10
+# idle minutes and before suspend). perihelion-lockscreen -f returns only
+# once the compositor has confirmed the lock and every monitor shows it, so
+# swayidle's before-sleep hook can never suspend an unlocked desktop. A
+# second press while locked exits quietly and leaves the lock alone.
+exec perihelion-lockscreen -f "$@"

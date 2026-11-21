@@ -1,0 +1,3 @@
+#%PAM-1.0
+# perihelion-lockscreen: the same password check as a console login.
+auth include login
