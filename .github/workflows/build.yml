@@ -93,6 +93,9 @@ jobs:
       - name: Unit-test the shared volume maths (pactl lines, poll text, slider value <-> x)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-volume
+      - name: "Check the Mango config: Super+I Glance, Super+L lock, swayidle, dbus, bar and shell autostart"
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-mango-config
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc

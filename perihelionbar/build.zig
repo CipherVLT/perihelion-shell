@@ -265,6 +265,21 @@ pub fn build(b: *Build) !void {
     const powerprof_test_step = b.step("test-powerprof", "Run src/powerprof.zig unit tests");
     powerprof_test_step.dependOn(&b.addRunArtifact(powerprof_tests).step);
 
+    // `zig build test-mango-config`: src/mango_config_check.zig against
+    // sample configs and the repo's own mango/ files (Super+I -> Glance,
+    // Super+L -> lock, swayidle, dbus, bar + shell autostart). Pure std.
+    const mango_check_mod = b.createModule(.{
+        .root_source_file = b.path("src/mango_config_check.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mango_check_mod.addAnonymousImport("mango_config_conf", .{ .root_source_file = b.path("../mango/config.conf") });
+    mango_check_mod.addAnonymousImport("mango_keybinds_conf", .{ .root_source_file = b.path("../mango/cfg/keybinds.conf") });
+    mango_check_mod.addAnonymousImport("mango_autostart_conf", .{ .root_source_file = b.path("../mango/cfg/autostart.conf") });
+    const mango_check_tests = b.addTest(.{ .root_module = mango_check_mod, .use_llvm = true, .use_lld = true });
+    const mango_check_step = b.step("test-mango-config", "Run src/mango_config_check.zig unit tests");
+    mango_check_step.dependOn(&b.addRunArtifact(mango_check_tests).step);
+
     // `zig build test-icons`: the icon theme lookup (src/icontheme.zig),
     // which main.zig's tests don't reach.
     const icon_mod = b.createModule(.{
