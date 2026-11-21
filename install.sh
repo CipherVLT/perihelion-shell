@@ -1319,6 +1319,34 @@ ok "perihelion-shell built and installed to /usr/bin/perihelion-shell (perihelio
 # and swayidle run (it adds -f). The PAM stack is a copy of `login`'s
 # password check; an existing /etc/pam.d/perihelion-lock that differs is
 # only replaced after asking.
+# Configs are deployed no-clobber, so a Mango config that existed before
+# keeps its own lines. Say exactly what to add rather than editing it; a
+# fresh ~/.config/mango already has all of these.
+mango_config_hints() {
+    local dir=~/.config/mango missing=()
+    [ -d "$dir" ] || return 0
+    has_line() { grep -rqsE "$1" "$dir"; }
+    has_line '^[[:space:]]*bind[[:space:]]*=.*perihelion-shell glance toggle' \
+        || missing+=("cfg/keybinds.conf:  bind = SUPER, i, spawn, perihelion-shell glance toggle")
+    has_line '^[[:space:]]*bind[[:space:]]*=.*spawn[[:space:]]*,[[:space:]]*perihelion-lock[[:space:]]*$' \
+        || missing+=("cfg/keybinds.conf:  bind = SUPER, l, spawn, perihelion-lock")
+    has_line '^[[:space:]]*exec_once[[:space:]]*=[[:space:]]*swayidle .*perihelion-lock' \
+        || missing+=("cfg/autostart.conf: exec_once=swayidle -w timeout 600 perihelion-lock before-sleep perihelion-lock")
+    has_line '^[[:space:]]*exec_once[[:space:]]*=[[:space:]]*dbus-update-activation-environment' \
+        || missing+=("cfg/autostart.conf: exec_once=dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE")
+    has_line '^[[:space:]]*exec_once[[:space:]]*=[[:space:]]*perihelion-bar-start' \
+        || missing+=("cfg/autostart.conf: exec_once=perihelion-bar-start   (replaces a bare perihelionbar / perihelion-bar line)")
+    if ((${#missing[@]})); then
+        warn "Your ~/.config/mango is missing lines Perihelion needs. Add:"
+        printf '      %s\n' "${missing[@]}"
+    fi
+    # Super+I opens Glance; an older config binds it to minimize.
+    if grep -rqsiE '^[[:space:]]*bind[[:space:]]*=[[:space:]]*SUPER[[:space:]]*,[[:space:]]*i[[:space:]]*,' "$dir" \
+        && ! grep -rqsiE '^[[:space:]]*bind[[:space:]]*=[[:space:]]*SUPER[[:space:]]*,[[:space:]]*i[[:space:]]*,[[:space:]]*spawn[[:space:]]*,[[:space:]]*perihelion-shell glance toggle' "$dir"; then
+        warn "Super+I is bound to something else in ~/.config/mango; remove that line (Perihelion moves minimize to: bind = SUPER, j, minimized,)"
+    fi
+    unset -f has_line
+}
 install_lock_pam() {
     local src=~/.local/share/perihelionbar/lock/perihelion-lock.pam dst=/etc/pam.d/perihelion-lock answer=""
     if [ -e "$dst" ]; then
@@ -1355,13 +1383,7 @@ if [ "$WM_IS_MANGO" -eq 1 ]; then
         sudo install -Dm755 ~/.local/share/perihelionbar/perihelion-bar-start /usr/bin/perihelion-bar-start \
         || die "Failed to install /usr/bin/perihelion-bar-start."
     ok "perihelion-bar-start installed: Mango starts the bar and its dock with it (run it again to restart both)"
-    # Configs are deployed no-clobber, so a Mango config that existed before
-    # keeps its own lock setup. Say what to add rather than editing it.
-    if ! grep -rqs 'perihelion-lock' ~/.config/mango/; then
-        warn "Your ~/.config/mango doesn't run the lock screen yet. To use it, add:"
-        printf '      %s\n' "cfg/keybinds.conf:  bind = SUPER, l, spawn, perihelion-lock" \
-            "cfg/autostart.conf: exec_once=swayidle -w timeout 600 perihelion-lock before-sleep perihelion-lock"
-    fi
+    mango_config_hints
 fi
 
 # Seed the calendar widget's reminders file with its format reference on
