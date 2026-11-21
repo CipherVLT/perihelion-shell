@@ -44,6 +44,7 @@ trap cleanup EXIT
 
 font=$(fc-match -f '%{file}' monospace)
 printf '{"appearance":{"font_path":"%s","position":"top"},"dock":{"enabled":true}}\n' "${font}" > "${HOME}/.config/perihelionbar/config.json"
+printf '{"font_path":"%s"}\n' "${font}" > "${HOME}/.config/perihelionbar/shell.json"
 
 echo "Starting a headless compositor"
 WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
