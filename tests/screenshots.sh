@@ -158,6 +158,20 @@ echo "Network"
 settings_shot Network network-vpn-connected
 FAKE_VPN=down settings_shot Network network-vpn-disconnected
 
+echo "Updates"
+# Before any check, then with a made-up release saved by a check (fake JSON,
+# no network): "v0.2.0 is available", its notes, Download live.
+settings_shot Updates updates-1-not-checked
+mkdir -p "${HOME}/.local/state/perihelionbar"
+cat > "${HOME}/.local/state/perihelionbar/latest-release.json" <<'FAKERELEASE'
+{"tag_name":"v0.2.0","name":"Perihelion Shell 0.2.0","draft":false,"prerelease":false,
+ "body":"Changes\n\n- Lock screen: readable on bright wallpapers\n- Bar, dock and desktop come back after resume\n- Settings > Updates",
+ "assets":[]}
+FAKERELEASE
+printf 'last_checked=%s\nlatest_tag=v0.2.0\nnotified_tag=\n' "$(( $(date +%s) - 7200 ))" > "${HOME}/.local/state/perihelionbar/updates"
+printf 'install.sh abc1234\n' > "${HOME}/.local/state/perihelionbar/install-method"
+settings_shot Updates updates-2-available
+
 echo "Theme mode"
 theme() { PERIHELION_GLASS_FORCE=1 python3 -I "${repo}/perihelion-theme" --color '#d9a441' --force "$@" >/dev/null 2>&1; }
 # Auto mode with a light palette: light window glass (the look in the report).
