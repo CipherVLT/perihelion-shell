@@ -823,6 +823,7 @@ const ppsvc = @import("powerprof");
 // Volume parsing and slider maths, shared with the shell's Glance: src/volume.zig.
 const volmath = @import("volume");
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 // Used to probe for binaries (mirroring icontheme.zig's own extern).
 extern "c" fn access(path: [*:0]const u8, mode: c_int) c_int;
@@ -12263,6 +12264,9 @@ fn layerSurfaceListener(
             // Mango closes every layer surface on an output that goes away
             // (unplug, or a GPU re-probing its connectors on resume). Come
             // back on the new output instead of leaving the desktop bare.
+            // realMain dropped PERIHELIONBAR_DOCK at start; put it back so the
+            // dock comes back as the dock, not as a second bar.
+            if (dock_mode) _ = setenv("PERIHELIONBAR_DOCK", "1", 1);
             switch (respawn.restartSelf()) {
                 .restarting => logging.step("layer surface closed by the compositor (output gone?); restarting", .{}),
                 .gave_up => logging.warn("layer surface closed again; {d} restarts in {d} s, not restarting", .{ respawn.MAX_IN_WINDOW, respawn.WINDOW_S }),
