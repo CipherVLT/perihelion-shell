@@ -166,6 +166,9 @@ jobs:
       - name: Unit-test Glance's Apps tab (pins, Mango clients, merge, argv, layout)
         working-directory: perihelionbar-shell
         run: /opt/zig/zig build test-glance-apps
+      - name: Unit-test the lock screen logic (states, password wiping, hints, fake auth, text, layout)
+        working-directory: perihelionbar-shell
+        run: /opt/zig/zig build test-lock
       - name: Check the app drawer's QML parses
         run: |
           dnf5 install -y --setopt=install_weak_deps=False qt6-qtdeclarative-devel

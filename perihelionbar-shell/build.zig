@@ -315,9 +315,25 @@ pub fn build(b: *Build) !void {
     const glance_apps_test_run = b.addRunArtifact(glance_apps_tests);
     glance_apps_test_step.dependOn(&glance_apps_test_run.step);
 
+    // `zig build test-lock`: src/lock/logic.zig's unit tests — the lock
+    // screen's session states, password buffer wiping, wrong-password and
+    // caps-lock hints, auth result handling (against a fake worker, never
+    // PAM), clock/date text, layout, settings parsing and -f readiness.
+    // Pure std, no display or libraries needed.
+    const lock_logic_mod = b.createModule(.{
+        .root_source_file = b.path("src/lock/logic.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const lock_tests = b.addTest(.{ .root_module = lock_logic_mod, .use_llvm = true, .use_lld = true });
+    const lock_test_step = b.step("test-lock", "Run src/lock/logic.zig unit tests");
+    const lock_test_run = b.addRunArtifact(lock_tests);
+    lock_test_step.dependOn(&lock_test_run.step);
+
     // `zig build test`: every unit test in this package, so both packages
     // answer the same command.
     const test_step = b.step("test", "Run all perihelionbar-shell unit tests");
+    test_step.dependOn(&lock_test_run.step);
     test_step.dependOn(&widgets_test_run.step);
     test_step.dependOn(&glance_test_run.step);
     test_step.dependOn(&glance_media_test_run.step);
