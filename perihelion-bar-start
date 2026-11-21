@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Starts Perihelion Bar and its dock at login (Mango's autostart.conf runs
+# it); running it again restarts both. The same starter Perihelion Linux
+# uses, so a Mango config behaves the same on both.
+#
+# The bar waits until PipeWire/WirePlumber have a default audio output, so
+# its cava connects to it (started earlier, cava can stay unconnected and
+# the visualizer flat); at most 10 seconds.
+#
+# The dock is a second Perihelion Bar in dock mode (PERIHELIONBAR_DOCK=1): the
+# pinned apps from ~/.config/perihelionbar/config.json at the bottom, with the
+# app drawer first and the trash last. It is off until switched on in
+# Perihelion Settings (Modules > Dock); when off it exits right away.
+#
+# Exactly one bar and one dock: every running copy is stopped first, and
+# each new copy holds a lock, so a second one of either kind just exits.
+
+if pkill -x perihelion-bar 2>/dev/null; then
+    for _ in $(seq 1 20); do
+        pgrep -x perihelion-bar >/dev/null || break
+        sleep 0.1
+    done
+    pkill -9 -x perihelion-bar 2>/dev/null
+fi
+for _ in $(seq 1 20); do
+    wpctl inspect @DEFAULT_AUDIO_SINK@ >/dev/null 2>&1 && break
+    sleep 0.5
+done
+PERIHELIONBAR_DOCK=1 setsid -f perihelion-bar >/dev/null 2>&1
+# Explicitly not the dock, even if this script inherited PERIHELIONBAR_DOCK=1.
+exec env -u PERIHELIONBAR_DOCK perihelion-bar "$@"
