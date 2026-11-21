@@ -187,6 +187,31 @@ makoctl runs only when you open the panel or press one of the two buttons, never
 
 Pills that are on wear your accent colour. The states are read only while the panel is open: once when it opens and every 2 seconds after, each command stopped if it hangs for 3 seconds. Nothing runs while it's closed.
 
+## Lock screen (MangoWM)
+
+**perihelion-lockscreen** locks the session: the wallpaper under soft fades, the date and a large clock cut from frosted glass (AM/PM beside it in 12-hour mode), your account photo in a glass circle (`~/.face`, then the AccountsService icon, otherwise your initial on a frosted plate), your username, a frosted **Enter Password** pill with an arrow, and one hint line: *Press Enter to unlock*, *Caps Lock is on*, *Checking…* or *Incorrect password*. Escape clears what you typed.
+
+- **When it runs:** `Super + L`, **Lock** in the power menu, and swayidle after 10 idle minutes and before every suspend. All three run `/usr/bin/perihelion-lock`, which starts `perihelion-lockscreen -f`. `-f` returns only once the compositor has confirmed the lock and every monitor shows it (at most 2 seconds), so a suspend can't catch the desktop unlocked. Pressing `Super + L` while locked does nothing and leaves the lock as it is.
+- **Follows your setup:** the current wallpaper (or the theme's background colour if the wallpaper can't be read), the theme's accent and red from `perihelion-theme`, and **Settings → 24-hour clock** (`clock_24h` in `shell.json`). The username is read when it starts.
+- **Safe by design:** it uses ext-session-lock-v1, so only a correct password unlocks. If the lock screen crashes or is killed, Mango keeps the session locked (see *If the lock screen crashes* below). It puts one lock surface on every monitor, including monitors plugged in while locked. The password is checked by PAM on a separate thread, using `/etc/pam.d/perihelion-lock` (`auth include login`, the same check as a console login; `login` itself if that file is missing). The typed password stays in memory that is never swapped and is wiped after every attempt and on exit. The log (`perihelion-lockscreen/` in the log folder) records only locks, unlocks, wrong attempts, PAM problems and monitors coming and going, never anything about the password.
+- **Light:** it isn't running while you're unlocked. While locked it draws a frame when the minute changes, when you type, and once a second for the caret while there's text in the field. cairo, pango and PAM are linked into this one program only.
+
+### If the lock screen crashes
+
+Mango then shows a plain locked background. Nothing on the desktop takes input, but Mango still switches consoles with `Ctrl + Alt + F1`–`F12`, and the session (with your open windows) is still there. To unlock:
+
+1. Switch to a text console: `Ctrl + Alt + F3`, and log in as yourself.
+2. Start the lock screen again on your session:
+
+   ```sh
+   export XDG_RUNTIME_DIR=/run/user/$(id -u)
+   ls "$XDG_RUNTIME_DIR"            # your session's socket: wayland-0 (or wayland-1, …)
+   WAYLAND_DISPLAY=wayland-0 perihelion-lockscreen -f
+   ```
+
+   Use the `wayland-N` name `ls` printed (not the `.lock` file). If there are several, it's the one Mango created; `perihelion-lockscreen` exits with an error on the wrong one, so try the next. With `-f` it returns to the prompt once the lock is back, and keeps running when you log out of the console (`exit`).
+3. Go back to the graphical session: `Ctrl + Alt + F1` (or `F2`, whichever shows your desktop), and unlock with your password.
+
 ## Welcome & Config
 
 **Perihelion Bar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.
@@ -208,6 +233,7 @@ Hyprland set (MangoWM in `~/.config/mango/cfg/keybinds.conf`, same spirit):
 | `SUPER + E` | Files |
 | `SUPER + Q` | Close window |
 | `SUPER + 1–0` | Workspaces |
+| `SUPER + L` | Lock the screen (MangoWM) |
 
 
 ## Images
@@ -228,6 +254,7 @@ Hyprland set (MangoWM in `~/.config/mango/cfg/keybinds.conf`, same spirit):
 - Install script start: **Ryzendew**.
 - `xero/xero-install.sh`: **XeroLinux Team** (Xero Arch Installer, GPL-3.0) — base-system installer this fork builds on.
 - Hyprland-settings UX inspired by **HyprMod** by **BlueManCZ**.
+- The lock screen's design and much of its code (`perihelionbar-shell/src/lock/`): **Event Horizon**'s lock screen. Copyright and licence in [NOTICE.md](NOTICE.md).
 - Palettes in `theme/palettes/`: **Event Horizon**'s colour themes (GPL-3.0), each crediting the scheme it is named after in `theme/palettes/NOTICE.md`. Monokai's are left out (no open licence).
 
 ## License
