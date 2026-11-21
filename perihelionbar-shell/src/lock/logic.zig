@@ -371,6 +371,88 @@ pub const Layout = struct {
         const dot_d = @max(self.field_h * 0.22, 6.0);
         return @intFromFloat(@max(1.0, (self.field_w - 16.0) / (dot_d * 2.0)));
     }
+
+    /// Where the date, the username and the hint sit (buffer pixels), a
+    /// little wider and taller than the text itself: what Legibility.measure
+    /// samples.
+    pub fn textBands(self: *const Layout) [3]Band {
+        return .{
+            .{ .x0 = self.w * 0.30, .x1 = self.w * 0.70, .y0 = self.date_top, .y1 = self.date_top + self.date_size * 1.6 },
+            .{ .x0 = self.w * 0.38, .x1 = self.w * 0.62, .y0 = self.user_top, .y1 = self.user_top + self.user_size * 1.6 },
+            .{ .x0 = self.w * 0.34, .x1 = self.w * 0.66, .y0 = self.hint_top, .y1 = self.hint_top + self.hint_size * 1.7 },
+        };
+    }
+};
+
+// --- readability on bright wallpapers --------------------------------------
+
+/// A rectangle in buffer pixels.
+pub const Band = struct { x0: f64, y0: f64, x1: f64, y1: f64 };
+
+/// Mean brightness (0..1, Rec. 709 weights on the stored values) of the
+/// opaque ARGB32 pixels inside `band`, sampled on a grid of at most about
+/// 48x16 points: enough to judge a text band, cheap enough to run once per
+/// output size. 0 for an empty band.
+pub fn bandLuma(px: []const u32, w: usize, h: usize, band: Band) f64 {
+    if (w == 0 or h == 0 or px.len < w * h) return 0;
+    const fw: f64 = @floatFromInt(w);
+    const fh: f64 = @floatFromInt(h);
+    const x0: usize = @intFromFloat(std.math.clamp(@floor(band.x0), 0, fw));
+    const x1: usize = @intFromFloat(std.math.clamp(@ceil(band.x1), 0, fw));
+    const y0: usize = @intFromFloat(std.math.clamp(@floor(band.y0), 0, fh));
+    const y1: usize = @intFromFloat(std.math.clamp(@ceil(band.y1), 0, fh));
+    if (x1 <= x0 or y1 <= y0) return 0;
+    const sx = @max(1, (x1 - x0) / 48);
+    const sy = @max(1, (y1 - y0) / 16);
+    var sum: f64 = 0;
+    var n: usize = 0;
+    var y = y0;
+    while (y < y1) : (y += sy) {
+        var x = x0;
+        while (x < x1) : (x += sx) {
+            const p = px[y * w + x];
+            const r: f64 = @floatFromInt((p >> 16) & 0xff);
+            const g: f64 = @floatFromInt((p >> 8) & 0xff);
+            const b: f64 = @floatFromInt(p & 0xff);
+            sum += (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+            n += 1;
+        }
+    }
+    return if (n == 0) 0 else sum / @as(f64, @floatFromInt(n));
+}
+
+/// Below this mean brightness the white text already reads well: nothing
+/// is added, the screen stays exactly as designed.
+pub const BRIGHT_LUMA: f64 = 0.50;
+/// Strongest darkening, reached at FULL_LUMA and above (a white sky).
+pub const MAX_SCRIM: f64 = 0.34;
+pub const MIN_SCRIM: f64 = 0.14;
+pub const FULL_LUMA: f64 = 0.85;
+
+/// How dark the soft patch behind one line of text is: 0 unless the
+/// wallpaper behind it is bright, then rising with the brightness.
+pub fn scrimAlpha(luma: f64) f64 {
+    if (!(luma >= BRIGHT_LUMA)) return 0; // also catches NaN
+    const t = std.math.clamp((luma - BRIGHT_LUMA) / (FULL_LUMA - BRIGHT_LUMA), 0, 1);
+    return MIN_SCRIM + (MAX_SCRIM - MIN_SCRIM) * t;
+}
+
+/// The darkening for the three text lines of one output.
+pub const Legibility = struct {
+    date: f64 = 0,
+    user: f64 = 0,
+    hint: f64 = 0,
+
+    /// From the finished backdrop (wallpaper + tint + fades), so it judges
+    /// what is really behind the text.
+    pub fn measure(px: []const u32, w: usize, h: usize, l: *const Layout) Legibility {
+        const b = l.textBands();
+        return .{
+            .date = scrimAlpha(bandLuma(px, w, h, b[0])),
+            .user = scrimAlpha(bandLuma(px, w, h, b[1])),
+            .hint = scrimAlpha(bandLuma(px, w, h, b[2])),
+        };
+    }
 };
 
 // --- settings files --------------------------------------------------------
@@ -737,4 +819,80 @@ test "-f readiness: locked plus frames, or the cap" {
     r.presented = 0;
     try tt.expect(r.ready(3000));
     try tt.expectEqual(@as(i32, 0), r.waitMs(9000));
+}
+
+test "scrim: nothing on dark or mid wallpapers, more on brighter ones" {
+    try tt.expectEqual(@as(f64, 0), scrimAlpha(0.0));
+    try tt.expectEqual(@as(f64, 0), scrimAlpha(0.30));
+    try tt.expectEqual(@as(f64, 0), scrimAlpha(BRIGHT_LUMA - 0.001));
+    try tt.expectEqual(@as(f64, 0), scrimAlpha(std.math.nan(f64)));
+    try tt.expectApproxEqAbs(MIN_SCRIM, scrimAlpha(BRIGHT_LUMA), 1e-9);
+    try tt.expectApproxEqAbs(MAX_SCRIM, scrimAlpha(FULL_LUMA), 1e-9);
+    try tt.expectApproxEqAbs(MAX_SCRIM, scrimAlpha(1.0), 1e-9);
+    // Monotone between the two ends.
+    var prev: f64 = 0;
+    var l: f64 = BRIGHT_LUMA;
+    while (l <= 1.0) : (l += 0.01) {
+        const a = scrimAlpha(l);
+        try tt.expect(a >= prev);
+        try tt.expect(a <= MAX_SCRIM);
+        prev = a;
+    }
+}
+
+test "bandLuma: white, black, and only the band counts" {
+    const w = 64;
+    const h = 40;
+    var px: [w * h]u32 = undefined;
+    // Top half white, bottom half black.
+    for (0..h) |y| for (0..w) |x| {
+        px[y * w + x] = if (y < h / 2) 0xFFFFFFFF else 0xFF000000;
+    };
+    try tt.expectApproxEqAbs(@as(f64, 1.0), bandLuma(&px, w, h, .{ .x0 = 0, .y0 = 0, .x1 = w, .y1 = 10 }), 1e-9);
+    try tt.expectApproxEqAbs(@as(f64, 0.0), bandLuma(&px, w, h, .{ .x0 = 0, .y0 = 25, .x1 = w, .y1 = 40 }), 1e-9);
+    const mid = bandLuma(&px, w, h, .{ .x0 = 0, .y0 = 10, .x1 = w, .y1 = 30 });
+    try tt.expect(mid > 0.4 and mid < 0.6);
+    // Out of range and empty bands are clamped, never read past the buffer.
+    try tt.expectApproxEqAbs(@as(f64, 0.0), bandLuma(&px, w, h, .{ .x0 = -50, .y0 = 30, .x1 = 900, .y1 = 900 }), 1e-9);
+    try tt.expectEqual(@as(f64, 0), bandLuma(&px, w, h, .{ .x0 = 10, .y0 = 10, .x1 = 10, .y1 = 20 }));
+    try tt.expectEqual(@as(f64, 0), bandLuma(px[0..10], w, h, .{ .x0 = 0, .y0 = 0, .x1 = w, .y1 = h }));
+    // Green weighs most (Rec. 709).
+    var g: [4]u32 = @splat(0xFF00FF00);
+    var b: [4]u32 = @splat(0xFF0000FF);
+    try tt.expect(bandLuma(&g, 2, 2, .{ .x0 = 0, .y0 = 0, .x1 = 2, .y1 = 2 }) > bandLuma(&b, 2, 2, .{ .x0 = 0, .y0 = 0, .x1 = 2, .y1 = 2 }));
+}
+
+test "Legibility.measure: bright screen darkens all three lines, dark screen none" {
+    const w = 640;
+    const h = 400;
+    const l = Layout.compute(w, h, 14);
+    var bright: [w * h]u32 = @splat(0xFFF2F0EA);
+    const lb = Legibility.measure(&bright, w, h, &l);
+    try tt.expect(lb.date > 0 and lb.user > 0 and lb.hint > 0);
+    var dark: [w * h]u32 = @splat(0xFF1A1C24);
+    const ld = Legibility.measure(&dark, w, h, &l);
+    try tt.expectEqual(Legibility{}, ld);
+    // Bright only behind the date: only the date gets the patch.
+    var mixed: [w * h]u32 = @splat(0xFF1A1C24);
+    const band = l.textBands()[0];
+    for (0..h) |y| for (0..w) |x| {
+        const fx: f64 = @floatFromInt(x);
+        const fy: f64 = @floatFromInt(y);
+        if (fy >= band.y0 - 2 and fy < band.y1 + 2 and fx >= band.x0 - 2 and fx < band.x1 + 2) mixed[y * w + x] = 0xFFFFFFFF;
+    };
+    const lm = Legibility.measure(&mixed, w, h, &l);
+    try tt.expect(lm.date > 0);
+    try tt.expectEqual(@as(f64, 0), lm.user);
+    try tt.expectEqual(@as(f64, 0), lm.hint);
+}
+
+test "textBands sit inside the screen and in reading order" {
+    const l = Layout.compute(1920, 1080, 30);
+    const b = l.textBands();
+    for (b) |r| {
+        try tt.expect(r.x0 >= 0 and r.x1 <= 1920 and r.y0 >= 0 and r.y1 <= 1080);
+        try tt.expect(r.x1 > r.x0 and r.y1 > r.y0);
+    }
+    try tt.expect(b[0].y1 < b[1].y0); // date above the username
+    try tt.expect(b[1].y1 < b[2].y1); // username above the hint
 }

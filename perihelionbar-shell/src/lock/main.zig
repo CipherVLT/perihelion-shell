@@ -182,6 +182,9 @@ const LockSurface = struct {
     /// The backdrop (wallpaper + tint + fades) at buffer size, copied into
     /// each frame so a keystroke never re-scales the wallpaper.
     base: []u32 = &.{},
+    /// Darkening behind the text lines, measured on `base` (bright
+    /// wallpapers only; all 0 otherwise).
+    legibility: logic.Legibility = .{},
     frame_cb: ?*wl.Callback = null,
 
     fn destroy(self: *LockSurface, gpa: std.mem.Allocator) void {
@@ -375,6 +378,8 @@ const State = struct {
             if (cairo.cairo_create(bs)) |cr| {
                 defer cairo.cairo_destroy(cr);
                 paint.paintBackdrop(cr, @intCast(bh), have_wall, self.palette);
+                cairo.cairo_surface_flush(bs);
+                ls.legibility = paint.measureLegibility(cr, ls.base, bw, bh, self.user);
             }
             cairo.cairo_surface_flush(bs);
         }
@@ -421,7 +426,8 @@ const State = struct {
             defer cairo.cairo_destroy(cr);
             var clock_buf: [16]u8 = undefined;
             var date_buf: [48]u8 = undefined;
-            const v = self.view(&clock_buf, &date_buf);
+            var v = self.view(&clock_buf, &date_buf);
+            v.legibility = ls.legibility;
             paint.paintLock(cr, @intCast(bw), @intCast(bh), &v);
         }
         cairo.cairo_surface_flush(surf);

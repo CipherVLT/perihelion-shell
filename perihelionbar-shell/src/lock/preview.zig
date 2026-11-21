@@ -22,7 +22,10 @@ fn render(gpa: std.mem.Allocator, dir: []const u8, name: []const u8, w: u32, h: 
     const cr = cairo.cairo_create(surf) orelse return error.Cairo;
     defer cairo.cairo_destroy(cr);
     paint.paintBackdrop(cr, @intCast(h), wall != null, pal);
-    paint.paintLock(cr, @intCast(w), @intCast(h), &v);
+    cairo.cairo_surface_flush(surf);
+    var lv = v;
+    lv.legibility = paint.measureLegibility(cr, px[0 .. w * h], w, h, v.user);
+    paint.paintLock(cr, @intCast(w), @intCast(h), &lv);
     cairo.cairo_surface_flush(surf);
     var pbuf: [700]u8 = undefined;
     const path = try std.fmt.bufPrintSentinel(&pbuf, "{s}/lock-{s}.png", .{ dir, name }, 0);

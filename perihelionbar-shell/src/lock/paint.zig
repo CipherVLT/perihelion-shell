@@ -36,6 +36,9 @@ pub const View = struct {
     caret_on: bool = false,
     avatar: ?*cairo.Surface = null,
     palette: logic.Palette = .{},
+    /// Darkening behind the date, username and hint, from the brightness of
+    /// the backdrop behind each (logic.Legibility); all 0 on dark wallpapers.
+    legibility: logic.Legibility = .{},
 };
 
 const Rgba = struct { r: f64, g: f64, b: f64, a: f64 };
@@ -267,12 +270,45 @@ const Text = struct {
 
 const shadow: Rgba = .{ .r = 0, .g = 0, .b = 0, .a = 0.16 };
 
-/// One close, faint shadow copy (cairo has no blur), then the text.
-fn showShadowed(cr: *Cr, t: *const Text, x: f64, y: f64, off: f64, col: Rgba) void {
-    set(cr, shadow);
-    t.show(cr, x, y + off);
+/// One close, faint shadow copy (cairo has no blur), then the text. Over a
+/// bright wallpaper (`scrim` > 0) the shadow gets darker and a second, wider
+/// copy is added, so the text keeps an edge.
+fn showShadowed(cr: *Cr, t: *const Text, x: f64, y: f64, off: f64, col: Rgba, scrim: f64) void {
+    shadowCopies(cr, t, x, y, off, scrim);
     set(cr, col);
     t.show(cr, x, y);
+}
+
+fn shadowCopies(cr: *Cr, t: *const Text, x: f64, y: f64, off: f64, scrim: f64) void {
+    if (scrim > 0) {
+        set(cr, .{ .r = 0, .g = 0, .b = 0, .a = @min(0.5, scrim * 0.9) });
+        t.show(cr, x, y + off * 2.0);
+    }
+    set(cr, .{ .r = 0, .g = 0, .b = 0, .a = shadow.a + scrim * 0.8 });
+    t.show(cr, x, y + off);
+}
+
+/// A soft dark patch behind one line of text (an elliptical radial fade, no
+/// hard edge), drawn only when the wallpaper behind that line is bright.
+fn softScrim(cr: *Cr, t: *const Text, x: f64, y: f64, size: f64, alpha: f64) void {
+    if (alpha <= 0 or t.w == 0) return;
+    const tw: f64 = @floatFromInt(t.w);
+    const th: f64 = @floatFromInt(t.h);
+    const rx = tw / 2.0 + size * 2.2;
+    const ry = th / 2.0 + size * 1.3;
+    const pat = cairo.cairo_pattern_create_radial(0, 0, 0, 0, 0, 1) orelse return;
+    defer cairo.cairo_pattern_destroy(pat);
+    // A smoothstep-like falloff, so the patch has no visible rim.
+    const stops = [_][2]f64{ .{ 0.0, 1.0 }, .{ 0.30, 0.90 }, .{ 0.50, 0.68 }, .{ 0.68, 0.40 }, .{ 0.84, 0.15 }, .{ 1.0, 0.0 } };
+    for (stops) |st| cairo.cairo_pattern_add_color_stop_rgba(pat, st[0], 0, 0, 0, alpha * st[1]);
+    cairo.cairo_save(cr);
+    cairo.cairo_translate(cr, x + tw / 2.0, y + th / 2.0);
+    cairo.cairo_scale(cr, rx, ry);
+    cairo.cairo_new_path(cr);
+    cairo.cairo_arc(cr, 0, 0, 1, 0, 2.0 * std.math.pi);
+    cairo.cairo_set_source(cr, pat);
+    cairo.cairo_fill(cr);
+    cairo.cairo_restore(cr);
 }
 
 /// Glyphs as frosted glass: the glyph outline becomes the clip, the
@@ -309,15 +345,20 @@ fn glassGlyphs(cr: *Cr, t: *const Text, x: f64, y: f64, size: f64, top_alpha: f6
     cairo.cairo_restore(cr);
 }
 
-fn drawDate(cr: *Cr, cx: f64, top: f64, size: f64, label: []const u8) void {
+fn drawDate(cr: *Cr, cx: f64, top: f64, size: f64, label: []const u8, scrim: f64) void {
     if (label.len == 0) return;
     var t = Text.init(cr, label, size, 600, 0.005 * size, "");
     defer t.deinit();
     if (t.w == 0) return;
     const x = cx - @as(f64, @floatFromInt(t.w)) / 2.0;
-    set(cr, shadow);
-    t.show(cr, x, top + @max(1.0, size * 0.06));
-    glassGlyphs(cr, &t, x, top, size, 0.70, 0.48);
+    softScrim(cr, &t, x, top, size, scrim);
+    shadowCopies(cr, &t, x, top, @max(1.0, size * 0.06), scrim);
+    // Frosted glyphs over a bright sky blur to white; lean on solid ink there.
+    if (scrim > 0) {
+        glassGlyphs(cr, &t, x, top, size, 0.70 + scrim * 0.8, 0.48 + scrim * 1.2);
+    } else {
+        glassGlyphs(cr, &t, x, top, size, 0.70, 0.48);
+    }
 }
 
 /// The big time, tracked tight with tabular figures, and the AM/PM run hung
@@ -527,16 +568,20 @@ fn drawField(cr: *Cr, l: *const logic.Layout, view: *const View) void {
 }
 
 fn drawHint(cr: *Cr, l: *const logic.Layout, view: *const View) void {
-    const col: Rgba = switch (view.hint) {
+    const base_col: Rgba = switch (view.hint) {
         .idle => .{ .r = 0.80, .g = 0.83, .b = 0.90, .a = 0.92 },
         .caps_lock => lighten(rgb(view.palette.accent, 1.0), 0.35),
         .checking => lighten(rgb(view.palette.accent, 1.0), 0.45),
         .wrong, .unavailable => lighten(rgb(view.palette.danger, 1.0), 0.35),
     };
+    // Over a bright backdrop the soft colours wash out: move them toward white.
+    const col = if (view.legibility.hint > 0) lighten(base_col, 0.55) else base_col;
     var t = Text.init(cr, view.hint.text(), l.hint_size, 500, 0, "");
     defer t.deinit();
     if (t.w == 0) return;
-    showShadowed(cr, &t, l.w / 2.0 - @as(f64, @floatFromInt(t.w)) / 2.0, l.hint_top, @max(1.0, l.hint_size * 0.08), col);
+    const x = l.w / 2.0 - @as(f64, @floatFromInt(t.w)) / 2.0;
+    softScrim(cr, &t, x, l.hint_top, l.hint_size, view.legibility.hint);
+    showShadowed(cr, &t, x, l.hint_top, @max(1.0, l.hint_size * 0.08), col, view.legibility.hint);
 }
 
 /// Everything above the backdrop. `cr` targets a surface that already holds
@@ -550,14 +595,30 @@ pub fn paintLock(cr: *Cr, w: i32, h: i32, view: *const View) void {
     defer user_text.deinit();
     const l = logic.Layout.compute(fw, fh, @floatFromInt(user_text.h));
 
-    drawDate(cr, fw / 2.0, l.date_top, l.date_size, view.date);
+    drawDate(cr, fw / 2.0, l.date_top, l.date_size, view.date, view.legibility.date);
     drawClock(cr, fw / 2.0, l.clock_top, l.clock_size, view.clock);
+    const ux = fw / 2.0 - @as(f64, @floatFromInt(user_text.w)) / 2.0;
+    // Under the avatar, so the patch never dims the plate's lower edge.
+    softScrim(cr, &user_text, ux, l.user_top, l.user_size, view.legibility.user);
     drawAvatar(cr, l.avatar_cx, l.avatar_cy, l.avatar_d, view.user, view.avatar);
     if (user_text.w > 0) {
-        showShadowed(cr, &user_text, fw / 2.0 - @as(f64, @floatFromInt(user_text.w)) / 2.0, l.user_top, @max(1.0, l.user_size * 0.08), .{ .r = 1, .g = 1, .b = 1, .a = 0.95 });
+        showShadowed(cr, &user_text, ux, l.user_top, @max(1.0, l.user_size * 0.08), .{ .r = 1, .g = 1, .b = 1, .a = 0.95 }, view.legibility.user);
     }
     drawField(cr, &l, view);
     drawHint(cr, &l, view);
+}
+
+/// How much to darken behind the date, username and hint on this backdrop
+/// (`px`, w x h, already holding paintBackdrop's result and flushed). The
+/// username's line height comes from the same font the screen uses, so the
+/// bands match what paintLock draws. Run once per output size.
+pub fn measureLegibility(cr: *Cr, px: []const u32, w: u32, h: u32, user: []const u8) logic.Legibility {
+    const fw: f64 = @floatFromInt(w);
+    const fh: f64 = @floatFromInt(h);
+    var user_text = Text.init(cr, user, logic.Layout.userSize(fh), 600, 0, "");
+    defer user_text.deinit();
+    const l = logic.Layout.compute(fw, fh, @floatFromInt(user_text.h));
+    return logic.Legibility.measure(px, w, h, &l);
 }
 
 /// Decodes an account photo into a premultiplied ARGB32 surface, at most

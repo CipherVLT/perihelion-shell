@@ -62,6 +62,7 @@ pub const cairo = struct {
     pub extern "c" fn cairo_set_line_join(cr: *Context, join: c_int) void;
 
     pub extern "c" fn cairo_pattern_create_linear(x0: f64, y0: f64, x1: f64, y1: f64) ?*Pattern;
+    pub extern "c" fn cairo_pattern_create_radial(cx0: f64, cy0: f64, r0: f64, cx1: f64, cy1: f64, r1: f64) ?*Pattern;
     pub extern "c" fn cairo_pattern_add_color_stop_rgba(p: *Pattern, offset: f64, r: f64, g: f64, b: f64, a: f64) void;
     pub extern "c" fn cairo_pattern_set_filter(p: *Pattern, filter: c_int) void;
     pub extern "c" fn cairo_pattern_destroy(p: *Pattern) void;
