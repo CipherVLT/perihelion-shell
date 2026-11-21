@@ -66,6 +66,9 @@ const libc = struct {
     extern "c" fn pipe2(fds: *[2]c_int, flags: c_int) c_int;
     extern "c" fn memfd_create(name: [*:0]const u8, flags: c_uint) c_int;
     extern "c" fn ftruncate(fd: c_int, len: i64) c_int;
+    /// libc's poll: returns -1 (EINTR) when a stop signal arrives, where
+    /// std.posix.poll would retry and only notice at the next timeout.
+    extern "c" fn poll(fds: [*]posix.pollfd, n: c_ulong, timeout: c_int) c_int;
 
     const O_RDONLY = 0;
     const O_RDWR = 2;
@@ -867,8 +870,8 @@ fn run(st: *State) u8 {
             .{ .fd = st.worker.fd(), .events = posix.POLL.IN, .revents = 0 },
         };
         const nfds: usize = if (st.worker.running()) 2 else 1;
-        const ready = posix.poll(fds[0..nfds], timeout) catch 0;
-        if (ready == 0) continue;
+        const ready = libc.poll(&fds, nfds, timeout);
+        if (ready <= 0) continue; // timeout, or a signal (checked at the top)
         if (fds[0].revents & (posix.POLL.ERR | posix.POLL.HUP) != 0) {
             logging.err("lock: lost the Wayland connection", .{});
             return 1;
