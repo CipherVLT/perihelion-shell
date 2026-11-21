@@ -22,6 +22,9 @@ pub fn build(b: *Build) !void {
     // Screenshot capture for the overview's window thumbnails (vendored
     // from swaywm/wlr-protocols; Hyprland implements zwlr_screencopy too).
     scanner.addCustomProtocol(b.path("protocols/wlr-screencopy-unstable-v1.xml"));
+    // The lock screen (perihelion-lockscreen, below): ext-session-lock-v1
+    // from the system's wayland-protocols (staging, 1.25+).
+    scanner.addSystemProtocol("staging/ext-session-lock/ext-session-lock-v1.xml");
 
     scanner.generate("wl_compositor", 4);
     scanner.generate("wl_shm", 1);
@@ -32,6 +35,7 @@ pub fn build(b: *Build) !void {
     // buffer/copy/ready/failed flow the overview needs, and skipping v3's
     // buffer_done handshake keeps the capture state machine trivial.
     scanner.generate("zwlr_screencopy_manager_v1", 3);
+    scanner.generate("ext_session_lock_manager_v1", 1);
     // xdg_wm_base is generated too (the scanner pulls it in for surface
     // role wiring) even though the shell itself never creates an xdg window.
 
@@ -243,6 +247,21 @@ pub fn build(b: *Build) !void {
     _ = wayland_dep;
 
     b.installArtifact(exe);
+
+    // `zig build lock-preview`: draws the lock screen's states to PNG
+    // without locking (src/lock/preview.zig). Not installed.
+    const preview_mod = b.createModule(.{
+        .root_source_file = b.path("src/lock/preview.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    preview_mod.linkSystemLibrary("cairo", .{});
+    preview_mod.linkSystemLibrary("pangocairo", .{});
+    preview_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{});
+    const preview_exe = b.addExecutable(.{ .name = "lock-preview", .root_module = preview_mod, .use_llvm = true, .use_lld = true });
+    const preview_step = b.step("lock-preview", "Build lock-preview (lock screen pictures, not installed)");
+    preview_step.dependOn(&b.addInstallArtifact(preview_exe, .{}).step);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
