@@ -27,7 +27,12 @@ log="${PERIHELIONBAR_LOG_DIR}/perihelion-lockscreen/trace.log"
 fails=0
 pass() { echo "  ok    $*"; }
 fail() { echo "  FAIL  $*"; fails=$((fails + 1)); }
-lockers() { pgrep -x perihelion-lock | wc -l; } # comm is cut to 15 chars
+# Live lockers only. The -f child is re-parented when its parent exits, and a
+# container's PID 1 may never reap it, so exited lockers linger as zombies
+# that pgrep and kill -0 still see.
+live() { [[ -e /proc/$1 ]] && [[ $(awk '/^State:/{print $2}' "/proc/$1/status" 2>/dev/null) != Z ]]; }
+locker_pids() { local p; for p in $(pgrep -x perihelion-lock); do live "$p" && echo "$p"; done; } # comm is cut to 15 chars
+lockers() { locker_pids | wc -l; }
 cleanup() {
     pkill -9 -x perihelion-lock 2>/dev/null
     [[ -n ${sway_pid:-} ]] && kill "${sway_pid}" 2>/dev/null
@@ -67,7 +72,7 @@ if [[ ${rc} == 0 ]]; then pass "-f returned 0 after ${ms} ms"; else fail "-f ret
 sleep 0.3
 if [[ $(lockers) == 1 ]]; then pass "the locker keeps running in the background"; else fail "$(lockers) locker(s) running, expected 1"; fi
 if grep -q 'lock: locked' "${log}" 2>/dev/null; then pass "the compositor confirmed the lock"; else fail "no 'locked' in the log"; fi
-first=$(pgrep -x perihelion-lock | head -n 1)
+first=$(locker_pids | head -n 1)
 
 if [[ -n ${shots} ]] && command -v grim >/dev/null; then
     mkdir -p "${shots}"
@@ -78,20 +83,20 @@ echo "A second start leaves the first lock alone"
 read -r rc ms < <(start_f)
 if [[ ${rc} == 0 ]]; then pass "second -f exited 0 (${ms} ms)"; else fail "second -f returned ${rc}"; fi
 sleep 0.3
-if [[ $(lockers) == 1 ]] && kill -0 "${first}" 2>/dev/null; then pass "the first locker is still in charge"; else fail "the first locker is gone or a second one stayed"; fi
+if [[ $(lockers) == 1 ]] && live "${first}"; then pass "the first locker is still in charge"; else fail "the first locker is gone or a second one stayed"; fi
 if grep -q 'another lock is active' "${log}"; then pass "refusal logged"; else fail "refusal not logged"; fi
 
 echo "SIGTERM ends the locker without unlocking"
 kill -TERM "${first}"
-for _ in $(seq 1 30); do kill -0 "${first}" 2>/dev/null || break; sleep 0.1; done
-if ! kill -0 "${first}" 2>/dev/null; then pass "the locker exited on SIGTERM"; else fail "the locker ignored SIGTERM"; fi
+for _ in $(seq 1 30); do live "${first}" || break; sleep 0.1; done
+if ! live "${first}"; then pass "the locker exited on SIGTERM"; else fail "the locker ignored SIGTERM"; fi
 if grep -q 'exiting with the session still locked' "${log}"; then pass "left the session locked"; else fail "no 'still locked' in the log"; fi
 
 echo "Recovery: a new locker takes the lock over"
 read -r rc ms < <(start_f)
 if [[ ${rc} == 0 ]]; then pass "relock after the dead locker: -f returned 0 (${ms} ms)"; else fail "relock returned ${rc}"; fi
 sleep 0.3
-second=$(pgrep -x perihelion-lock | head -n 1)
+second=$(locker_pids | head -n 1)
 if [[ -n ${second} ]]; then pass "a locker is running again"; else fail "no locker after relock"; fi
 
 echo "SIGKILL (a crash) does not unlock either"
