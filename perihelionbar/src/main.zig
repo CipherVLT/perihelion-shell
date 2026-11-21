@@ -15,6 +15,7 @@ const font_mod = @import("font.zig");
 const icontheme = @import("icontheme.zig");
 const dbusmenu = @import("dbusmenu.zig");
 const logging = @import("logging.zig");
+const respawn = @import("respawn");
 const singleton = @import("singleton.zig");
 const desktop_entries = @import("desktop_entries.zig");
 // Pin/window matching, the desktop icon index and the compositor JSON
@@ -12259,6 +12260,14 @@ fn layerSurfaceListener(
             };
         },
         .closed => {
+            // Mango closes every layer surface on an output that goes away
+            // (unplug, or a GPU re-probing its connectors on resume). Come
+            // back on the new output instead of leaving the desktop bare.
+            switch (respawn.restartSelf()) {
+                .restarting => logging.step("layer surface closed by the compositor (output gone?); restarting", .{}),
+                .gave_up => logging.warn("layer surface closed again; {d} restarts in {d} s, not restarting", .{ respawn.MAX_IN_WINDOW, respawn.WINDOW_S }),
+                .failed => logging.err("layer surface closed; could not restart", .{}),
+            }
             std.process.exit(0);
         },
     }
