@@ -423,9 +423,15 @@ pub fn build(auto_check: bool, interval_h: u32) *gtk.GtkBox {
     gtk.gtk_label_set_wrap(label, 1);
     gtk.gtk_label_set_xalign(label, 0);
     gtk_label_set_selectable(@ptrCast(label), 1);
-    gtk.gtk_widget_add_css_class(@ptrCast(label), "card");
-    gtk.gtk_widget_set_margin_top(@ptrCast(label), 4);
-    gtk.adw_preferences_group_add(notes, @ptrCast(label));
+    // The text inside a card with room around it (a label carries no padding).
+    const card = gtk.gtk_box_new(gtk.ORIENTATION_VERTICAL, 0);
+    gtk.gtk_widget_add_css_class(@ptrCast(card), "card");
+    gtk.gtk_widget_set_margin_top(@ptrCast(label), 14);
+    gtk.gtk_widget_set_margin_bottom(@ptrCast(label), 14);
+    gtk.gtk_widget_set_margin_start(@ptrCast(label), 16);
+    gtk.gtk_widget_set_margin_end(@ptrCast(label), 16);
+    gtk.gtk_box_append(card, @ptrCast(label));
+    gtk.adw_preferences_group_add(notes, @ptrCast(card));
     gtk.gtk_box_append(outer, @ptrCast(notes));
     gtk_widget_set_visible(@ptrCast(notes), 0);
     g_notes_group = notes;
