@@ -16,6 +16,7 @@ const icontheme = @import("icontheme.zig");
 const dbusmenu = @import("dbusmenu.zig");
 const logging = @import("logging.zig");
 const respawn = @import("respawn");
+const cli_version = @import("cli_version");
 const singleton = @import("singleton.zig");
 const desktop_entries = @import("desktop_entries.zig");
 // Pin/window matching, the desktop icon index and the compositor JSON
@@ -6294,6 +6295,7 @@ fn drawAllBars(bars: []Bar) void {
 }
 
 pub fn main() void {
+    cli_version.handle("perihelion-bar");
     logging.init(if (getenv("PERIHELIONBAR_DOCK") != null) "perihelion-dock" else "perihelion-bar");
     realMain() catch |err| {
         logging.err("fatal: {s}", .{@errorName(err)});

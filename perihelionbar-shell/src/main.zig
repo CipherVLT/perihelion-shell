@@ -19,6 +19,7 @@ const zwlr = wayland.client.zwlr;
 const font_mod = @import("font");
 const logging = @import("logging");
 const respawn = @import("respawn");
+const cli_version = @import("cli_version");
 const widgets_mod = @import("widgets");
 const glass = @import("glass.zig");
 const overview_mod = @import("overview");
@@ -2533,6 +2534,7 @@ fn cliSend(msg: []const u8) noreturn {
 }
 
 pub fn main(init: std.process.Init.Minimal) !void {
+    cli_version.handle("perihelion-shell");
     // Client mode: `perihelionbar-shell overview [toggle|open|close]` sends the
     // verb to the running daemon over its control socket and prints the
     // reply — this is exactly what Alt+W runs (see hyprland.lua). Anything

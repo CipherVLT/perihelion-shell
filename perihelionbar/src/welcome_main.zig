@@ -12,6 +12,7 @@
 // the same stable, well-understood layer as the bar.
 
 const std = @import("std");
+const cli_version = @import("cli_version");
 const gtk = @import("welcome_gtk.zig");
 const logging = @import("logging.zig");
 
@@ -2306,6 +2307,7 @@ fn onAppActivate(app: *gtk.GApplication, _: ?*anyopaque) callconv(.c) void {
 }
 
 pub fn main() void {
+    cli_version.handle("perihelionbar-welcome");
     logging.init("perihelionbar");
     realMain() catch |err| {
         logging.err("fatal: {s}", .{@errorName(err)});

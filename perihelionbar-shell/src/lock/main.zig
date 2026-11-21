@@ -29,6 +29,7 @@ const wayland = @import("wayland");
 const wl = wayland.client.wl;
 const ext = wayland.client.ext;
 const logging = @import("logging");
+const cli_version = @import("cli_version");
 const logic = @import("logic.zig");
 const auth = @import("auth.zig");
 const paint = @import("paint.zig");
@@ -750,6 +751,7 @@ fn daemonize() c_int {
 }
 
 pub fn main(init: std.process.Init.Minimal) u8 {
+    cli_version.handle("perihelion-lockscreen");
     var daemon = false;
     var args = std.process.Args.Iterator.init(init.args);
     _ = args.next();

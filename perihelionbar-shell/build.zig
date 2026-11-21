@@ -203,6 +203,15 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("gdkpixbuf", pixbuf_mod); // glass.zig: the blurred wallpaper behind the cards
     exe_mod.addImport("font", font_mod);
     exe_mod.addImport("logging", logging_mod);
+    // Version and commit for --version (shared module, this package's build).
+    const cli_version_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/cli_version.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    cli_version_mod.addImport("build_info", buildInfoModule(b));
+    exe_mod.addImport("cli_version", cli_version_mod);
     // Restart after Mango closes the desktop surface (output gone, e.g. on
     // resume); shared with the bar.
     exe_mod.addImport("respawn", b.createModule(.{
@@ -269,6 +278,7 @@ pub fn build(b: *Build) !void {
     });
     lock_mod.addImport("wayland", wayland_mod);
     lock_mod.addImport("logging", logging_mod);
+    lock_mod.addImport("cli_version", cli_version_mod);
     lock_mod.linkSystemLibrary("wayland-client", .{});
     lock_mod.linkSystemLibrary("cairo", .{});
     lock_mod.linkSystemLibrary("pangocairo", .{});
@@ -395,4 +405,24 @@ pub fn build(b: *Build) !void {
     test_step.dependOn(&glance_media_test_run.step);
     test_step.dependOn(&glance_weather_test_run.step);
     test_step.dependOn(&glance_apps_test_run.step);
+}
+
+/// The version every program reports (`--version`, Settings > Updates).
+/// Release builds pass -Dversion=<tag without v> and -Dcommit=<sha>; local
+/// builds say this and ask git for the commit. Keep in step with the other
+/// package's build.zig.
+const DEFAULT_VERSION = "0.1.0-dev";
+
+fn buildInfoModule(b: *Build) *Build.Module {
+    const version = b.option([]const u8, "version", "Version compiled into the programs") orelse DEFAULT_VERSION;
+    const commit = b.option([]const u8, "commit", "Commit compiled into the programs (default: git)") orelse blk: {
+        var code: u8 = 0;
+        const out = b.runAllowFail(&.{ "git", "rev-parse", "--short=7", "HEAD" }, &code, .ignore) catch break :blk "unknown";
+        const t = std.mem.trim(u8, out, " \t\r\n");
+        break :blk if (t.len > 0) t else "unknown";
+    };
+    const opts = b.addOptions();
+    opts.addOption([]const u8, "version", version);
+    opts.addOption([]const u8, "commit", commit);
+    return opts.createModule();
 }
