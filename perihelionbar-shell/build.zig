@@ -248,6 +248,35 @@ pub fn build(b: *Build) !void {
 
     b.installArtifact(exe);
 
+    // perihelion-lockscreen: the session lock (ext-session-lock-v1), its
+    // own small program so nothing in the always-running shell can take
+    // the lock down with it. cairo + pango draw it, gdk-pixbuf decodes the
+    // wallpaper and avatar, PAM checks the password; all four are linked
+    // into this binary only.
+    const lock_mod = b.createModule(.{
+        .root_source_file = b.path("src/lock/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    lock_mod.addImport("wayland", wayland_mod);
+    lock_mod.addImport("logging", logging_mod);
+    lock_mod.linkSystemLibrary("wayland-client", .{});
+    lock_mod.linkSystemLibrary("cairo", .{});
+    lock_mod.linkSystemLibrary("pangocairo", .{});
+    lock_mod.linkSystemLibrary("gdk-pixbuf-2.0", .{});
+    lock_mod.linkSystemLibrary("xkbcommon", .{});
+    lock_mod.linkSystemLibrary("pam", .{});
+    const lock_exe = b.addExecutable(.{
+        .name = "perihelion-lockscreen",
+        .root_module = lock_mod,
+    });
+    lock_exe.use_llvm = true;
+    lock_exe.use_lld = true;
+    b.installArtifact(lock_exe);
+    const lock_step = b.step("lock", "Build only perihelion-lockscreen");
+    lock_step.dependOn(&b.addInstallArtifact(lock_exe, .{}).step);
+
     // `zig build lock-preview`: draws the lock screen's states to PNG
     // without locking (src/lock/preview.zig). Not installed.
     const preview_mod = b.createModule(.{
