@@ -30,7 +30,6 @@ check test -f /usr/share/applications/perihelion-settings.desktop
 check test -f /usr/share/icons/hicolor/48x48/apps/perihelion-settings.png
 check test -f "${HOME}/.local/share/perihelionbar/appdrawer/shell.qml"
 check test -f "${HOME}/.local/share/perihelionbar/appdrawer/favourites.json"
-check test -x "${HOME}/.local/share/perihelionbar/zig-0.17.1/zig"
 
 echo "== Settings > Updates"
 check grep -qx "install.sh ${commit}" "${S}/install-method"
@@ -66,8 +65,10 @@ case "${wm}" in
     hyprland)
         check test -f "${C}/hypr/perihelion.lua"
         check grep -qx 'require("perihelion")' "${C}/hypr/hyprland.lua"
-        hypr_ok() { XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-$(mktemp -d)} timeout 30 Hyprland --verify-config -c "${C}/hypr/hyprland.lua" 2>&1 | tee /tmp/hypr-verify.txt | grep -qx 'config ok'; }
-        check hypr_ok || cat /tmp/hypr-verify.txt
+        hypr_out=$(XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-$(mktemp -d)} timeout 30 Hyprland --verify-config -c "${C}/hypr/hyprland.lua" 2>&1 || true)
+        hypr_ok() { grep -qx 'config ok' <<<"${hypr_out}"; }
+        check hypr_ok
+        hypr_ok || printf '%s\n' "${hypr_out}" | sed -n '/parsing result/,$p'
         ;;
 esac
 exit "${fails}"

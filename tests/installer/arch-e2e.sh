@@ -42,6 +42,11 @@ step "fresh home: install.sh --yes --wm=${wm}"
 new_user fresh
 as_user fresh bash -c "cd ~/src && ./install.sh --yes --wm=${wm}"
 (cd "${repo}" && as_user fresh bash "${repo}/tests/installer/arch-check.sh" "${wm}" "${commit}") || fails=1
+check() { if "$@"; then echo "  ok    $*"; else echo "  FAIL  $*"; fails=1; fi; }
+check test -x /home/fresh/.local/share/perihelionbar/zig-0.17.1/zig
+zig_version() { [[ $(/home/fresh/.local/share/perihelionbar/zig-0.17.1/zig version) == 0.17.1 ]]; }
+check zig_version
+check grep -q 'Zig 0.17.1: signature checked (minisign)' /home/fresh/.local/state/perihelionbar/install.log
 
 step "second run changes nothing"
 before=$(snapshot fresh)
@@ -96,7 +101,11 @@ check grep -q 'file:~/.config/kitty/kitty.conf=beside' /home/keeper/.local/state
 step "not as root, not on another distro"
 check bash -c "! bash ${repo}/install.sh --yes 2>/dev/null"
 printf 'ID=fedora\nID_LIKE=""\n' > /tmp/os-release-fedora
-refuses_fedora() { as_user fresh env PERIHELION_OS_RELEASE=/tmp/os-release-fedora bash "${repo}/install.sh" --yes 2>&1 | grep -q 'supports Arch Linux and Arch-based distros only'; }
+refuses_fedora() {
+    local out
+    out=$(as_user fresh env PERIHELION_OS_RELEASE=/tmp/os-release-fedora bash "${repo}/install.sh" --yes 2>&1) && return 1
+    grep -q 'supports Arch Linux and Arch-based distros only' <<<"${out}"
+}
 check refuses_fedora
 
 (( fails == 0 )) && echo "arch-e2e (${wm}): all passed" || echo "arch-e2e (${wm}): FAILED"
