@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Perihelion Bar installer for Arch Linux (and Arch-based distros).
 #
-#   curl -fsSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
 #   or, from a checkout:  ./install.sh [--yes] [--wm=mango|hyprland|both]
 #
 # Installs Perihelion Bar: the bar and dock, desktop cards, Glance, the
@@ -15,7 +15,7 @@
 
 set -Eeuo pipefail
 
-PERIHELION_REPO_URL=${PERIHELION_REPO_URL:-https://github.com/CipherVLT/Perihelion-shell.git}
+PERIHELION_REPO_URL=${PERIHELION_REPO_URL:-https://github.com/CipherVLT/perihelion-shell.git}
 PERIHELION_BRANCH=${PERIHELION_BRANCH:-main}
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/perihelionbar"
 LOG_FILE="${STATE_DIR}/install.log"
@@ -150,7 +150,7 @@ usage() {
 Perihelion Bar installer (Arch Linux)
 
   ./install.sh [options]
-  curl -fsSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash -s -- [options]
+  curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash -s -- [options]
 
   --yes               take the default for every question (no prompts)
   --wm=mango|hyprland|both

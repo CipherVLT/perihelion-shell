@@ -442,7 +442,7 @@ fetch_help() {
 # `search ... | cut -f1 | xargs -n1 fetch --apply` work.
 
 API_TIMEOUT=30          # seconds per request
-UA="perihelionbar-wallpaper/1.0 (+https://github.com/CipherVLT/Perihelion-shell)"
+UA="perihelionbar-wallpaper/1.0 (+https://github.com/CipherVLT/perihelion-shell)"
 
 need_curl() {
     command -v curl >/dev/null 2>&1 \

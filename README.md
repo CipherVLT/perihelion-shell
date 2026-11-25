@@ -12,14 +12,14 @@ On **Fedora**, Perihelion Linux ships Perihelion Bar ready to use. On **Arch Lin
 ## Install (Arch)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
 ```
 
 Or download first and read it before running:
 
 ```sh
-git clone https://github.com/CipherVLT/Perihelion-shell.git
-cd Perihelion-shell
+git clone https://github.com/CipherVLT/perihelion-shell.git
+cd perihelion-shell
 less install.sh scripts/*.sh
 ./install.sh
 ```

@@ -56,7 +56,7 @@ const WNOHANG: c_int = 1;
 // ---------------------------------------------------------------------
 
 const APP_ID = "io.github.ciphervlt.perihelionbar.Welcome";
-const REPO_URL = "https://github.com/CipherVLT/Perihelion-shell";
+const REPO_URL = "https://github.com/CipherVLT/perihelion-shell";
 const CONTACT_EMAIL = "jaytheoutpatient@protonmail.com";
 const DISCORD_URL = "https://discord.gg/sAMMXSPx9R";
 const HYPRLAND_CONF = "~/.config/hypr/hyprland.lua";
@@ -652,7 +652,7 @@ var SETUP_ACTIONS = [_]SetupAction{
         .subtitle = "Re-fetches the latest install script and configs from GitHub. Opens in a terminal \u{2014} asks a few of the same " ++
             "setup questions again as part of the refresh.",
         .icon = "software-update-available-symbolic",
-        .script = "curl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash; echo; read -p 'Press Enter to close...'",
+        .script = "curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash; echo; read -p 'Press Enter to close...'",
     },
     .{
         .title = "Check for updates now",
