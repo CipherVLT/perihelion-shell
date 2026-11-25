@@ -1,0 +1,50 @@
+# The Arch installer: shellcheck and the config unit test on every push,
+# then the real install.sh --yes in an Arch container for MangoWM and for
+# Hyprland (fresh home, second run changes nothing, existing setups).
+name: Installer
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          shellcheck --version | head -2
+          shellcheck -x -s bash install.sh scripts/*.sh tests/installer/*.sh
+          for f in desktop/bin/*; do
+            if head -1 "$f" | grep -qE '^#!.*\b(ba)?sh\b'; then shellcheck -S warning "$f"; fi
+          done
+      - name: Config handling (keep / take new / beside, backups, re-runs)
+        run: bash tests/installer/configs-test.sh
+
+  arch:
+    needs: lint
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wm: [mango, hyprland]
+    steps:
+      - name: Tools for checkout
+        run: pacman -Syu --noconfirm --needed git
+      - uses: actions/checkout@v4
+      - name: install.sh --yes --wm=${{ matrix.wm }} on fresh and existing homes
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          bash tests/installer/arch-e2e.sh "${{ matrix.wm }}"
+      - name: The install log
+        if: always()
+        run: |
+          for f in /home/*/.local/state/perihelionbar/install.log; do
+            echo "::group::$f"; cat "$f"; echo "::endgroup::"
+          done
