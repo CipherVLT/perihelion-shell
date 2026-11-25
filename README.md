@@ -321,7 +321,7 @@ before suspend) and the dbus activation line the portals need.
 
 ## Credits
 
-- The lock screen's design and much of its code (`perihelionbar-shell/src/lock/`): **Event Horizon**'s lock screen. Copyright and licence in [NOTICE.md](NOTICE.md).
+- The lock screen's design and much of its code (`perihelionbar-shell/src/lock/`): **Event Horizon**'s lock screen. Copyright and licence in [perihelionbar-shell/src/lock/NOTICE.md](perihelionbar-shell/src/lock/NOTICE.md).
 - Palettes in `theme/palettes/`: **Event Horizon**'s colour themes (GPL-3.0), each crediting the scheme it is named after in `theme/palettes/NOTICE.md`. Monokai's are left out (no open licence).
 
 ## License
