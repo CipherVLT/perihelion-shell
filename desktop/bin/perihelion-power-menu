@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Power menu: Super+Shift+Q (and Perihelion Bar's power button on Mango).
+# Pick with the mouse or arrow keys + Enter; Esc closes it.
+set -euo pipefail
+
+lock() {
+    # Mango has no shell with a lock screen; Event Horizon (Hyprland, Niri)
+    # locks on logind's request.
+    if [[ -n "${MANGO_INSTANCE_SIGNATURE:-}" ]] && command -v perihelion-lock >/dev/null; then
+        exec perihelion-lock
+    fi
+    exec loginctl lock-session
+}
+
+logout() {
+    if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        # Hyprland 0.57 takes Lua dispatchers; 0.56 the classic name.
+        hyprctl dispatch 'hl.dsp.exit()' >/dev/null 2>&1 || exec hyprctl dispatch exit
+    elif [[ -n "${NIRI_SOCKET:-}" ]]; then
+        exec niri msg action quit --skip-confirmation
+    elif command -v mmsg >/dev/null; then
+        exec mmsg dispatch quit
+    else
+        exec loginctl terminate-session "${XDG_SESSION_ID:-}"
+    fi
+}
+
+choice=$(printf '%s\n' \
+    "  Lock" \
+    "󰗽  Log out" \
+    "󰤄  Suspend" \
+    "  Reboot" \
+    "  Power off" |
+    fuzzel --dmenu --prompt 'power > ' --lines 5 --width 22) || exit 0
+
+case "${choice}" in
+    *Lock) lock ;;
+    *"Log out") logout ;;
+    *Suspend) exec systemctl suspend ;;
+    *Reboot) exec systemctl reboot ;;
+    *"Power off") exec systemctl poweroff ;;
+esac

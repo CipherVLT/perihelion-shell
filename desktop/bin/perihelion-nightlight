@@ -1,0 +1,72 @@
+#!/usr/bin/bash
+# The night light set in Perihelion Settings (Display → Night light), run
+# with wlsunset. Settings writes ~/.config/perihelion/nightlight.conf and
+# calls "perihelion-nightlight restart"; Mango starts it at login.
+#
+#   perihelion-nightlight          start it, if it is enabled and not running
+#   perihelion-nightlight restart  apply the current settings now
+#   perihelion-nightlight stop     turn it off until the next start
+#   perihelion-nightlight --print  show the wlsunset command it would run
+set -u
+
+conf=${XDG_CONFIG_HOME:-${HOME}/.config}/perihelion/nightlight.conf
+pidfile=${XDG_RUNTIME_DIR:-/tmp}/perihelion-nightlight.pid
+
+enabled=0 schedule=manual day=6500 night=4000 start=1200 end=360 follow_sun=0 lat=0 lon=0
+if [[ -f ${conf} ]]; then
+    while IFS='=' read -r k v; do
+        v=${v//[[:space:]]/}
+        case ${k} in
+            enabled|follow_sun) [[ ${v} == 1 ]] && printf -v "${k}" 1 || printf -v "${k}" 0 ;;
+            schedule) [[ ${v} == always ]] && schedule=always || schedule=manual ;;
+            day|night|start|end) [[ ${v} =~ ^[0-9]{1,5}$ ]] && printf -v "${k}" '%d' "$((10#${v}))" ;;
+            lat|lon) [[ ${v} =~ ^-?[0-9]{1,3}(\.[0-9]+)?$ ]] && printf -v "${k}" '%s' "${v}" ;;
+        esac
+    done < "${conf}"
+fi
+
+clock() { printf '%02d:%02d' $(( $1 / 60 % 24 )) $(( $1 % 60 )); }
+
+# wlsunset: -t night (low) and -T day (high) temperature, which must be
+# higher; -S sunrise / -s sunset for a fixed window, or -l / -L to follow
+# the sun at a location.
+if [[ ${schedule} == always ]]; then
+    # The same warmth all day: day and night differ by one kelvin.
+    args=(-t "${night}" -T "$((night + 1))" -S 06:00 -s 18:00)
+else
+    (( day > night )) || day=$((night + 100))
+    args=(-t "${night}" -T "${day}")
+    if [[ ${follow_sun} == 1 ]]; then
+        args+=(-l "${lat}" -L "${lon}")
+    else
+        (( start == end )) && end=$(( (end + 15) % 1440 ))
+        args+=(-S "$(clock "${end}")" -s "$(clock "${start}")")
+    fi
+fi
+
+running() {
+    [[ -f ${pidfile} ]] || return 1
+    local pid
+    pid=$(<"${pidfile}")
+    [[ ${pid} =~ ^[0-9]+$ && $(cat "/proc/${pid}/comm" 2>/dev/null) == wlsunset ]]
+}
+stop() {
+    if running; then kill "$(<"${pidfile}")" 2>/dev/null; fi
+    rm -f "${pidfile}"
+}
+
+case ${1:-start} in
+    --print) echo wlsunset "${args[@]}"; exit 0 ;;
+    stop) stop; exit 0 ;;
+    restart) stop ;;
+    start) running && exit 0 ;;
+    *) echo "usage: perihelion-nightlight [start|restart|stop|--print]" >&2; exit 2 ;;
+esac
+
+[[ ${enabled} == 1 ]] || exit 0
+if ! command -v wlsunset >/dev/null; then
+    echo "perihelion-nightlight: wlsunset is not installed" >&2
+    exit 1
+fi
+setsid wlsunset "${args[@]}" </dev/null >/dev/null 2>&1 &
+echo $! > "${pidfile}"

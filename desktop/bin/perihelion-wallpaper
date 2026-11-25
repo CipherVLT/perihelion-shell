@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Set or restore the desktop wallpaper (swaybg).
+#
+#   perihelion-wallpaper                 restore the saved wallpaper (at login)
+#   perihelion-wallpaper IMAGE           show IMAGE now and remember it
+#   perihelion-wallpaper --color '#RRGGBB'  plain color instead of an image
+#
+# The choice is saved in ~/.config/perihelion/wallpaper, and perihelion-theme
+# recolors the desktop to match it. Without one, the
+# Perihelion default image is used if the ISO shipped one, else a plain
+# Catppuccin Macchiato background.
+set -euo pipefail
+
+state="${XDG_CONFIG_HOME:-${HOME}/.config}/perihelion/wallpaper"
+default_image=/usr/share/backgrounds/perihelion/default.png
+fallback_color='#24273a'
+
+case "${1:-}" in
+    -h | --help)
+        sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    --color)
+        [[ "${2:-}" =~ ^#[0-9A-Fa-f]{6}$ ]] || { echo "usage: $0 --color '#RRGGBB'" >&2; exit 1; }
+        mkdir -p "$(dirname "${state}")"
+        printf 'color %s\n' "$2" > "${state}"
+        ;;
+    "")
+        ;;
+    *)
+        image=$(realpath -e -- "$1") || { echo "perihelion-wallpaper: no such file: $1" >&2; exit 1; }
+        mkdir -p "$(dirname "${state}")"
+        printf 'image %s\n' "${image}" > "${state}"
+        ;;
+esac
+
+kind='' value=''
+if [[ -f "${state}" ]]; then
+    read -r kind value < "${state}" || true
+fi
+if [[ "${kind}" == image && ! -f "${value}" ]]; then
+    echo "perihelion-wallpaper: saved image ${value} is gone; using the default" >&2
+    kind=
+fi
+if [[ -z "${kind}" ]]; then
+    if [[ -f "${default_image}" ]]; then
+        kind=image value=${default_image}
+    else
+        kind=color value=${fallback_color}
+    fi
+fi
+
+# Replace any running swaybg, then detach so the caller returns.
+pkill -x swaybg 2>/dev/null || true
+if [[ "${kind}" == image ]]; then
+    setsid -f swaybg -m fill -c "${fallback_color}" -i "${value}" >/dev/null 2>&1
+else
+    setsid -f swaybg -c "${value}" >/dev/null 2>&1
+fi
+
+# Recolor the bar, widgets, app drawer, launcher, Strata and borders with the
+# Catppuccin colors closest to this wallpaper (quick no-op when unchanged).
+if command -v perihelion-theme >/dev/null; then
+    setsid -f perihelion-theme >/dev/null 2>&1
+fi

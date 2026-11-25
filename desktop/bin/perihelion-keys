@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Show every keybind in a searchable list (Super+H).
+#   Mango:    reads the "#: description" line above each bind in
+#             ~/.config/mango/cfg/keybinds.conf (older installs: config.conf)
+#   Hyprland: reads each bind's description from `hyprctl binds -j`
+#   Niri:     opens niri's own hotkey overlay
+# Run with --print to list them in a terminal instead.
+set -euo pipefail
+
+mango_list() {
+    local dir="${XDG_CONFIG_HOME:-${HOME}/.config}/mango" config
+    config="${dir}/cfg/keybinds.conf"
+    [[ -f "${config}" ]] || config="${dir}/config.conf"
+    [[ -f "${config}" ]] || config=/usr/share/perihelion/mango/cfg/keybinds.conf
+    awk '
+        /^#: / { desc = substr($0, 4); next }
+        /^key_mode=/ { mode = substr($0, 10); next }
+        /^(bind[a-z]*|mousebind|axisbind|gesturebind)=/ {
+            line = $0
+            sub(/^[a-z]+=/, "", line)
+            n = split(line, f, ",")
+            if ($0 ~ /^gesturebind=/) {
+                keys = f[3] "-finger swipe " f[2]
+            } else {
+                mods = (f[1] == "NONE" || f[1] == "none") ? "" : f[1] "+"
+                keys = mods f[2]
+            }
+            if (mode != "" && mode != "default") keys = "[" mode "] " keys
+            if (desc == "") {
+                first = ($0 ~ /^gesturebind=/) ? 4 : 3
+                desc = f[first]; for (i = first + 1; i <= n; i++) desc = desc " " f[i]
+            }
+            printf "%-30s %s\n", keys, desc
+            desc = ""
+        }
+    ' "${config}"
+}
+
+hyprland_list() {
+    hyprctl binds -j | python3 -c '
+import json, sys
+names = [(64, "SUPER"), (4, "CTRL"), (8, "ALT"), (1, "SHIFT")]
+for b in json.load(sys.stdin):
+    mods = "+".join(n for bit, n in names if b.get("modmask", 0) & bit)
+    key = b.get("key") or ("code:%s" % b.get("keycode"))
+    if key.startswith("mouse:"):
+        key = {"mouse:272": "left drag", "mouse:273": "right drag"}.get(key, key)
+    keys = (mods + "+" if mods else "") + key
+    desc = b.get("description") or (b.get("dispatcher", "") + " " + b.get("arg", "")).strip()
+    print("%-30s %s" % (keys, desc))
+'
+}
+
+show() {
+    if [[ "${1:-}" == --print ]] || ! command -v fuzzel >/dev/null; then
+        cat
+    else
+        fuzzel --dmenu --prompt 'keys > ' --width 70 --lines 20 >/dev/null || true
+    fi
+}
+
+if [[ -n "${NIRI_SOCKET:-}" && "${1:-}" != --print ]]; then
+    exec niri msg action show-hotkey-overlay
+elif [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    hyprland_list | show "$@"
+else
+    mango_list | show "$@"
+fi

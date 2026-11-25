@@ -1,0 +1,119 @@
+{
+  "appearance": {
+    "bg_color": "#24273A",
+    "text_color": "#CAD3F5",
+    "border_color": "#8AADF4",
+    "hover_color": "#363A4F",
+    "workspace_active_color": "#8AADF4",
+    "workspace_inactive_color": "#6E738D",
+    "popup_bg_color": "#1E2030",
+    "popup_hover_color": "#363A4F",
+    "popup_separator_color": "#494D64",
+    "popup_disabled_color": "#6E738D",
+    "module_bg_color": "#363A4F",
+    "bezel_color": "#8AADF4",
+    "bezel_style": "solid",
+    "bezel_effect": "solid",
+    "bg_mode": "none",
+    "position": "top",
+    "bar_mode": "taskbar",
+    "bar_height": 32,
+    "border_top_px": 2,
+    "border_bottom_px": 0,
+    "border_left_px": 0,
+    "border_right_px": 0,
+    "corner_radius_px": 0,
+    "bg_opacity_percent": 55,
+    "module_pills": false,
+    "pill_borders": false,
+    "clock_format": "date_12h",
+    "font_path": "@FONT_PATH@",
+    "animations_enabled": true,
+    "cava_color": "#F5BDE6",
+    "cava_style": "bars",
+    "matrix_color": "#EED49F"
+  },
+  "modules": {
+    "left": [
+      {
+        "kind": "distro",
+        "enabled": true
+      },
+      {
+        "kind": "workspaces"
+      },
+      {
+        "kind": "mpris"
+      },
+      {
+        "kind": "cava"
+      }
+    ],
+    "center": [],
+    "right": [
+      {
+        "kind": "power"
+      },
+      {
+        "kind": "battery"
+      },
+      {
+        "kind": "volume"
+      },
+      {
+        "kind": "notifications"
+      },
+      {
+        "kind": "control_center"
+      },
+      {
+        "kind": "network"
+      },
+      {
+        "kind": "tray"
+      },
+      {
+        "kind": "layout"
+      },
+      {
+        "kind": "weather"
+      },
+      {
+        "kind": "clock"
+      },
+      {
+        "kind": "cava"
+      }
+    ]
+  },
+  "launchers": [
+    {
+      "label": "Browser",
+      "command": "firefox"
+    },
+    {
+      "label": "Files",
+      "command": "strata"
+    },
+    {
+      "label": "Term",
+      "command": "kitty"
+    }
+  ],
+  "dock": {
+    "enabled": false,
+    "icon_size": 40,
+    "corner_radius": 40,
+    "border": true,
+    "border_size": 1,
+    "colored_glass": true,
+    "trash": true,
+    "window_gap": 0,
+    "shrink": true,
+    "app_drawer": true,
+    "media": true
+  },
+  "bar": {
+    "enabled": true
+  }
+}

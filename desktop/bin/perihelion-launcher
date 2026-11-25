@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# perihelion-launcher: the app launcher (Super+D in every flavor).
+#
+# fuzzel draws app icons from the theme named in its own fuzzel.ini and
+# otherwise from hicolor, so on its own it ignores the icon theme picked in
+# Perihelion Settings / Event Horizon and shows stock icons next to a themed
+# dock. This looks the current theme up each time, the same places the dock,
+# app drawer, GTK and Qt read it, and passes it to fuzzel. Nothing to keep in
+# sync: a theme change shows the next time the launcher opens.
+#
+#   perihelion-launcher                 open the launcher
+#   perihelion-launcher --which-theme   print the theme it would use and why
+#   any other arguments are passed to fuzzel
+
+set -u
+
+config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+
+clean() { tr -d "\"'\r" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+
+ini_value() {  # FILE KEY: first value of KEY
+    [[ -r $1 ]] || return 0
+    sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" | head -n1 | clean
+}
+
+# "value<TAB>source" per line, best first. Perihelion Settings (Mango) and
+# Event Horizon's settings (Hyprland, Niri) both write the theme to the GTK
+# 3/4 and Qt files and to dconf; the dock and the app drawer read the GTK 3
+# file, so it leads. dconf is read directly, not through gsettings, which
+# answers Adwaita (its schema default) when dconf has nothing.
+candidates() {
+    local t f
+    for f in "$config_home/gtk-3.0/settings.ini:gtk-icon-theme-name" \
+             "$config_home/gtk-4.0/settings.ini:gtk-icon-theme-name" \
+             "$config_home/qt6ct/qt6ct.conf:icon_theme"; do
+        t=$(ini_value "${f%:*}" "${f##*:}")
+        [[ -n $t ]] && printf '%s\t%s\n' "$t" "${f%:*}"
+    done
+    if command -v dconf >/dev/null 2>&1; then
+        t=$(timeout 2 dconf read /org/gnome/desktop/interface/icon-theme 2>/dev/null | clean)
+        [[ -n $t ]] && printf '%s\tdconf\n' "$t"
+    fi
+    t=$(ini_value /usr/share/perihelion/gtk/settings.ini gtk-icon-theme-name)
+    [[ -n $t ]] && printf '%s\tPerihelion default\n' "$t"
+}
+
+icon_dirs() {
+    local d IFS=:
+    printf '%s\n' "$HOME/.icons" "$data_home/icons"
+    for d in ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do printf '%s\n' "$d/icons"; done
+}
+
+# fuzzel takes the theme's folder name (case-sensitive). Accept the folder
+# name, a different case of it, or the theme's display name.
+resolve() {
+    local want=$1 dir entry name
+    while IFS= read -r dir; do
+        [[ -f $dir/$want/index.theme ]] && { printf '%s\n' "$want"; return 0; }
+    done < <(icon_dirs)
+    while IFS= read -r dir; do
+        for entry in "$dir"/*/index.theme; do
+            [[ -f $entry ]] || continue
+            name=${entry%/index.theme}; name=${name##*/}
+            if [[ ${name,,} == "${want,,}" || $(ini_value "$entry" Name) == "$want" ]]; then
+                printf '%s\n' "$name"; return 0
+            fi
+        done
+    done < <(icon_dirs)
+    return 1
+}
+
+theme=hicolor; from=default; skipped=""
+while IFS=$'\t' read -r value src; do
+    [[ -n $value ]] || continue
+    if t=$(resolve "$value"); then theme=$t; from=$src; break; fi
+    skipped+="skipped \"$value\" from $src: not installed"$'\n'
+done < <(candidates)
+
+if [[ ${1:-} == --which-theme ]]; then
+    printf '%s' "$skipped"
+    printf 'icon theme: %s (from %s)\n' "$theme" "$from"
+    exit 0
+fi
+
+exec fuzzel --icon-theme="$theme" "$@"

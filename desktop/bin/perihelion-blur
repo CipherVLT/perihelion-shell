@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Blur strength behind see-through windows (Super+Shift+G on Mango).
+# Each press: normal -> strong -> soft -> off -> normal. Applies at once,
+# open windows included (Mango rebuilds its blur on setoption). Lasts until
+# you log out; the default lives in ~/.config/mango/cfg/appearance.conf (blur_params_*).
+set -euo pipefail
+
+state="${XDG_RUNTIME_DIR:-/tmp}/perihelion-blur"
+current=$(cat "${state}" 2>/dev/null || echo normal)
+case "${current}" in
+    normal) next=strong ;;
+    strong) next=soft ;;
+    soft) next=off ;;
+    *) next=normal ;;
+esac
+
+set_opt() { mmsg dispatch "setoption,$1,$2" >/dev/null; }
+case "${next}" in
+    off) set_opt blur 0 ;;
+    # More passes, small offsets: smooth at every strength (big offsets warp).
+    # normal is appearance.conf's default frost.
+    soft) set_opt blur 1; set_opt blur_params_num_passes 3; set_opt blur_params_radius 3 ;;
+    normal) set_opt blur 1; set_opt blur_params_num_passes 4; set_opt blur_params_radius 4 ;;
+    strong) set_opt blur 1; set_opt blur_params_num_passes 5; set_opt blur_params_radius 4 ;;
+esac
+echo "${next}" > "${state}"
+if command -v notify-send >/dev/null; then
+    notify-send -a Blur -t 1500 "Blur: ${next}" || true
+fi

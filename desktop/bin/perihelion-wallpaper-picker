@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Wallpaper picker (Super+Shift+W).
+#   perihelion-wallpaper-picker              the preview grid (perihelion-wallpapers),
+#                                            or a fuzzel list if it can't start
+#   perihelion-wallpaper-picker --apply FILE apply FILE:
+#     Mango:          perihelion-wallpaper (swaybg), remembered across logins
+#     Hyprland, Niri: Event Horizon's wallpaper (horizon-wallpaper --set)
+set -euo pipefail
+
+apply() {
+    if command -v horizon-wallpaper >/dev/null && pgrep -x horizon >/dev/null; then
+        # The login screen gets the picture too (Mango's perihelion-theme does
+        # this itself, with its colors).
+        perihelion-greeter-sync --image "$1" >/dev/null 2>&1 || true
+        exec horizon-wallpaper --set "$1"
+    fi
+    exec perihelion-wallpaper "$1"
+}
+
+if [[ "${1:-}" == --apply ]]; then
+    [[ -f "${2:-}" ]] || { echo "usage: $0 --apply IMAGE" >&2; exit 1; }
+    apply "$2"
+fi
+
+if [[ -z "${PERIHELION_PICKER_FUZZEL:-}" ]] && command -v perihelion-wallpapers >/dev/null &&
+    python3 -c 'import gi; gi.require_version("Gtk", "4.0")' 2>/dev/null; then
+    exec perihelion-wallpapers
+fi
+
+pictures=$(xdg-user-dir PICTURES 2>/dev/null || echo "${HOME}/Pictures")
+walls="${pictures}/Wallpapers"
+mkdir -p "${walls}"
+
+mapfile -t images < <(
+    find "${walls}" /usr/share/backgrounds/perihelion -maxdepth 2 -type f \
+        \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' \) \
+        2>/dev/null | sort
+)
+
+if (( ${#images[@]} == 0 )); then
+    printf '%s\n' "No images yet: put wallpapers in ${walls}" |
+        fuzzel --dmenu --prompt 'wallpaper > ' --lines 1 --width 60 >/dev/null || true
+    exit 0
+fi
+
+# Show "folder/name" so same-named files stay distinguishable.
+choice=$(for img in "${images[@]}"; do
+    printf '%s\n' "$(basename "$(dirname "${img}")")/$(basename "${img}")"
+done | fuzzel --dmenu --prompt 'wallpaper > ' --width 50) || exit 0
+
+for img in "${images[@]}"; do
+    if [[ "$(basename "$(dirname "${img}")")/$(basename "${img}")" == "${choice}" ]]; then
+        apply "${img}"
+    fi
+done

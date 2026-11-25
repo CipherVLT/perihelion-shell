@@ -1,0 +1,23 @@
+# Perihelion's terminal cava (run: cava). Full reference:
+# /usr/share/doc/cava/example_files/config or github.com/karlstav/cava
+[general]
+framerate = 60
+bar_width = 2
+bar_spacing = 1
+
+[input]
+# Fedora's cava has no PipeWire input; PulseAudio works through PipeWire.
+method = pulse
+source = auto
+
+[color]
+# Catppuccin Macchiato, bottom to top: blue, pink, yellow.
+background = default
+gradient = 1
+gradient_count = 3
+gradient_color_1 = '#8aadf4'
+gradient_color_2 = '#f5bde6'
+gradient_color_3 = '#eed49f'
+
+[smoothing]
+noise_reduction = 77

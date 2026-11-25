@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Current weather for Perihelion Shell's weather widget, from Open-Meteo
+# (open-meteo.com: free, no API key; NOAA's models for the US). Prints one
+# line in the widget's format:
+#   emoji|temp|humidity|wind|sunrise|sunset|now     e.g. ☀️|+54°F|58%|↓5mph|06:48|17:34|02:15
+#
+# Place, first line of ~/.config/perihelionbar/weather-location:
+#   DeSoto, TX            city, US state     Paris, FR     city, country code
+#   32.59,-96.86          latitude,longitude
+#   (empty or missing)    guessed from the internet address (Fedora's geoip)
+# °F and mph in the US, °C and km/h elsewhere.
+#
+#   perihelion-weather --open   open the forecast page for that place (clicking
+#                               the widget): weather.gov in the US, Windy elsewhere
+#   perihelion-weather --bar    one short line for the bar's weather module, in
+#                               wttr.in's format=1 shape: "⛅️ +77°F" (🌙 when clear
+#                               after dark)
+set -uo pipefail
+
+config="${XDG_CONFIG_HOME:-${HOME}/.config}/perihelionbar"
+cache="${XDG_CACHE_HOME:-${HOME}/.cache}/perihelion-weather"
+mkdir -p "${cache}"
+get() { curl -fsS --max-time 10 "$@"; }
+
+loc=$(head -n 1 "${config}/weather-location" 2>/dev/null | tr -d '\r' | sed 's/^ *//; s/ *$//')
+
+# --- Where: latitude, longitude, country code (cached per location) --------
+key=$(printf '%s' "${loc:-geoip}" | md5sum | cut -c1-12)
+place="${cache}/place-${key}"
+if [[ ! -s "${place}" ]]; then
+    if [[ "${loc}" =~ ^(-?[0-9.]+)[[:space:]]*,[[:space:]]*(-?[0-9.]+)$ ]]; then
+        # Coordinates: ask geoip only for the country (units).
+        cc=$(get https://geoip.fedoraproject.org/city | jq -r '.country_code // "US"')
+        printf '%s %s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${cc}" > "${place}"
+    elif [[ -n "${loc}" ]]; then
+        city=${loc%%,*}
+        region=$(sed -n 's/^[^,]*,[[:space:]]*//p' <<<"${loc}")
+        # "TX" -> Texas for matching Open-Meteo's admin1; 2-letter non-US codes
+        # are treated as countries.
+        state=$(jq -rn --arg s "${region^^}" '{AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",CO:"Colorado",CT:"Connecticut",DE:"Delaware",DC:"District of Columbia",FL:"Florida",GA:"Georgia",HI:"Hawaii",ID:"Idaho",IL:"Illinois",IN:"Indiana",IA:"Iowa",KS:"Kansas",KY:"Kentucky",LA:"Louisiana",ME:"Maine",MD:"Maryland",MA:"Massachusetts",MI:"Michigan",MN:"Minnesota",MS:"Mississippi",MO:"Missouri",MT:"Montana",NE:"Nebraska",NV:"Nevada",NH:"New Hampshire",NJ:"New Jersey",NM:"New Mexico",NY:"New York",NC:"North Carolina",ND:"North Dakota",OH:"Ohio",OK:"Oklahoma",OR:"Oregon",PA:"Pennsylvania",RI:"Rhode Island",SC:"South Carolina",SD:"South Dakota",TN:"Tennessee",TX:"Texas",UT:"Utah",VT:"Vermont",VA:"Virginia",WA:"Washington",WV:"West Virginia",WI:"Wisconsin",WY:"Wyoming"}[$s] // ""')
+        if [[ -n "${state}" ]]; then
+            filter="countryCode=US"
+        elif [[ "${region}" =~ ^[A-Za-z]{2}$ ]]; then
+            filter="countryCode=${region^^}"
+        else
+            filter=""
+        fi
+        found=$(get -G https://geocoding-api.open-meteo.com/v1/search \
+            --data-urlencode "name=${city}" -d count=20 -d language=en -d format=json ${filter:+-d "${filter}"} |
+            jq -r --arg st "${state}" --arg reg "${region}" '
+                [.results[]?] as $r
+                | ([$r[] | select($st != "" and .admin1 == $st)]
+                   + [$r[] | select($st == "" and $reg != "" and ((.admin1 // "") | ascii_downcase) == ($reg | ascii_downcase))]
+                   + $r)[0]
+                | select(. != null) | "\(.latitude) \(.longitude) \(.country_code)"')
+        [[ -n "${found}" ]] || { echo "perihelion-weather: no place called \"${loc}\"" >&2; exit 1; }
+        printf '%s\n' "${found}" > "${place}"
+    else
+        get https://geoip.fedoraproject.org/city |
+            jq -r 'select(.latitude != null) | "\(.latitude) \(.longitude) \(.country_code // "US")"' > "${place}"
+    fi
+fi
+read -r lat lon cc < "${place}" || { rm -f "${place}"; exit 1; }
+[[ -n "${lat:-}" && -n "${lon:-}" ]] || { rm -f "${place}"; exit 1; }
+
+if [[ "${1:-}" == --open ]]; then
+    if [[ "${cc}" == US ]]; then
+        exec xdg-open "https://forecast.weather.gov/MapClick.php?lat=${lat}&lon=${lon}"
+    fi
+    exec xdg-open "https://www.windy.com/${lat}/${lon}?${lat},${lon},10"
+fi
+
+if [[ "${cc}" == US ]]; then
+    units=(-d temperature_unit=fahrenheit -d wind_speed_unit=mph); t_unit="°F"; w_unit=mph
+else
+    units=(); t_unit="°C"; w_unit=km/h
+fi
+
+# --- Now ---------------------------------------------------------------------
+json=$(get -G https://api.open-meteo.com/v1/forecast -d "latitude=${lat}" -d "longitude=${lon}" \
+    -d current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m \
+    -d daily=sunrise,sunset -d timezone=auto -d forecast_days=1 "${units[@]}") || exit 1
+
+bar=false; [[ "${1:-}" == --bar ]] && bar=true
+jq -r --argjson bar "${bar}" --arg tu "${t_unit}" --arg wu "${w_unit}" '
+    def emoji:
+        if . == 0 then "☀️"
+        elif . == 1 or . == 2 then "⛅️"
+        elif . == 3 then "☁️"
+        elif . == 45 or . == 48 then "🌫"
+        elif . >= 51 and . <= 57 then "🌦"
+        elif (. >= 61 and . <= 67) or (. >= 80 and . <= 82) then "🌧"
+        elif (. >= 71 and . <= 77) or . == 85 or . == 86 then "🌨"
+        elif . >= 95 then "⛈"
+        else "☁️" end;
+    # The arrow points where the wind blows to (it comes from wind_direction).
+    def arrow: ["↓","↙","←","↖","↑","↗","→","↘"][((. + 22.5) / 45 | floor) % 8];
+    def hhmm: (split("T")[1] // "")[0:5];
+    def hhmm_now: .current.time | hhmm;
+    .current as $c
+    | ($c.temperature_2m | round) as $t
+    | (if $t >= 0 then "+" else "" end) as $sign
+    | if $bar then
+        ((hhmm_now) as $n
+         | ($n < (.daily.sunrise[0] | hhmm) or $n >= (.daily.sunset[0] | hhmm)) as $night
+         | (if $night and ($c.weather_code <= 2) then "🌙" else ($c.weather_code | emoji) end)
+         + " \($sign)\($t)\($tu)")
+      else
+    "\($c.weather_code | emoji)|\(if $t >= 0 then "+" else "" end)\($t)\($tu)|\($c.relative_humidity_2m | round)%|\($c.wind_direction_10m | arrow)\($c.wind_speed_10m | round)\($wu)|\(.daily.sunrise[0] | hhmm)|\(.daily.sunset[0] | hhmm)|\($c.time | hhmm)"
+      end
+' <<<"${json}"

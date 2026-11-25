@@ -1,0 +1,23 @@
+{
+  "font_path": "@FONT_PATH@",
+  "card_bg_opacity": 25,
+  "holiday_country": "US",
+  "holiday_region": "",
+  "overview_favorites": [
+    "kitty",
+    "firefox",
+    "strata"
+  ],
+  "widgets": [
+    {
+      "id": "calendar",
+      "x": 24,
+      "y": 24
+    },
+    {
+      "id": "weather",
+      "x": 24,
+      "y": 270
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Glass mode (Super+G): windows turn see-through, with the wallpaper blurred
+# behind them. Press again to turn it off.
+#   Niri:     every open window at once.
+#   Mango:    frosted GTK windows (perihelion-theme's window glass): only
+#             the backgrounds turn see-through, text stays sharp; open
+#             apps restyle after a moment. Same as Settings > Window glass.
+#   Hyprland: Super+G is handled in ~/.config/hypr/hyprland.lua instead and
+#             toggles just the focused window.
+# kitty (it draws its own glass background) and Steam games are left solid.
+# Apps that are always glass: window rules in the compositor's config.
+set -euo pipefail
+
+config=${XDG_CONFIG_HOME:-$HOME/.config}
+
+notify() {
+    if command -v notify-send >/dev/null; then
+        notify-send -a "Glass mode" -t 2500 "$@" || true
+    fi
+}
+
+if [[ -n "${NIRI_SOCKET:-}" ]]; then
+    file="${config}/niri/glass.kdl"
+    mkdir -p "${file%/*}"
+    if [[ -f "${file}" ]] && grep -q '^ *opacity' "${file}"; then
+        : > "${file}"
+        notify "Glass mode off"
+    else
+        cat > "${file}" <<'EOF'
+// Written by perihelion-glass (Super+G); niri reloads it at once.
+window-rule {
+    exclude app-id="^kitty$"
+    exclude app-id=r#"^steam_app_"#
+    exclude app-id="^gamescope$"
+    opacity 0.85
+}
+EOF
+        notify "Glass mode on"
+    fi
+elif [[ -n "${MANGO_INSTANCE_SIGNATURE:-}" ]] || pgrep -x mango >/dev/null; then
+    # Window glass: perihelion-theme writes frosted GTK styles (only the
+    # backgrounds go see-through; text stays sharp) and asks open GTK apps
+    # to restyle. The setting lives in ~/.config/perihelionbar/theme (glass=),
+    # shared with Perihelion Settings > Window glass.
+    theme="${config}/perihelionbar/theme"
+    mkdir -p "${theme%/*}"
+    touch "${theme}"
+    if grep -qx 'glass=off' "${theme}"; then next=on; else next=off; fi
+    if grep -q '^glass=' "${theme}"; then
+        sed -i "s/^glass=.*/glass=${next}/" "${theme}"
+    else
+        printf 'glass=%s\n' "${next}" >> "${theme}"
+    fi
+    # Older Perihelion turned whole windows see-through here instead.
+    if [[ -f "${config}/mango/glass.conf" ]] && grep -q '^focused_opacity' "${config}/mango/glass.conf"; then
+        : > "${config}/mango/glass.conf"
+        mmsg dispatch reload_config >/dev/null 2>&1 || true
+    fi
+    perihelion-theme --force --glass "${next}" >/dev/null 2>&1 || true
+    if [[ "${next}" == on ]]; then
+        notify "Window glass on" "Frosted app windows. Super+G turns it off."
+    else
+        notify "Window glass off" "Solid app windows."
+    fi
+elif [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    echo "On Hyprland, Super+G is set in ~/.config/hypr/hyprland.lua." >&2
+    exit 1
+else
+    echo "perihelion-glass: no Niri or Mango session found" >&2
+    exit 1
+fi
