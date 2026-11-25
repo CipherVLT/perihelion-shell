@@ -203,7 +203,7 @@ Guidance for Claude / Claude Code when working on Perihelion-shell and the Perih
 
 - **perihelion-shell** — Zig/Wayland bar + desktop widgets. Primary codebase.
 - **Perihelion** (ISO repo) — Fedora-based distro that pins a specific commit of perihelion-shell and ships it as Perihelion Linux (MangoWM-first).
-- This is **not** a simpbar project. simpbar was the historical base. All new work is Perihelion-native.
+- Perihelion is an independent project. All work is Perihelion-native.
 - Target compositor: **MangoWM only**. Do not touch Hyprland or Niri paths unless explicitly asked.
 
 ## Toolchain
@@ -267,7 +267,7 @@ When porting widgets or features from Event Horizon dotfiles:
 
 ## What Not To Do
 
-- Do not reintroduce “simpbar” framing in new code or docs.
+- Do not reintroduce the old base project's name, framing, assets or credits in code or docs.
 - Do not add Event Horizon logos, strings, or branding.
 - Do not break the MangoWM ISO path.
 - Do not start large new systems (full Control Center rewrites, embedded terminal, lock screen) without explicit request.

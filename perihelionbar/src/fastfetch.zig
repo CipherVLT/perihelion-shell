@@ -5,9 +5,9 @@
 //! hands its stdout to runComplete().
 //!
 //! Perihelion's fastfetch is the stock `fastfetch` package with a custom
-//! config: install.sh copies the repo's fastfetch/ to ~/.config/fastfetch/
+//! config: the installer seeds ~/.config/fastfetch/ from desktop/config/fastfetch/
 //! (boxed Hardware / Software / Uptime sections, tree-style keys, the
-//! feather logo), and the default copy lives at SHIPPED_CONFIG. The card
+//! distro logo), and the default copy lives at SHIPPED_CONFIG. The card
 //! follows that config:
 //!
 //!   Config layout (a config was found and has a "modules" list):
@@ -1735,7 +1735,7 @@ pub const Service = struct {
         var src: []const u8 = spec;
         if (spec.len == 0 or std.ascii.eqlIgnoreCase(spec, "auto")) {
             // The fastfetch config the card found (Perihelion's points at
-            // the feather logo); with fastfetch_config "none", still the
+            // the distro logo); with fastfetch_config "none", still the
             // user's own config for the logo.
             var text_buf: [16384]u8 = undefined;
             const text = cfg_text orelse blk: {
@@ -2500,13 +2500,13 @@ test "fields, logo source, logo columns, distro glyph" {
         \\{
         \\    "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
         \\    "logo": {
-        \\        "source": "~/.config/fastfetch/feather.txt",
+        \\        "source": "~/.config/fastfetch/logo.txt",
         \\        "color": { "1": "blue", "2": "magenta" }
         \\    },
         \\    "modules": [ "break" ]
         \\}
     ;
-    try std.testing.expectEqualStrings("~/.config/fastfetch/feather.txt", logoSourceFromConfig(cfg).?);
+    try std.testing.expectEqualStrings("~/.config/fastfetch/logo.txt", logoSourceFromConfig(cfg).?);
     try std.testing.expectEqualStrings("/x/l.txt", logoSourceFromConfig("{\"logo\": {\"color\": {\"1\": \"blue\"}, \"source\": \"/x/l.txt\"}}").?);
     try std.testing.expect(logoSourceFromConfig("{ \"logo\": \"arch\" }") == null);
     try std.testing.expect(logoSourceFromConfig("{ \"modules\": [] }") == null);
@@ -2542,7 +2542,7 @@ fn writeFile(root: []const u8, rel: []const u8, content: []const u8, mode: posix
     _ = posix.system.close(fd);
 }
 
-test "native collection on a fake system, feather logo from the fastfetch config" {
+test "native collection on a fake system, image logo from the fastfetch config" {
     var rb: [64]u8 = undefined;
     const root = std.fmt.bufPrint(&rb, "/tmp/perihelion-ff-test-{d}", .{std.c.getpid()}) catch unreachable;
     var hb: [80]u8 = undefined;
@@ -2563,8 +2563,8 @@ test "native collection on a fake system, feather logo from the fastfetch config
     writeFile(root, "var/lib/pacman/local/bash-5.2/desc", "x", 0o644);
     writeFile(root, "var/lib/pacman/local/zig-0.16/desc", "x", 0o644);
     writeFile(home, ".config/gtk-3.0/settings.ini", "[Settings]\ngtk-theme-name=adw-gtk3-dark\ngtk-icon-theme-name = Papirus-Dark\n", 0o644);
-    writeFile(home, ".config/fastfetch/config.jsonc", "{ \"logo\": { \"source\": \"~/.config/fastfetch/feather.txt\" } }", 0o644);
-    writeFile(home, ".config/fastfetch/feather.txt", "   $2\u{2584}\u{2588}\u{2584}\n  $1\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\n\n", 0o644);
+    writeFile(home, ".config/fastfetch/config.jsonc", "{ \"logo\": { \"source\": \"~/.config/fastfetch/logo.txt\" } }", 0o644);
+    writeFile(home, ".config/fastfetch/logo.txt", "   $2\u{2584}\u{2588}\u{2584}\n  $1\u{2588}\u{2588}\u{2588}\u{2588}\u{2588}\n\n", 0o644);
 
     const fields = [_]Field{ .os, .host, .uptime, .packages, .cpu, .gpu, .memory, .display, .theme, .icons };
     var s = Service.init(.{ .fields = &fields, .binary = "none", .root = root, .home = home });
@@ -2618,7 +2618,7 @@ const PERIHELION_CONFIG =
     \\{
     \\    "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
     \\    "logo": {
-    \\        "source": "~/.config/fastfetch/feather.txt",
+    \\        "source": "~/.config/fastfetch/logo.txt",
     \\        "color": {
     \\            "1": "blue",
     \\            "2": "magenta"
@@ -2827,7 +2827,7 @@ test "config layout: tagged output fills rows, repeats join, fallback to native"
     var hb: [80]u8 = undefined;
     const home = std.fmt.bufPrint(&hb, "{s}/home", .{root}) catch unreachable;
     writeFile(home, ".config/fastfetch/config.jsonc", PERIHELION_CONFIG, 0o644);
-    writeFile(home, ".config/fastfetch/feather.txt", "$1\u{2588}\n", 0o644);
+    writeFile(home, ".config/fastfetch/logo.txt", "$1\u{2588}\n", 0o644);
     var s = Service.init(.{ .root = root, .home = home });
     try std.testing.expectEqual(Layout.config, s.layout);
     try std.testing.expect(std.mem.endsWith(u8, s.config_path.slice(), "/.config/fastfetch/config.jsonc"));

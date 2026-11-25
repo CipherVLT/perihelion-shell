@@ -811,7 +811,7 @@ test "checkAssetUrl: the repository name in any case, everything else exact" {
         "https://GITHUB.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
         "https://github.com/CipherVLT/perihelion-shell/Releases/download/v0.1.0/SHA256SUMS",
         "https://github.com/CipherVLT/perihelion-shellx/releases/download/v0.1.0/SHA256SUMS",
-        "https://github.com/CipherVLT/simpbar-dotfiles/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/another-project/releases/download/v0.1.0/SHA256SUMS",
         "https://github.com/CipherVLT/perihelion-shel",
     }) |bad| try tt.expect(!checkAssetUrl(bad, "v0.1.0", "SHA256SUMS"));
 }

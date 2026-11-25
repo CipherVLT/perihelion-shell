@@ -1,11 +1,11 @@
 # Notices
 
 Perihelion Shell is licensed under the GNU General Public License v3.0
-(see [LICENSE](LICENSE)). It includes work from these projects.
-
-## simpbar
+(see [LICENSE](LICENSE)).
 
 Perihelion Bar began as a fork of simpbar by jaytheoutpatient, used and changed with his permission.
+
+It includes work from these projects.
 
 ## zig-wayland
 

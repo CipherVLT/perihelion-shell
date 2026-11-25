@@ -251,7 +251,7 @@ const DEFAULT_WIDGETS = [_]WidgetCfg{
     // with Ctrl+left-click.
     .{ .id = .icons, .x = 380, .y = 24 },
     // The Fastfetch card takes the right column under the User card (≈ 480px
-    // wide with Perihelion's feather logo; drag it anywhere).
+    // wide with the distro logo; drag it anywhere).
     .{ .id = .fastfetch, .x = 1416, .y = 248 },
     // Top processes under the Fastfetch card on the right (≈ 250 x 197px
     // at six rows and the 13px font).
