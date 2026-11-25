@@ -3,20 +3,32 @@
 Perihelion Shell is licensed under the GNU General Public License v3.0
 (see [LICENSE](LICENSE)). It includes work from these projects.
 
-## simpbar: where Perihelion Bar began
+## simpbar
 
-Perihelion Bar began as a fork of simpbar, and its Git history keeps
-simpbar's commits with their original authorship. It has since been
-reworked throughout.
+Perihelion Bar began as a fork of simpbar by jaytheoutpatient, used and changed with his permission.
 
-- Project: simpbar, https://github.com/jaytheoutpatient/simpbar (no longer
-  reachable as of 2026-11-25)
-- Author: jaytheoutpatient
-- Licence: simpbar published no licence file. It was forked and continued
-  with the author's permission. simpbar's own README credited Ryzendew
-  (install script start), the XeroLinux Team (Xero Arch Installer, GPL-3.0,
-  `xero/xero-install.sh`) and BlueManCZ's HyprMod (Hyprland settings UX);
-  those credits stand in README.md.
+## zig-wayland
+
+`perihelionbar/zig-pkg/wayland-0.7.0-*` and `perihelionbar-shell/zig-pkg/wayland-0.7.0-*`
+are zig-wayland 0.7.0, unchanged: the Wayland bindings and protocol scanner
+both programs build with.
+
+- Project: zig-wayland, https://codeberg.org/ifreund/zig-wayland
+- Copyright © 2020 Isaac Freund
+- Licence: MIT (its `LICENSE` file is kept beside the code)
+
+## wlr-protocols
+
+The Wayland protocol descriptions in `perihelionbar/protocols/` and
+`perihelionbar-shell/protocols/`, from
+https://gitlab.freedesktop.org/wlroots/wlr-protocols. Each file carries its
+copyright and licence in its `<copyright>` block.
+
+- `wlr-layer-shell-unstable-v1.xml`: Copyright © 2017 Drew DeVault; HPND-style
+  permission notice (use, copy, modify, distribute and sell, with the
+  notice kept).
+- `wlr-screencopy-unstable-v1.xml`: Copyright © 2018 Simon Ser, © 2019 Andri
+  Yngvason; MIT licence.
 
 ## Event Horizon: lock screen
 

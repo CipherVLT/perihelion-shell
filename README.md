@@ -3,29 +3,77 @@
 
 # Perihelion Bar
 
-A native Zig/Wayland status bar for **Hyprland and MangoWM** — simple, clean, out of the way — plus an installer that sets up a ricing-friendly Arch desktop around it.
+A native Zig/Wayland desktop for **MangoWM and Hyprland**: the bar and dock, desktop cards, Glance, the window overview, Settings (with Updates), a lock screen, an app drawer, wallpaper theming and a wallpaper picker. Light by design.
 
 Where it came from and whose work it includes: [NOTICE.md](NOTICE.md).
 
-Built for **Arch Linux** (EndeavourOS, CachyOS, Garuda, XeroLinux should work too). Pick your window manager (**Hyprland** or **MangoWM**) up front; **Chaotic-AUR** is configured for binary packages.
+On **Fedora**, Perihelion Linux ships Perihelion Bar ready to use. On **Arch Linux** (and Arch-based distros: CachyOS, EndeavourOS, Garuda, ...) the installer below sets it up.
 
-## Install
+## Install (Arch)
 
-Building needs Zig 0.17.1 (`install.sh` fetches it if your distro ships another version). From source: `zig build -Doptimize=fast` in `perihelionbar/` and in `perihelionbar-shell/`.
-
-```
-curl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash
+```sh
+curl -fsSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash
 ```
 
-Interactive — answers a few questions, asks for sudo **once**, then installs everything. Reboot when done (`systemctl reboot`).
+Or download first and read it before running:
 
-What you get: bar + desktop widgets + app drawer with Bluetooth, wallpaper picker with matugen auto-theming, foot, rofi, swaync, fish, Neovim, browser/Discord of your choice, OBS/video tools optional. Gaming launchers (Steam/Lutris/Heroic) come from the Xero installer's GAMING picks.
+```sh
+git clone https://github.com/CipherVLT/Perihelion-shell.git
+cd Perihelion-shell
+less install.sh scripts/*.sh
+./install.sh
+```
 
-### Installing on Arch, step by step
+Run it as your normal user; it asks for sudo for the steps that need it. Options:
+`--yes` (take every default, no questions), `--wm=mango|hyprland|both` (default: the
+window managers you have installed; MangoWM when you have neither),
+`--existing=keep|new|beside` (what `--yes` does with a config of yours that differs;
+default `beside`), `--rebuild`. With curl, pass them after `bash -s --`, for example
+`curl -fsSL .../install.sh | bash -s -- --wm=hyprland`.
 
-1. Run the command above in a terminal (not as root). Answer the questions; give your password once when asked.
-2. Reboot: `systemctl reboot`. Log in to MangoWM (or Hyprland, if that's what you picked).
-3. Check what you have: `perihelion-bar --version` prints the version and commit, for example `perihelion-bar 0.1.0-dev (20034aa)`. **Perihelion Settings → System → Updates** shows the same, and *Installed with: install.sh*.
+**What it changes**
+
+- **Packages:** brings the system up to date and installs what is missing in one
+  `pacman -Syu --needed` (the window manager you picked, the build tools, and the
+  programs the desktop uses: quickshell, fuzzel, kitty, swaybg, swayidle, matugen, ...).
+  AUR packages (Strata, the Bibata cursor) only through paru or yay if you have one;
+  otherwise it tells you what to install.
+- **Programs:** Zig 0.17.1 from ziglang.org (signature checked with minisign, kept in
+  `~/.local/share/perihelionbar/`), then `perihelion-bar`, `perihelion-shell`,
+  `perihelion-settings`, the lock screen and their helpers built from this commit and
+  installed to `/usr/bin`; the lock screen's PAM file at `/etc/pam.d/perihelion-lock`;
+  the app drawer's QML in `~/.local/share/perihelionbar/appdrawer`.
+- **Configs:** MangoWM gets `~/.config/mango/` (config.conf plus cfg/, the same keys
+  and programs as Perihelion Linux). Hyprland gets `~/.config/hypr/perihelion.lua` and
+  one line, `require("perihelion")`, at the end of your `hyprland.lua`; nothing else in
+  that file changes. Also `~/.config/perihelionbar/`, kitty, fuzzel, btop, GTK and qt6ct.
+- **Never silently over yours:** for each config of yours that differs it asks: keep
+  mine, take the new one (yours is copied to
+  `~/.local/state/perihelionbar/backup-<date>/` first), or write the new one beside
+  yours as `<file>.perihelion-new`. It remembers the answers for the next run.
+- **Updates:** Settings → System → Updates shows *Installed with: install.sh* and checks
+  for releases with a user timer (`perihelion-update-check.timer`).
+
+Run it again any time to update: it changes only what is out of date and skips the
+build when the installed programs already match the commit. The log is
+`~/.local/state/perihelionbar/install.log`; a failing step stops the installer and
+shows the end of the log.
+
+**Undo**
+
+```sh
+xargs -a ~/.local/state/perihelionbar/installed-files sudo rm -f   # the installed programs and files
+cp -a ~/.local/state/perihelionbar/backup-<date>/. ~/                  # your configs from before
+```
+
+On Hyprland, delete the `require("perihelion")` line in `~/.config/hypr/hyprland.lua`.
+Packages stay installed; remove any you don't want with `sudo pacman -Rns`.
+
+**From source** (no installer): `zig build -Doptimize=fast` in `perihelionbar/` and in
+`perihelionbar-shell/`, with Zig 0.17.1.
+
+After installing, log in to MangoWM or Hyprland. `perihelion-bar --version` prints the
+version and commit, for example `perihelion-bar 0.1.0-dev (20034aa)`.
 
 ## Updates
 
@@ -249,25 +297,29 @@ Mango then shows a plain locked background. Nothing on the desktop takes input, 
 
 ## Keybindings
 
-Hyprland set (MangoWM in `~/.config/mango/cfg/keybinds.conf`, same spirit):
+The same on MangoWM (`~/.config/mango/cfg/keybinds.conf`) and Hyprland
+(`~/.config/hypr/perihelion.lua`); `Super + H` lists every key.
 
 | Keys | Action |
 |---|---|
-| `SUPER + Enter` | Terminal |
-| `SUPER + Space` | Rofi |
-| `SUPER + Tab` | App drawer |
-| `SUPER + Shift + Tab` | Wallpapers |
-| `SUPER + W` | Restart bar |
-| `Alt + W` | Overview |
-| `SUPER + E` | Files |
-| `SUPER + Q` | Close window |
-| `SUPER + 1–0` | Workspaces |
-| `SUPER + L` | Lock the screen (MangoWM) |
-| `SUPER + I` | Glance (MangoWM) |
-| `SUPER + J` / `SUPER + Shift + I` | Minimize / bring minimized windows back (MangoWM) |
+| `Super + Enter` | Terminal (kitty); `Super + Shift + Enter` floating |
+| `Super + D` | App launcher |
+| `Super + A` | App drawer |
+| `Super + I` | Glance |
+| `Alt + W` | Window overview |
+| `Super + Shift + W` | Wallpapers |
+| `Super + E` / `Super + B` | Files (Strata) / browser |
+| `Super + L` | Lock the screen |
+| `Super + Shift + Q` | Power menu |
+| `Super + Shift + D` | Restart the bar and dock |
+| `Super + Q` / `Super + W` / `Super + F` | Close / float / fullscreen |
+| `Super + 1–9`, `Super + Shift + 1–9` | Workspaces, move window there |
+| `Super + Shift + S`, `Print` | Screenshot: region, screen |
+| `Super + G`, `Super + Shift + G` | Glass windows, blur strength (MangoWM) |
 
-MangoWM starts the bar and its dock with `perihelion-bar-start` (run it again to restart both), plus `perihelion-shell`, swayidle and the dbus activation line the portals need. `install.sh` never overwrites an existing `~/.config/mango`; when one is already there it prints the exact lines that are missing.
-
+Both start the bar and its dock with `perihelion-bar-start` (run it again to restart
+both), plus `perihelion-shell`, the app drawer, swayidle (lock after 10 minutes and
+before suspend) and the dbus activation line the portals need.
 
 ## Images
 
@@ -284,8 +336,6 @@ MangoWM starts the bar and its dock with `perihelion-bar-start` (run it again to
 
 ## Credits
 
-- Install script start: **Ryzendew**.
-- `xero/xero-install.sh`: **XeroLinux Team** (Xero Arch Installer, GPL-3.0) — base-system installer this fork builds on.
 - Hyprland-settings UX inspired by **HyprMod** by **BlueManCZ**.
 - The lock screen's design and much of its code (`perihelionbar-shell/src/lock/`): **Event Horizon**'s lock screen. Copyright and licence in [NOTICE.md](NOTICE.md).
 - Palettes in `theme/palettes/`: **Event Horizon**'s colour themes (GPL-3.0), each crediting the scheme it is named after in `theme/palettes/NOTICE.md`. Monokai's are left out (no open licence).
