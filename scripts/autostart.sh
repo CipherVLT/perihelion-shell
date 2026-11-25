@@ -84,11 +84,13 @@ check_mango_autostart() {
 
 check_hyprland_autostart() {
     local dir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
-    if grep -qE 'require[[:space:]]*\(?[[:space:]]*["'"'"']perihelion["'"'"']' "${dir}/hyprland.lua" 2>/dev/null &&
-        grep -q 'perihelion-bar-start' "${dir}/perihelion.lua" 2>/dev/null; then
+    if { grep -qE 'require[[:space:]]*\(?[[:space:]]*["'"'"']perihelion["'"'"']' "${dir}/hyprland.lua" 2>/dev/null &&
+        grep -q 'perihelion-bar-start' "${dir}/perihelion.lua" 2>/dev/null; } ||
+        { grep -qxF 'source = ~/.config/hypr/perihelion.conf' "${dir}/hyprland.conf" 2>/dev/null &&
+            grep -q 'perihelion-bar-start' "${dir}/perihelion.conf" 2>/dev/null; }; then
         ok "Hyprland starts the bar, dock, shell, drawer and idle lock"
     else
-        warn "Hyprland does not load ~/.config/hypr/perihelion.lua yet (require(\"perihelion\") in hyprland.lua)"
+        warn "Hyprland does not load Perihelion Bar yet (see the lines above)"
     fi
 }
 

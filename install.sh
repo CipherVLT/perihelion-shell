@@ -309,7 +309,7 @@ report() {
     printf '  Settings: perihelion-settings (or from the app drawer)\n'
     printf '\n%sUndo%s\n' "${B}" "${RST}"
     printf '  Programs:  xargs -a %s sudo rm -f\n' "${MANIFEST_FILE}"
-    (( WANT_HYPR )) && printf '  Hyprland:  delete the line  require("perihelion")  in ~/.config/hypr/hyprland.lua\n'
+    (( WANT_HYPR )) && printf '  Hyprland:  delete the Perihelion Bar line at the end of ~/.config/hypr/hyprland.lua (or hyprland.conf)\n'
     [[ -d ${BACKUP_DIR} ]] && printf '  Your old configs:  cp -a %s/. ~/\n' "${BACKUP_DIR}"
     printf '  Log: %s\n' "${LOG_FILE}"
 }

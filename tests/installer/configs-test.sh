@@ -107,5 +107,40 @@ check grep -qx 'require("perihelion")' "${C}/hypr/hyprland.lua"
 check grep -qx 'monitor=,preferred,auto,1' "${C}/hypr/hyprland.conf"
 check test "${#WARNINGS[@]}" -eq 1
 
+echo "== Hyprland 0.56 with only hyprland.conf: perihelion.conf + one source line, backed up, never twice"
+H2="${C}/hypr"
+rm -rf "${H2}"; mkdir -p "${H2}"
+printf 'monitor=,preferred,auto,1\nbind = SUPER, Q, exec, foot\n' > "${H2}/hyprland.conf"
+hyprland_version() { echo 0.56.1; }
+BACKUP_DIR="${STATE_DIR}/backup-test-conf"; reset_lists
+install_configs >/dev/null
+check test -f "${H2}/perihelion.conf"
+check test ! -e "${H2}/hyprland.lua"
+check test "$(grep -cxF 'source = ~/.config/hypr/perihelion.conf' "${H2}/hyprland.conf")" -eq 1
+check grep -qx 'bind = SUPER, Q, exec, foot' "${H2}/hyprland.conf"
+check grep -qx 'monitor=,preferred,auto,1' "${BACKUP_DIR}/.config/hypr/hyprland.conf"
+install_configs >/dev/null
+check test "$(grep -cxF 'source = ~/.config/hypr/perihelion.conf' "${H2}/hyprland.conf")" -eq 1
+check grep -qx 'unbind = SUPER, L' "${H2}/perihelion.conf"
+check grep -qx 'bind = SUPER, I, exec, perihelion-shell glance toggle' "${H2}/perihelion.conf"
+check grep -qx 'exec-once = perihelion-bar-start' "${H2}/perihelion.conf"
+
+echo "== Hyprland 0.57 with only hyprland.conf: Lua (0.57 no longer reads hyprland.conf)"
+rm -rf "${H2}"; mkdir -p "${H2}"; printf 'monitor=,preferred,auto,1\n' > "${H2}/hyprland.conf"
+hyprland_version() { echo 0.57.2; }
+reset_lists; install_configs >/dev/null
+check grep -qx 'require("perihelion")' "${H2}/hyprland.lua"
+check test ! -e "${H2}/perihelion.conf"
+check grep -qx 'monitor=,preferred,auto,1' "${H2}/hyprland.conf"
+
+echo "== an existing hyprland.lua always wins, even on an older version; the line is a Lua comment + require"
+rm -rf "${H2}"; mkdir -p "${H2}"; printf -- '-- mine\n' > "${H2}/hyprland.lua"; printf 'x=1\n' > "${H2}/hyprland.conf"
+hyprland_version() { echo 0.55.0; }
+reset_lists; install_configs >/dev/null
+check grep -qx -- '-- Perihelion Bar (delete this line to switch it off)' "${H2}/hyprland.lua"
+check test "$(grep -cx 'require("perihelion")' "${H2}/hyprland.lua")" -eq 1
+check test ! -e "${H2}/perihelion.conf"
+check grep -qx 'x=1' "${H2}/hyprland.conf"
+
 (( fails )) && echo "configs-test: FAILED" || echo "configs-test: all passed"
 exit "${fails}"

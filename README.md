@@ -43,8 +43,10 @@ default `beside`), `--rebuild`. With curl, pass them after `bash -s --`, for exa
   the app drawer's QML in `~/.local/share/perihelionbar/appdrawer`.
 - **Configs:** MangoWM gets `~/.config/mango/` (config.conf plus cfg/, the same keys
   and programs as Perihelion Linux). Hyprland gets `~/.config/hypr/perihelion.lua` and
-  one line, `require("perihelion")`, at the end of your `hyprland.lua`; nothing else in
-  that file changes. Also `~/.config/perihelionbar/`, kitty, fuzzel, btop, GTK and qt6ct.
+  one line, `require("perihelion")`, at the end of your `hyprland.lua` (Hyprland 0.55+;
+  if you still run a `hyprland.conf` on 0.55 or 0.56 it gets `perihelion.conf` and one
+  `source = ~/.config/hypr/perihelion.conf` line instead). Nothing else in that file
+  changes, it is backed up first, and the line is never added twice. Also `~/.config/perihelionbar/`, kitty, fuzzel, btop, GTK and qt6ct.
 - **Never silently over yours:** for each config of yours that differs it asks: keep
   mine, take the new one (yours is copied to
   `~/.local/state/perihelionbar/backup-<date>/` first), or write the new one beside
@@ -64,7 +66,8 @@ xargs -a ~/.local/state/perihelionbar/installed-files sudo rm -f   # the install
 cp -a ~/.local/state/perihelionbar/backup-<date>/. ~/                  # your configs from before
 ```
 
-On Hyprland, delete the `require("perihelion")` line in `~/.config/hypr/hyprland.lua`.
+On Hyprland, delete the `require("perihelion")` line in `~/.config/hypr/hyprland.lua`
+(or the `source = ~/.config/hypr/perihelion.conf` line in `hyprland.conf`).
 Packages stay installed; remove any you don't want with `sudo pacman -Rns`.
 
 **From source** (no installer): `zig build -Doptimize=fast` in `perihelionbar/` and in

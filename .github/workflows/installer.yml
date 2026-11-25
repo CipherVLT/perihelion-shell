@@ -50,3 +50,35 @@ jobs:
           for f in /home/*/.local/state/perihelionbar/install.log; do
             echo "::group::$f"; cat "$f"; echo "::endgroup::"
           done
+
+  # hyprland.conf setups (Hyprland before 0.57): check perihelion.conf with a
+  # Hyprland that still reads it, 0.56.2 from the Arch Linux Archive.
+  hyprland-conf:
+    needs: lint
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Hyprland 0.56 from the Arch Linux Archive (2026-10-15)
+        run: |
+          echo 'Server = https://archive.archlinux.org/repos/2026/10/15/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+          pacman -Syyuu --noconfirm hyprland git
+          Hyprland --version | head -1
+          Hyprland --version | head -1 | grep -q '^Hyprland 0\.56\.'
+      - uses: actions/checkout@v4
+      - name: perihelion.conf through one source line passes Hyprland's config check
+        run: |
+          d=$(mktemp -d)
+          cp desktop/hypr/perihelion.conf "$d/"
+          printf 'monitor=,preferred,auto,1\nbind = SUPER, Q, exec, foot\n\n# Perihelion Bar (delete this line to switch it off)\nsource = %s/perihelion.conf\n' "$d" > "$d/hyprland.conf"
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          out=$(timeout 60 Hyprland --verify-config -c "$d/hyprland.conf" 2>&1 || true)
+          printf '%s\n' "$out" | sed -n '/parsing result/,$p'
+          grep -qx 'config ok' <<<"$out"
+      - name: The check catches a broken line (so "config ok" above means something)
+        run: |
+          d=$(mktemp -d)
+          printf 'bind = SUPER, Q, notadispatcher_xyz,\nnot_a_keyword_xyz = 1\n' > "$d/hyprland.conf"
+          export XDG_RUNTIME_DIR=$(mktemp -d)
+          out=$(timeout 60 Hyprland --verify-config -c "$d/hyprland.conf" 2>&1 || true)
+          printf '%s\n' "$out" | sed -n '/parsing result/,$p'
+          ! grep -qx 'config ok' <<<"$out"

@@ -188,30 +188,72 @@ install_mango_config() {
 }
 
 # shellcheck disable=SC2088  # "~/..." below is text for you to read, not a path
-# Hyprland: everything in ~/.config/hypr/perihelion.lua, switched on by one
-# require line in your hyprland.lua; the rest of that file is never touched.
-install_hyprland_config() {
-    local cfg=$1 main="$1/hypr/hyprland.lua"
-    place_config "${SRC_DIR}/desktop/hypr/perihelion.lua" "${cfg}/hypr/perihelion.lua"
-    if [[ ! -e ${main} ]]; then
-        mkdir -p "${cfg}/hypr"
-        if [[ -e ${cfg}/hypr/hyprland.conf ]]; then
-            warn "~/.config/hypr/hyprland.conf is not read by Hyprland 0.56+ (Lua configs); started a new hyprland.lua beside it"
-        fi
-        printf '%s\n' '-- Hyprland config (Lua). Your own settings go here.' \
-            'hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })' \
-            '' '-- Perihelion Bar (delete this line to switch it off)' 'require("perihelion")' > "${main}"
-        CONFIGS_WRITTEN+=("~/.config/hypr/hyprland.lua")
-        return
+# Hyprland: everything in one perihelion file, switched on by one line in
+# your main config; the rest of that file is never touched.
+#   hyprland.lua exists, or no hyprland.conf to keep  -> perihelion.lua + require("perihelion")
+#   only hyprland.conf, on a Hyprland that still reads it (before 0.57)
+#                                                     -> perihelion.conf + source = ...
+# (Hyprland reads Lua from 0.55 and dropped hyprland.conf in 0.57; on 0.55
+# and 0.56 a new hyprland.lua would replace your hyprland.conf.)
+hyprland_version() {
+    Hyprland --version 2>/dev/null | sed -n 's/^Hyprland \([0-9][0-9.]*\).*/\1/p' | head -n 1
+}
+
+version_lt() { [[ $1 != "$2" && $(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1) == "$1" ]]; }
+
+hyprland_flavour() { # CONFIG_DIR -> lua | conf
+    local dir=$1 v
+    if [[ -e ${dir}/hyprland.lua ]]; then echo lua; return; fi
+    if [[ -e ${dir}/hyprland.conf ]]; then
+        v=$(hyprland_version)
+        if [[ -n ${v} ]] && version_lt "${v}" 0.57; then echo conf; return; fi
     fi
-    if grep -qE '^[[:space:]]*require[[:space:]]*\(?[[:space:]]*["'"'"']perihelion["'"'"']' "${main}"; then
+    echo lua
+}
+
+# add_include FILE LINE COMMENT: one line at the end of FILE, backed up first,
+# never twice.
+add_include() {
+    local file=$1 line=$2 shown=${1/#"$HOME"/\~}
+    if grep -qxF "${line}" "${file}"; then
         return 0
     fi
-    if ask_yes "Add  require(\"perihelion\")  at the end of ~/.config/hypr/hyprland.lua (the rest stays as it is)?" y; then
-        backup_file "${main}"
-        printf '\n-- Perihelion Bar (delete this line to switch it off)\nrequire("perihelion")\n' >> "${main}"
-        CONFIGS_WRITTEN+=("~/.config/hypr/hyprland.lua (one line added)")
+    if ask_yes "Add  ${line}  at the end of ${shown} (the rest stays as it is)?" y; then
+        backup_file "${file}"
+        printf '\n# Perihelion Bar (delete this line to switch it off)\n%s\n' "${line}" | {
+            if [[ ${file} == *.lua ]]; then sed 's/^#/--/'; else cat; fi
+        } >> "${file}"
+        CONFIGS_WRITTEN+=("${shown} (one line added)")
     else
-        warn "Hyprland: add  require(\"perihelion\")  to ~/.config/hypr/hyprland.lua to switch Perihelion Bar on"
+        warn "Hyprland: add  ${line}  to ${shown} to switch Perihelion Bar on"
     fi
+}
+
+# shellcheck disable=SC2088
+install_hyprland_config() {
+    local cfg=$1 dir="$1/hypr"
+    mkdir -p "${dir}"
+    case "$(hyprland_flavour "${dir}")" in
+        conf)
+            place_config "${SRC_DIR}/desktop/hypr/perihelion.conf" "${dir}/perihelion.conf"
+            add_include "${dir}/hyprland.conf" 'source = ~/.config/hypr/perihelion.conf'
+            ;;
+        lua)
+            place_config "${SRC_DIR}/desktop/hypr/perihelion.lua" "${dir}/perihelion.lua"
+            if [[ ! -e ${dir}/hyprland.lua ]]; then
+                if [[ -e ${dir}/hyprland.conf ]]; then
+                    warn "~/.config/hypr/hyprland.conf is not read by Hyprland 0.57+ (Lua configs); started a new hyprland.lua beside it"
+                fi
+                printf '%s\n' '-- Hyprland config (Lua). Your own settings go here.' \
+                    'hl.monitor({ output = "", mode = "preferred", position = "auto", scale = "auto" })' \
+                    '' '-- Perihelion Bar (delete this line to switch it off)' 'require("perihelion")' > "${dir}/hyprland.lua"
+                CONFIGS_WRITTEN+=("~/.config/hypr/hyprland.lua")
+                return
+            fi
+            if grep -qE '^[[:space:]]*require[[:space:]]*\(?[[:space:]]*["'"'"']perihelion["'"'"']' "${dir}/hyprland.lua"; then
+                return 0
+            fi
+            add_include "${dir}/hyprland.lua" 'require("perihelion")'
+            ;;
+    esac
 }
