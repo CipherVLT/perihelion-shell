@@ -4921,7 +4921,7 @@ fn buildModulesPage() *gtk.GtkBox {
 // COSMETIC HEADER of /boot/limine.conf: menu timeout, colors (term_palette
 // / term_palette_bright / term_foreground / term_background), the boot()
 // wallpaper, and the interface_branding footer. Everything from the first
-// "/Title" entry line on — Featherlite's kernels plus limine-snapper-sync's
+// "/Title" entry line on — the installed kernels plus limine-snapper-sync's
 // snapshot entries — is preserved byte-for-byte, and unknown header keys
 // pass through untouched; only known keys are replaced in place (appended
 // at the header's end when missing). The keys are stock Limine config
@@ -4940,14 +4940,14 @@ fn buildModulesPage() *gtk.GtkBox {
 // ---------------------------------------------------------------------
 
 const limine_conf_path: [:0]const u8 = "/boot/limine.conf";
-const limine_stage_path: [:0]const u8 = "/tmp/featherlite-limine.conf";
-const limine_stage_path_s: []const u8 = "/tmp/featherlite-limine.conf";
+const limine_stage_path: [:0]const u8 = "/tmp/perihelion-limine.conf";
+const limine_stage_path_s: []const u8 = "/tmp/perihelion-limine.conf";
 
 // Where pkexec's own stderr is captured so a failed polkit auth can be
 // quoted back into the status label (a GUI process's stderr goes to the tty
 // it was launched from — invisible once that shell is gone).
-const limine_pkexec_err_path: [:0]const u8 = "/tmp/featherlite-pkexec.err";
-const limine_pkexec_err_path_s: []const u8 = "/tmp/featherlite-pkexec.err";
+const limine_pkexec_err_path: [:0]const u8 = "/tmp/perihelion-pkexec.err";
+const limine_pkexec_err_path_s: []const u8 = "/tmp/perihelion-pkexec.err";
 
 // Fixed scratch buffer holding the current value plus its length. Empty
 // length means "unset" — the conf builder only writes keys for set values,
@@ -5103,7 +5103,7 @@ fn resetLimineState() void {
     limine_bright_v.clear();
     limine_wall_v.clear();
     limine_wall_on = true;
-    limine_branding_v.set("Featherlite");
+    limine_branding_v.set("Perihelion");
 }
 
 /// Limine color keys want bare hex ("RRGGBB"), but color pickers hand us
@@ -5376,16 +5376,16 @@ fn limineStatus(comptime fmt: []const u8, args: anytype) void {
 // ---------------------------------------------------------------------
 
 const ly_conf_path: [:0]const u8 = "/etc/ly/config.ini";
-const ly_stage_path: [:0]const u8 = "/tmp/featherlite-ly.ini";
-const ly_stage_path_s: []const u8 = "/tmp/featherlite-ly.ini";
+const ly_stage_path: [:0]const u8 = "/tmp/perihelion-ly.ini";
+const ly_stage_path_s: []const u8 = "/tmp/perihelion-ly.ini";
 // The greeter's own startup hook — Ly runs it BEFORE taking over the TTY,
 // the only moment the console's 16 palette entries can be redefined so the
 // theme's colors survive. Applied alongside config.ini in one pkexec when
 // a preset (and therefore a palette) is active.
 const ly_startup_path: [:0]const u8 = "/etc/ly/startup.sh";
 const ly_startup_path_s: []const u8 = "/etc/ly/startup.sh";
-const ly_startup_stage_path: [:0]const u8 = "/tmp/featherlite-ly-startup.sh";
-const ly_startup_stage_path_s: []const u8 = "/tmp/featherlite-ly-startup.sh";
+const ly_startup_stage_path: [:0]const u8 = "/tmp/perihelion-ly-startup.sh";
+const ly_startup_stage_path_s: []const u8 = "/tmp/perihelion-ly-startup.sh";
 
 const LY_ANIMATIONS = [_][:0]const u8{ "none", "doom", "matrix", "colormix", "gameoflife", "dur_file" };
 // Ly 1.4+ bigclock is a numerals-language selector, NOT a size — "big" and
@@ -5696,8 +5696,12 @@ fn lyApplyInto(base: []const u8) ![]u8 {
     return out.toOwnedSlice(gpa);
 }
 
-const LY_PALETTE_BLOCK_START = "# ---- Featherlite greeter palette (auto-written by perihelionbar-config); edit via the Login page ----";
-const LY_PALETTE_BLOCK_END = "# ---- end Featherlite greeter palette ----";
+const LY_PALETTE_BLOCK_START = "# ---- Perihelion greeter palette (written by Perihelion Settings); edit via the Login page ----";
+const LY_PALETTE_BLOCK_END = "# ---- end Perihelion greeter palette ----";
+// Markers older builds wrote; such a block is replaced in place too, so an
+// existing greeter script never ends up with two palette blocks.
+const LY_PALETTE_OLD_START = "# ---- Featherlite greeter palette (auto-written by perihelionbar-config); edit via the Login page ----";
+const LY_PALETTE_OLD_END = "# ---- end Featherlite greeter palette ----";
 
 /// Rebuilds the greeter's startup script so a `palette` (16 space-separated
 /// hex entries) takes effect at greeter start. The Linux console clamps
@@ -5722,15 +5726,22 @@ fn lyStartupInto(base: []const u8, palette: []const u8) ![]u8 {
 
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
-    const start = std.mem.indexOf(u8, base, LY_PALETTE_BLOCK_START);
+    var start_marker: []const u8 = LY_PALETTE_BLOCK_START;
+    var end_marker: []const u8 = LY_PALETTE_BLOCK_END;
+    var start = std.mem.indexOf(u8, base, start_marker);
+    if (start == null) {
+        start_marker = LY_PALETTE_OLD_START;
+        end_marker = LY_PALETTE_OLD_END;
+        start = std.mem.indexOf(u8, base, start_marker);
+    }
     var replaced = false;
     if (start) |s| {
-        if (std.mem.indexOfPos(u8, base, s, LY_PALETTE_BLOCK_END)) |e| {
+        if (std.mem.indexOfPos(u8, base, s, end_marker)) |e| {
             try out.appendSlice(gpa, base[0..s]);
             try out.appendSlice(gpa, block.items);
             // The block ends with a newline; drop one from the tail when
             // the original spacing puts a blank line right after the marker.
-            const tail = base[e + LY_PALETTE_BLOCK_END.len ..];
+            const tail = base[e + end_marker.len ..];
             try out.appendSlice(gpa, if (tail.len > 0 and tail[0] == '\n') tail[1..] else tail);
             replaced = true;
         }
@@ -6572,7 +6583,7 @@ fn buildLimineFullPage(stack: *gtk.GtkStack) void {
     const brand_row = gtk.adw_action_row_new();
     gtk.adw_preferences_row_set_title(@ptrCast(brand_row), "Footer text");
     const entry = gtk.gtk_entry_new();
-    gtk.gtk_entry_set_placeholder_text(entry, "Featherlite");
+    gtk.gtk_entry_set_placeholder_text(entry, "Perihelion");
     gtk.gtk_widget_set_size_request(@ptrCast(entry), 180, -1);
     gtk.gtk_widget_set_valign(@ptrCast(entry), gtk.ALIGN_CENTER);
     const buffer = gtk.gtk_entry_get_buffer(entry);
@@ -7265,6 +7276,24 @@ fn realMain() !void {
 // Run: zig test src/config_main.zig -lc -fllvm -flld <gtk libs, see below>
 // ---------------------------------------------------------------------
 
+test "ly greeter palette block: written once, replaced in place, older markers too" {
+    const t = std.testing;
+    const first = try lyStartupInto("#!/bin/sh\n", "000000 111111");
+    defer gpa.free(first);
+    try t.expect(std.mem.indexOf(u8, first, LY_PALETTE_BLOCK_START) != null);
+    const again = try lyStartupInto(first, "222222 333333");
+    defer gpa.free(again);
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, again, LY_PALETTE_BLOCK_START));
+    try t.expect(std.mem.indexOf(u8, again, "000000") == null);
+    const old = "#!/bin/sh\n" ++ LY_PALETTE_OLD_START ++ "\nold body\n" ++ LY_PALETTE_OLD_END ++ "\nkeep me\n";
+    const migrated = try lyStartupInto(old, "444444");
+    defer gpa.free(migrated);
+    try t.expect(std.mem.indexOf(u8, migrated, LY_PALETTE_OLD_START) == null);
+    try t.expect(std.mem.indexOf(u8, migrated, "old body") == null);
+    try t.expect(std.mem.indexOf(u8, migrated, "keep me") != null);
+    try t.expectEqual(@as(usize, 1), std.mem.count(u8, migrated, LY_PALETTE_BLOCK_START));
+}
+
 test "drawer view separation" {
     const t = std.testing;
     // Backing right group: toggle, weather (bar), volume + pacman (drawer).
@@ -7325,7 +7354,7 @@ test "drawer view separation" {
 test "tombstoned kinds strip cleanly" {
     const t = std.testing;
     var g: ModuleGroup = .{};
-    const kinds = [_]ModuleKind{ .weather, .waypaper, .volume, .waypaper, .pacman };
+    const kinds = [_]ModuleKind{ .weather, .waypaper, .volume, .pacman, .clock };
     for (kinds, 0..) |k, i| {
         g.rows[i] = .{ .entry = .{ .kind = k, .enabled = true } };
     }
@@ -7334,7 +7363,7 @@ test "tombstoned kinds strip cleanly" {
     try t.expectEqual(@as(usize, 3), g.len);
     try t.expectEqual(ModuleKind.weather, g.rows[0].entry.kind);
     try t.expectEqual(ModuleKind.volume, g.rows[1].entry.kind);
-    try t.expectEqual(ModuleKind.pacman, g.rows[2].entry.kind);
+    try t.expectEqual(ModuleKind.clock, g.rows[2].entry.kind);
     // Idempotent: nothing left to strip.
     stripRemovedKinds(&g);
     try t.expectEqual(@as(usize, 3), g.len);

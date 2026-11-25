@@ -388,6 +388,12 @@ pub fn build(b: *Build) !void {
     config_exe.use_lld = true;
     b.installArtifact(config_exe);
 
+    // `zig build test-settings`: Settings' pure-data tests (module drawer
+    // layout, the Ly greeter palette block, ...). No display needed.
+    const config_tests = b.addTest(.{ .root_module = config_mod, .use_llvm = true, .use_lld = true });
+    const config_test_step = b.step("test-settings", "Run src/config_main.zig unit tests");
+    config_test_step.dependOn(&b.addRunArtifact(config_tests).step);
+
     const run_config_cmd = b.addRunArtifact(config_exe);
     run_config_cmd.step.dependOn(b.getInstallStep());
     const run_config_step = b.step("run-config", "Run perihelionbar-config");
