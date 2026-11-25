@@ -2934,7 +2934,7 @@ if ! command -v "$TERM_BIN" >/dev/null 2>&1; then
     echo "terminal $TERM_BIN not found — cannot open installer"
     exit 0
 fi
-INSTALL_CMD='curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash'
+INSTALL_CMD='curl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash'
 if [ "$TERM_BIN" = "kitty" ]; then
     exec "$TERM_BIN" bash -c "$INSTALL_CMD; exec bash"
 elif [ "$TERM_BIN" = "wezterm" ]; then
@@ -3080,7 +3080,7 @@ perform_installation() {
             "desktop installer running." \
             "" \
             "If it doesn't open, run post-reboot:" \
-            "  curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash"
+            "  curl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash"
     else
         gum style --foreground 82 --bold --border double --border-foreground 82 \
             --align center --width 60 --margin "1 2" --padding "1 2" \
@@ -3090,7 +3090,7 @@ perform_installation() {
             "" \
             "Remove the installation media and reboot, then set up" \
             "the perihelionbar desktop:" \
-            "  curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash"
+            "  curl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash"
     fi
     echo ""
     # Auto-reboot: the base install is complete and the ISO environment is
@@ -3562,10 +3562,10 @@ ID=featherlite
 ID_LIKE=arch
 BUILD_ID=rolling
 ANSI_COLOR="0;36"
-HOME_URL="https://github.com/CipherVLT/perihelion-shell"
+HOME_URL="https://github.com/CipherVLT/Perihelion-shell"
 DOCUMENTATION_URL="https://wiki.archlinux.org/"
-SUPPORT_URL="https://github.com/CipherVLT/perihelion-shell"
-BUG_REPORT_URL="https://github.com/CipherVLT/perihelion-shell/issues"
+SUPPORT_URL="https://github.com/CipherVLT/Perihelion-shell"
+BUG_REPORT_URL="https://github.com/CipherVLT/Perihelion-shell/issues"
 LOGO=archlinux
 FEATHEROS
 

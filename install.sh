@@ -508,14 +508,14 @@ if [ -d /run/archiso ]; then
         # below stays an exact match either way).
         xero_confirm="${xero_confirm//[[:space:]]/}"
         if [ "$xero_confirm" = "y" ] || [ "$xero_confirm" = "Y" ]; then
-            if curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/xero/xero-install.sh -o /tmp/xero-install.sh; then
+            if curl -fsSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/xero/xero-install.sh -o /tmp/xero-install.sh; then
                 if bash /tmp/xero-install.sh < /dev/tty; then
                     rm -f /tmp/xero-install.sh
                     printf '\n  %sBase system installed — reboot into it now.%s\n' "$C_GREEN" "$C_RESET"
                     printf '  Remove the installation media, reboot, log in as the user you just created.\n'
                     printf '  If you chose a first-boot WM, a terminal opens with the desktop setup running.\n'
                     printf '  Otherwise (or if it never opens), run it yourself post-reboot:\n'
-                    printf '  %scurl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash%s\n' "$C_BOLD" "$C_RESET"
+                    printf '  %scurl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash%s\n' "$C_BOLD" "$C_RESET"
                     printf '  (Running the steps below here would install into this live ISO as root —\n'
                     printf '  nothing would survive the reboot.)\n'
                     exit 0
@@ -710,7 +710,7 @@ step "Fetching perihelionbar theme"
 mkdir -p ~/.config
 
 run_spinner "Downloading perihelionbar config" \
-    curl -fL -o /tmp/perihelionbar.zip https://github.com/CipherVLT/perihelion-shell/archive/refs/heads/main.zip \
+    curl -fL -o /tmp/perihelionbar.zip https://github.com/CipherVLT/Perihelion-shell/archive/refs/heads/main.zip \
     || die "Could not download perihelionbar (check your network connection)."
 
 run_spinner "Extracting archive" \
@@ -2017,7 +2017,7 @@ elif command -v paru >/dev/null 2>&1; then
 fi
 
 # New commits on the perihelionbar repo's main branch.
-LATEST_SHA=$(curl -fsSL "https://api.github.com/repos/CipherVLT/perihelion-shell/commits/main" 2>/dev/null \
+LATEST_SHA=$(curl -fsSL "https://api.github.com/repos/CipherVLT/Perihelion-shell/commits/main" 2>/dev/null \
     | grep -m1 '"sha"' | cut -d'"' -f4)
 if [ -n "$LATEST_SHA" ]; then
     PREV_SHA=$(cat "$COMMIT_CACHE" 2>/dev/null || echo "")

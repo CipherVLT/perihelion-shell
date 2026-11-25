@@ -26,7 +26,7 @@ elif command -v paru >/dev/null 2>&1; then
 fi
 
 # New commits on the perihelionbar repo's main branch.
-LATEST_SHA=$(curl -fsSL "https://api.github.com/repos/CipherVLT/perihelion-shell/commits/main" 2>/dev/null \
+LATEST_SHA=$(curl -fsSL "https://api.github.com/repos/CipherVLT/Perihelion-shell/commits/main" 2>/dev/null \
     | grep -m1 '"sha"' | cut -d'"' -f4)
 if [ -n "$LATEST_SHA" ]; then
     PREV_SHA=$(cat "$COMMIT_CACHE" 2>/dev/null || echo "")

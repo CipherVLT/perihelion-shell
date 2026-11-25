@@ -14,7 +14,7 @@ Built for **Arch Linux** (EndeavourOS, CachyOS, Garuda, XeroLinux should work to
 Building needs Zig 0.17.1 (`install.sh` fetches it if your distro ships another version). From source: `zig build -Doptimize=fast` in `perihelionbar/` and in `perihelionbar-shell/`.
 
 ```
-curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/CipherVLT/Perihelion-shell/main/install.sh | bash
 ```
 
 Interactive — answers a few questions, asks for sudo **once**, then installs everything. Reboot when done (`systemctl reboot`).
