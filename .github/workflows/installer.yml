@@ -61,7 +61,12 @@ jobs:
       - name: Hyprland 0.56 from the Arch Linux Archive (2026-10-15)
         run: |
           echo 'Server = https://archive.archlinux.org/repos/2026/10/15/$repo/os/$arch' > /etc/pacman.d/mirrorlist
-          pacman -Syyuu --noconfirm hyprland git
+          # The archive is slow at times: no download timeout, three tries.
+          for try in 1 2 3; do
+            pacman -Syyuu --noconfirm --disable-download-timeout hyprland git && break
+            [ "$try" = 3 ] && exit 1
+            sleep $((try * 30))
+          done
           Hyprland --version | head -1
           Hyprland --version | head -1 | grep -q '^Hyprland 0\.56\.'
       - uses: actions/checkout@v4
