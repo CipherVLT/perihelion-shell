@@ -67,6 +67,8 @@ jobs:
             [ "$try" = 3 ] && exit 1
             sleep $((try * 30))
           done
+          # Hyprland 0.56 refuses to start, even for --version, without it.
+          export XDG_RUNTIME_DIR=$(mktemp -d)
           Hyprland --version | head -1
           Hyprland --version | head -1 | grep -q '^Hyprland 0\.56\.'
       - uses: actions/checkout@v4
