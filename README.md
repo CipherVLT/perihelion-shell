@@ -1,6 +1,4 @@
 
-<img width="1254" height="1254" alt="Neon Gradient Feather Emblem" src="https://github.com/user-attachments/assets/a04835bf-6f32-4dc9-8dc7-68c03ae6553a" />
-
 # Perihelion Bar
 
 A native Zig/Wayland desktop for **MangoWM and Hyprland**: the bar and dock, desktop cards, Glance, the window overview, Settings (with Updates), a lock screen, an app drawer, wallpaper theming and a wallpaper picker. Light by design.
@@ -140,7 +138,7 @@ To turn the background check off: switch off **Check automatically**, or `system
   Coordinates are the most reliable choice, and `weather_city` is then just the label. With no coordinates, `weather_city` is looked up once. It can be a city or postal code, `"DeSoto, TX"` (a city in that US state), `"Lyon, FR"` (a city in that country) or `"32.59,-96.86"` (coordinates). With neither, the shell guesses the place from your IP address (turn that off with `weather_auto_location: false`). The first line of `~/.config/perihelionbar/weather-location` is read the same way when `weather_city` is empty.
 
   `weather_units` is `"auto"`, `"C"` or `"F"`. `weather_click: "units"` makes a click switch °C/°F instead of opening the forecast. Both are also in Perihelion Settings.
-- The Fastfetch card follows your fastfetch config, the same one your terminal uses. With Perihelion's config, that means the feather logo in the wallpaper's colours, then `user@host`, then the Hardware, Software and Uptime / Age / DT sections with the same rows and icons (PC, CPU, GPU, memory, disk, distro, kernel, BIOS, packages, WM, OS age, uptime, date and time). The terminal's box lines become section headers, and the tree marks before each key are dropped. Only modules your config lists are shown, so no local IP unless you add it.
+- The Fastfetch card follows your fastfetch config, the same one your terminal uses. With Perihelion's config, that means your distro's logo in the wallpaper's colours, then `user@host`, then the Hardware, Software and Uptime / Age / DT sections with the same rows and icons (PC, CPU, GPU, memory, disk, distro, kernel, BIOS, packages, WM, OS age, uptime, date and time). The terminal's box lines become section headers, and the tree marks before each key are dropped. Only modules your config lists are shown, so no local IP unless you add it.
   - **Which config:** `fastfetch_config`, else `~/.config/fastfetch/config.jsonc` (or under `$XDG_CONFIG_HOME`), else Perihelion's default at `/usr/share/perihelion/fastfetch/config.jsonc`.
   - **Which program:** `fastfetch_binary`, else `perihelion-fastfetch` if one is on your PATH, else `fastfetch`. With none of them, the card fills in what it can read itself.
   - **How often:** fastfetch runs at start and every 30 minutes. Uptime, memory, disk and the clock are updated every minute without starting a process.
@@ -289,11 +287,11 @@ Mango then shows a plain locked background. Nothing on the desktop takes input, 
    Use the `wayland-N` name `ls` printed (not the `.lock` file). If there are several, it's the one Mango created; `perihelion-lockscreen` exits with an error on the wrong one, so try the next. With `-f` it returns to the prompt once the lock is back, and keeps running when you log out of the console (`exit`).
 3. Go back to the graphical session: `Ctrl + Alt + F1` (or `F2`, whichever shows your desktop), and unlock with your password.
 
-## Welcome & Config
+## Welcome & Settings
 
-**Perihelion Bar Welcome** (first login, then pinned in the bar): intro, one-click updates, wallpaper picker, text-editor/browser/Discord picks, keybinding reference.
+**Perihelion Bar Welcome** (`perihelionbar-welcome`): a first-login tour with update and Settings shortcuts, a few optional extras (audio effects, graphics apps, video players, text editors), the keybindings and the project links.
 
-**Perihelion Bar Config:** bar appearance + modules + nine WM pages (General, Monitors, Animations, Keybinds, Window/Workspace/Layer Rules, Autostart, Environment). Hyprland writes `hyprland-perihelionbar.lua`, MangoWM edits `~/.config/mango/cfg/` directly.
+**Perihelion Settings** (`perihelion-settings`): the bar's look and modules, the dock, desktop cards, colours, Updates, and pages for your window manager (keys, monitors, animations, rules, autostart, environment). On MangoWM it edits `~/.config/mango/cfg/` directly.
 
 ## Keybindings
 
@@ -321,22 +319,8 @@ Both start the bar and its dock with `perihelion-bar-start` (run it again to res
 both), plus `perihelion-shell`, the app drawer, swayidle (lock after 10 minutes and
 before suspend) and the dbus activation line the portals need.
 
-## Images
-
-<img width="1920" height="1080" alt="screenshot-2026-10-19_11-47-27" src="https://github.com/user-attachments/assets/b220c3cb-e8b4-43aa-8b16-ec077d18ae85" />
-<img width="1920" height="1080" alt="screenshot-2026-10-19_11-48-40" src="https://github.com/user-attachments/assets/cdabfa9e-d839-43d6-9a3d-d0ad3a2809fe" />
-<img width="1920" height="1080" alt="screenshot-2026-10-19_11-48-18" src="https://github.com/user-attachments/assets/a72ed3a5-118b-4d20-b88a-47dfa004dd5e" />
-<img width="1919" height="1080" alt="screenshot-2026-10-19_11-48-00" src="https://github.com/user-attachments/assets/94a141d8-cf41-43c7-8448-b72c604dbd89" />
-<img width="1919" height="1080" alt="screenshot-2026-10-19_11-47-43" src="https://github.com/user-attachments/assets/f005fcda-d05b-43d4-a554-895af6de5eda" />
-
-
-
-
-
-
 ## Credits
 
-- Hyprland-settings UX inspired by **HyprMod** by **BlueManCZ**.
 - The lock screen's design and much of its code (`perihelionbar-shell/src/lock/`): **Event Horizon**'s lock screen. Copyright and licence in [NOTICE.md](NOTICE.md).
 - Palettes in `theme/palettes/`: **Event Horizon**'s colour themes (GPL-3.0), each crediting the scheme it is named after in `theme/palettes/NOTICE.md`. Monokai's are left out (no open licence).
 
