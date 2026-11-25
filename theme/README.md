@@ -40,7 +40,7 @@ scheme=scheme-content      # Material You: matugen's --type
 In Material You, accent 1 / 2 / 3 are primary / secondary / tertiary.
 
 - `presets/` are the four flavors as fixed perihelionbar palettes, from Mirrez's
-  simpbar-catppuccin-matugen package. The test checks the script's palette
+  Catppuccin matugen package. The test checks the script's palette
   against them. `COLOR_MAP.md` is that package's role table.
 - `test-perihelion-theme.py` runs in CI: picking, writing, and leaving
   hand-edited files alone.

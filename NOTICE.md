@@ -3,6 +3,21 @@
 Perihelion Shell is licensed under the GNU General Public License v3.0
 (see [LICENSE](LICENSE)). It includes work from these projects.
 
+## simpbar: where Perihelion Bar began
+
+Perihelion Bar began as a fork of simpbar, and its Git history keeps
+simpbar's commits with their original authorship. It has since been
+reworked throughout.
+
+- Project: simpbar, https://github.com/jaytheoutpatient/simpbar (no longer
+  reachable as of 2026-11-25)
+- Author: jaytheoutpatient
+- Licence: simpbar published no licence file. It was forked and continued
+  with the author's permission. simpbar's own README credited Ryzendew
+  (install script start), the XeroLinux Team (Xero Arch Installer, GPL-3.0,
+  `xero/xero-install.sh`) and BlueManCZ's HyprMod (Hyprland settings UX);
+  those credits stand in README.md.
+
 ## Event Horizon: lock screen
 
 `perihelionbar-shell/src/lock/` (perihelion-lockscreen) is a port of the
