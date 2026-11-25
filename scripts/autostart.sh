@@ -95,6 +95,7 @@ check_hyprland_autostart() {
 }
 
 install_autostart() {
+    check_services
     (( WANT_MANGO )) && check_mango_autostart
     (( WANT_HYPR )) && check_hyprland_autostart
     install_update_timer

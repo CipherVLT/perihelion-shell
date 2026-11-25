@@ -30,7 +30,17 @@ RUNTIME_PACKAGES=(
     ttf-jetbrains-mono-nerd ttf-dejavu inter-font noto-fonts noto-fonts-emoji
     librsvg adwaita-icon-theme qt6ct
     xdg-desktop-portal-gtk xdg-user-dirs dbus
+    # What the Control Center and the session lean on, as on Perihelion Linux
+    networkmanager bluez bluez-utils upower     # Wi-Fi, Bluetooth, battery rows
+    xorg-xwayland xdg-desktop-portal xdg-utils  # X11 apps, portals, xdg-open
+    polkit gnome-keyring gvfs                   # password prompts, keyring, Trash
+    ttf-nerd-fonts-symbols-mono
 )
+
+# The power-profile row. Not with another power manager: they conflict, and
+# replacing yours is not the installer's call.
+POWER_PROFILES=power-profiles-daemon
+POWER_MANAGERS=(tlp auto-cpufreq tuned)
 
 MANGO_PACKAGES=(mangowm xdg-desktop-portal-wlr)
 HYPRLAND_PACKAGES=(hyprland xdg-desktop-portal-hyprland)
@@ -63,6 +73,13 @@ install_packages() {
     local wanted=("${BUILD_PACKAGES[@]}" "${RUNTIME_PACKAGES[@]}")
     (( WANT_MANGO )) && wanted+=("${MANGO_PACKAGES[@]}")
     (( WANT_HYPR )) && wanted+=("${HYPRLAND_PACKAGES[@]}")
+    local pm other=""
+    for pm in "${POWER_MANAGERS[@]}"; do check_package "${pm}" && other=${pm}; done
+    if [[ -n ${other} ]]; then
+        note "${POWER_PROFILES} skipped: ${other} manages power here (the power-profile row stays dim)"
+    else
+        wanted+=("${POWER_PROFILES}")
+    fi
 
     local missing=()
     mapfile -t missing < <(missing_packages "${wanted[@]}")
@@ -100,4 +117,16 @@ install_packages() {
     else
         warn "Not installed (AUR, no AUR helper found): ${aur_missing[*]}. Install paru or yay, then: paru -S ${aur_missing[*]}"
     fi
+}
+
+# The Control Center's rows talk to these services. An existing system may
+# manage its network another way, so they are never switched on here; the
+# report says which are off and how to turn them on.
+check_services() {
+    local unit
+    for unit in NetworkManager.service bluetooth.service power-profiles-daemon.service; do
+        systemctl list-unit-files "${unit}" >/dev/null 2>&1 || continue
+        systemctl is-enabled "${unit}" >/dev/null 2>&1 && continue
+        warn "${unit} is not enabled (Control Center row stays dim). To use it: sudo systemctl enable --now ${unit}"
+    done
 }
