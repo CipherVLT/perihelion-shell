@@ -6,11 +6,11 @@
 //!
 //! The update path, and which function guards each step:
 //!
-//!   1. Check: GitHub's "latest release" JSON for CipherVLT/Perihelion-shell
+//!   1. Check: GitHub's "latest release" JSON for CipherVLT/perihelion-shell
 //!      (apiArgv, parseRelease, Version.order). Drafts and pre-releases are
 //!      never offered.
 //!   2. Download the release tarball and SHA256SUMS. Only
-//!      https://github.com/CipherVLT/Perihelion-shell/releases/download/...
+//!      https://github.com/CipherVLT/perihelion-shell/releases/download/...
 //!      URLs are fetched (checkAssetUrl), without following redirects; the
 //!      one redirect GitHub answers with is checked by hand and must go to
 //!      https://release-assets.githubusercontent.com/ (checkRedirect). curl
@@ -38,7 +38,7 @@
 
 const std = @import("std");
 
-pub const REPO = "CipherVLT/Perihelion-shell";
+pub const REPO = "CipherVLT/perihelion-shell";
 pub const API_URL = "https://api.github.com/repos/" ++ REPO ++ "/releases/latest";
 pub const DOWNLOAD_PREFIX = "https://github.com/" ++ REPO ++ "/releases/download/";
 pub const REDIRECT_PREFIX = "https://release-assets.githubusercontent.com/";
@@ -216,6 +216,19 @@ fn safeUrlChars(s: []const u8) bool {
     return true;
 }
 
+/// "https://github.com/<owner>/<repo>/releases/download/" with the host and
+/// path exact, and the owner/repo part compared without case: GitHub
+/// treats it so, and its API spells it however the repository is named at
+/// the moment (it went from perihelion-shell to Perihelion-shell and back).
+fn hasDownloadPrefix(url: []const u8) bool {
+    const host = "https://github.com/";
+    const tail = "/releases/download/";
+    if (url.len < DOWNLOAD_PREFIX.len) return false;
+    if (!std.mem.startsWith(u8, url, host)) return false;
+    if (!std.ascii.eqlIgnoreCase(url[host.len..][0..REPO.len], REPO)) return false;
+    return std.mem.eql(u8, url[host.len + REPO.len ..][0..tail.len], tail);
+}
+
 /// The only URLs downloaded directly: this repository's release download
 /// for exactly this tag and asset name.
 pub fn checkAssetUrl(url: []const u8, tag: []const u8, name: []const u8) bool {
@@ -223,7 +236,7 @@ pub fn checkAssetUrl(url: []const u8, tag: []const u8, name: []const u8) bool {
     if (tag.len == 0 or name.len == 0) return false;
     if (std.mem.indexOfScalar(u8, tag, '/') != null or std.mem.indexOfScalar(u8, name, '/') != null) return false;
     if (std.mem.indexOf(u8, tag, "..") != null or std.mem.indexOf(u8, name, "..") != null) return false;
-    if (!std.mem.startsWith(u8, url, DOWNLOAD_PREFIX)) return false;
+    if (!hasDownloadPrefix(url)) return false;
     const rest = url[DOWNLOAD_PREFIX.len..];
     if (rest.len != tag.len + 1 + name.len) return false;
     return std.mem.startsWith(u8, rest, tag) and rest[tag.len] == '/' and std.mem.eql(u8, rest[tag.len + 1 ..], name);
@@ -739,9 +752,9 @@ const FAKE_RELEASE =
     \\ "published_at":"2026-12-01T10:00:00Z","body":"## Changes\n- Updates page\n- Lock screen",
     \\ "assets":[
     \\  {"name":"perihelion-shell-0.1.0-x86_64.tar.gz","size":4200000,
-    \\   "browser_download_url":"https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/perihelion-shell-0.1.0-x86_64.tar.gz"},
+    \\   "browser_download_url":"https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/perihelion-shell-0.1.0-x86_64.tar.gz"},
     \\  {"name":"SHA256SUMS","size":100,
-    \\   "browser_download_url":"https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS"},
+    \\   "browser_download_url":"https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS"},
     \\  {"name":"odd","size":-5,"browser_download_url":"x"},
     \\  {"nope":1}, 7
     \\ ]}
@@ -785,26 +798,36 @@ test "tarballName and topDir" {
     try tt.expectEqualStrings("perihelion-shell-0.2.0-rc.1-x86_64.tar.gz", try tarballName(&buf, ver("0.2.0-rc.1")));
 }
 
-test "REPO is spelled exactly as GitHub's API spells it" {
-    // GitHub resolves repo names in any case, but release JSON gives
-    // browser_download_url in the canonical case, and checkAssetUrl compares
-    // case-sensitively: "CipherVLT/perihelion-shell" rejected every asset.
-    try tt.expectEqualStrings("CipherVLT/Perihelion-shell", REPO);
-    try tt.expect(!checkAssetUrl("https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS", "v0.1.0", "SHA256SUMS"));
+test "checkAssetUrl: the repository name in any case, everything else exact" {
+    // GitHub resolves owner/repo in any case and its release JSON spells it
+    // as currently named; a rename that only changes case must not make the
+    // updater refuse every asset.
+    for ([_][]const u8{
+        "https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/ciphervlt/PERIHELION-SHELL/releases/download/v0.1.0/SHA256SUMS",
+    }) |good| try tt.expect(checkAssetUrl(good, "v0.1.0", "SHA256SUMS"));
+    for ([_][]const u8{
+        "https://GITHUB.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/perihelion-shell/Releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/perihelion-shellx/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/simpbar-dotfiles/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/perihelion-shel",
+    }) |bad| try tt.expect(!checkAssetUrl(bad, "v0.1.0", "SHA256SUMS"));
 }
 
 test "checkAssetUrl: only this repo, this tag, this name" {
     const tag = "v0.1.0";
     const name = "SHA256SUMS";
-    try tt.expect(checkAssetUrl("https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS", tag, name));
+    try tt.expect(checkAssetUrl("https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS", tag, name));
     for ([_][]const u8{
-        "http://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
+        "http://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
         "https://github.com/Other/perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
-        "https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.2.0/SHA256SUMS",
-        "https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS.evil",
-        "https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/../x/SHA256SUMS",
-        "https://github.com.evil.example/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
-        "https://github.com/CipherVLT/Perihelion-shell/releases/download/v0.1.0/SHA256SUMS ",
+        "https://github.com/CipherVLT/perihelion-shell/releases/download/v0.2.0/SHA256SUMS",
+        "https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS.evil",
+        "https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/../x/SHA256SUMS",
+        "https://github.com.evil.example/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS",
+        "https://github.com/CipherVLT/perihelion-shell/releases/download/v0.1.0/SHA256SUMS ",
         "",
     }) |bad| try tt.expect(!checkAssetUrl(bad, tag, name));
     try tt.expect(!checkAssetUrl(DOWNLOAD_PREFIX ++ "../x", "..", "x"));
