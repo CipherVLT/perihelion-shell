@@ -57,8 +57,6 @@ const WNOHANG: c_int = 1;
 
 const APP_ID = "io.github.ciphervlt.perihelionbar.Welcome";
 const REPO_URL = "https://github.com/CipherVLT/perihelion-shell";
-const CONTACT_EMAIL = "jaytheoutpatient@protonmail.com";
-const DISCORD_URL = "https://discord.gg/sAMMXSPx9R";
 const HYPRLAND_CONF = "~/.config/hypr/hyprland.lua";
 
 const PERIHELIONBAR_WELCOME_AUTOSTART_LINE = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"perihelionbar-welcome\") end)";
@@ -71,13 +69,11 @@ const EASYEFFECTS_AUTOSTART_LINE = "hl.on(\"hyprland.start\", function() hl.exec
 
 var hyprland_lua_buf: [512]u8 = undefined;
 var first_run_marker_buf: [512]u8 = undefined;
-var logo_path_buf: [512]u8 = undefined;
 var perihelionbar_config_dir_buf: [512]u8 = undefined;
 var terminal_spec_buf: [512]u8 = undefined;
 
 var g_hyprland_lua_path: [:0]const u8 = "";
 var g_first_run_marker_path: [:0]const u8 = "";
-var g_logo_path: [:0]const u8 = "";
 var g_perihelionbar_config_dir: [:0]const u8 = "";
 var g_terminal_spec_path: [:0]const u8 = "";
 
@@ -85,7 +81,6 @@ fn resolvePaths() void {
     const home = std.mem.span(getenv("HOME") orelse "/root");
     g_hyprland_lua_path = std.fmt.bufPrintSentinel(&hyprland_lua_buf, "{s}/.config/hypr/hyprland.lua", .{home}, 0) catch "";
     g_first_run_marker_path = std.fmt.bufPrintSentinel(&first_run_marker_buf, "{s}/.config/perihelionbar/welcome-shown", .{home}, 0) catch "";
-    g_logo_path = std.fmt.bufPrintSentinel(&logo_path_buf, "{s}/.local/share/perihelionbar/logo.png", .{home}, 0) catch "";
     g_perihelionbar_config_dir = std.fmt.bufPrintSentinel(&perihelionbar_config_dir_buf, "{s}/.config/perihelionbar", .{home}, 0) catch "";
     g_terminal_spec_path = std.fmt.bufPrintSentinel(&terminal_spec_buf, "{s}/.config/perihelionbar/terminal", .{home}, 0) catch "";
 }
@@ -628,12 +623,18 @@ fn updateCheckThreadFn(result: *UpdateCheckResult) void {
 
 const KeybindEntry = struct { combo: [:0]const u8, action: [:0]const u8 };
 const KEYBINDINGS = [_]KeybindEntry{
-    .{ .combo = "SUPER", .action = "Windows key" },
-    .{ .combo = "SUPER + Enter", .action = "Open terminal" },
-    .{ .combo = "SUPER + Space", .action = "Open Rofi" },
-    .{ .combo = "SUPER + E", .action = "Open Nautilus" },
-    .{ .combo = "SUPER + Q", .action = "Exit the application" },
-    .{ .combo = "SUPER + 1 \u{2013} 0", .action = "Switch workspaces" },
+    .{ .combo = "SUPER + Enter", .action = "Terminal" },
+    .{ .combo = "SUPER + D", .action = "App launcher" },
+    .{ .combo = "SUPER + A", .action = "App drawer" },
+    .{ .combo = "SUPER + I", .action = "Glance" },
+    .{ .combo = "ALT + W", .action = "Window overview" },
+    .{ .combo = "SUPER + Shift + W", .action = "Wallpapers" },
+    .{ .combo = "SUPER + E", .action = "Files" },
+    .{ .combo = "SUPER + L", .action = "Lock the screen" },
+    .{ .combo = "SUPER + Shift + Q", .action = "Power menu" },
+    .{ .combo = "SUPER + Q", .action = "Close the window" },
+    .{ .combo = "SUPER + 1 \u{2013} 9", .action = "Switch workspaces" },
+    .{ .combo = "SUPER + H", .action = "Every key" },
 };
 
 const SetupAction = struct {
@@ -649,37 +650,22 @@ const SetupAction = struct {
 var SETUP_ACTIONS = [_]SetupAction{
     .{
         .title = "Update Perihelion Bar",
-        .subtitle = "Re-fetches the latest install script and configs from GitHub. Opens in a terminal \u{2014} asks a few of the same " ++
-            "setup questions again as part of the refresh.",
+        .subtitle = "Runs the installer again in a terminal: rebuilds the programs at the newest commit and asks " ++
+            "before it changes any config of yours.",
         .icon = "software-update-available-symbolic",
-        .script = "curl -sSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash; echo; read -p 'Press Enter to close...'",
+        .script = "curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash; echo; read -p 'Press Enter to close...'",
     },
     .{
-        .title = "Check for updates now",
-        .subtitle = "Checks for Arch/AUR package updates and new commits on the perihelionbar " ++
-            "repo, and sends a notification if it finds anything. Runs " ++
-            "automatically every few hours in the background too.",
+        .title = "Check for updates",
+        .subtitle = "Opens Settings \u{2014} Updates: the installed version, the newest release, and automatic checks.",
         .icon = "view-refresh-symbolic",
-        .argv = &[_][:0]const u8{"perihelionbar-check-updates"},
+        .argv = &[_][:0]const u8{ "perihelion-settings", "--page", "Updates" },
     },
     .{
-        .title = "Browse and install software",
-        .subtitle = "Opens Bazaar, a graphical software manager for finding and installing Flatpak apps.",
-        .icon = "system-software-install-symbolic",
-        .argv = &[_][:0]const u8{"bazaar"},
-    },
-    .{
-        .title = "Customize GTK theme, icons and cursor",
-        .subtitle = "Opens nwg-look. Dracula GTK/icons and Bibata Modern Classic are already set as defaults.",
-        .icon = "preferences-desktop-theme-symbolic",
-        .argv = &[_][:0]const u8{"nwg-look"},
-    },
-    .{
-        .title = "Tweak Hyprland settings",
-        .subtitle = "Opens Perihelion Bar Config \u{2014} keybinds, monitors, animations, window rules, " ++
-            "and more. Saves to ~/.config/perihelionbar/hyprland.json and reloads Hyprland live.",
+        .title = "Perihelion Settings",
+        .subtitle = "The bar, the dock, desktop cards, colours, and your window manager's keys, monitors and rules.",
         .icon = "preferences-desktop-display-symbolic",
-        .argv = &[_][:0]const u8{"perihelionbar-config"},
+        .argv = &[_][:0]const u8{"perihelion-settings"},
     },
     .{
         .title = "Adjust audio devices and volumes",
@@ -1099,8 +1085,6 @@ const AboutLink = struct { title: [:0]const u8, subtitle: [:0]const u8, icon: [:
 const ABOUT_LINKS = [_]AboutLink{
     .{ .title = "GitHub repository", .subtitle = REPO_URL, .icon = "system-search-symbolic", .url = REPO_URL },
     .{ .title = "Report an issue", .subtitle = REPO_URL ++ "/issues", .icon = "dialog-warning-symbolic", .url = REPO_URL ++ "/issues" },
-    .{ .title = "Email \u{2014} bugs and suggestions", .subtitle = CONTACT_EMAIL, .icon = "mail-send-symbolic", .url = "mailto:" ++ CONTACT_EMAIL },
-    .{ .title = "Join the Discord", .subtitle = DISCORD_URL, .icon = "user-available-symbolic", .url = DISCORD_URL },
 };
 
 // ---------------------------------------------------------------------
@@ -1117,26 +1101,19 @@ fn buildWelcomePage() *gtk.GtkBox {
     gtk.gtk_widget_set_margin_start(@ptrCast(box), 36);
     gtk.gtk_widget_set_margin_end(@ptrCast(box), 36);
 
-    if (fileExists(g_logo_path)) {
-        const logo = gtk.gtk_picture_new_for_filename(g_logo_path);
-        gtk.gtk_picture_set_content_fit(logo, gtk.CONTENT_FIT_CONTAIN);
-        gtk.gtk_widget_set_size_request(@ptrCast(logo), 128, 128);
-        gtk.gtk_widget_set_halign(@ptrCast(logo), gtk.ALIGN_CENTER);
-        gtk.gtk_box_append(box, @ptrCast(logo));
-    } else {
-        const icon = gtk.gtk_image_new_from_icon_name("preferences-desktop-display-symbolic");
-        gtk.gtk_image_set_pixel_size(icon, 64);
-        gtk.gtk_widget_add_css_class(@ptrCast(icon), "dim-label");
-        gtk.gtk_box_append(box, @ptrCast(icon));
-    }
+    // Perihelion's own icon (the solar gear, assets/icons/perihelion-settings).
+    const logo = gtk.gtk_image_new_from_icon_name("perihelion-settings");
+    gtk.gtk_image_set_pixel_size(logo, 128);
+    gtk.gtk_widget_set_halign(@ptrCast(logo), gtk.ALIGN_CENTER);
+    gtk.gtk_box_append(box, @ptrCast(logo));
 
     const title = gtk.gtk_label_new("Welcome to Perihelion Bar");
     gtk.gtk_widget_add_css_class(@ptrCast(title), "title-1");
     gtk.gtk_box_append(box, @ptrCast(title));
 
-    const subtitle = gtk.gtk_label_new("Hello and welcome to Perihelion Bar hope you'll find your\n" ++
-        "home here!, If there is any bugs or any suggestions you want\n" ++
-        "please send me a email in the links page!");
+    const subtitle = gtk.gtk_label_new("Your bar, dock and desktop are ready.\n" ++
+        "Pick a few extras below, see every key under Keybindings,\n" ++
+        "and report anything that breaks from the Links page.");
     gtk.gtk_widget_add_css_class(@ptrCast(subtitle), "dim-label");
     gtk.gtk_label_set_justify(subtitle, gtk.JUSTIFY_CENTER);
     gtk.gtk_label_set_wrap(subtitle, 1);
