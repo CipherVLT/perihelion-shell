@@ -56,16 +56,20 @@ jobs:
   hyprland-conf:
     needs: lint
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    # The Arch image of the same week as the archive snapshot below, so only
+    # Hyprland and its dependencies come from the (slow) archive.
+    container: archlinux:base-20261011.0.609700
     steps:
-      - name: Hyprland 0.56 from the Arch Linux Archive (2026-10-15)
+      - name: Hyprland 0.56 from the Arch Linux Archive (2026-10-11)
         run: |
-          echo 'Server = https://archive.archlinux.org/repos/2026/10/15/$repo/os/$arch' > /etc/pacman.d/mirrorlist
-          # The archive is slow at times: no download timeout, three tries.
-          for try in 1 2 3; do
-            pacman -Syyuu --noconfirm --disable-download-timeout hyprland git && break
-            [ "$try" = 3 ] && exit 1
-            sleep $((try * 30))
+          echo 'Server = https://archive.archlinux.org/repos/2026/10/11/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+          sed -i 's/^#\?ParallelDownloads.*/ParallelDownloads = 1/' /etc/pacman.conf
+          # The archive resets busy connections: one download at a time, no
+          # timeout, five tries (finished files stay in the cache).
+          for try in 1 2 3 4 5; do
+            pacman -Syy --noconfirm --disable-download-timeout --needed hyprland git && break
+            [ "$try" = 5 ] && exit 1
+            sleep $((try * 20))
           done
           # Hyprland 0.56 refuses to start, even for --version, without it.
           export XDG_RUNTIME_DIR=$(mktemp -d)
