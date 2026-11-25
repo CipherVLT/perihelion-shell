@@ -25,6 +25,8 @@ jobs:
           done
       - name: Config handling (keep / take new / beside, backups, re-runs)
         run: bash tests/installer/configs-test.sh
+      - name: MangoWM configs with answers typed at a real terminal (script)
+        run: bash tests/installer/prompts-test.sh
 
   arch:
     needs: lint
