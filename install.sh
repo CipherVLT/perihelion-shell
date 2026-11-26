@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Perihelion Bar installer for Arch Linux and Arch-based distros (CachyOS,
-# EndeavourOS, Garuda, ...) and Fedora 45 or later. On Perihelion Linux the
-# shell is already part of the system; this says so and changes nothing.
+# EndeavourOS, Garuda, ...), Fedora 45 or later and PikaOS 4. On Perihelion
+# Linux the shell is already part of the system; this says so and changes
+# nothing. Anywhere else it stops before changing anything.
 #
 #   curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
 #   or, from a checkout:  ./install.sh [--yes] [--wm=mango|hyprland|both]
@@ -227,7 +228,7 @@ answer_set() {
 
 usage() {
     cat <<'EOF'
-Perihelion Bar installer (Arch Linux and Arch-based distros, Fedora 45+)
+Perihelion Bar installer (Arch Linux and Arch-based distros, Fedora 45+, PikaOS 4)
 
   ./install.sh [options]
   curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash -s -- [options]
@@ -296,8 +297,9 @@ locate_source() {
 
 # --- checks ------------------------------------------------------------------------
 
-# Which family this system belongs to: DISTRO_FAMILY=arch|fedora (empty for
-# anything else), with its ID, name and Fedora release.
+# Which family this system belongs to: DISTRO_FAMILY=arch|fedora|pikaos
+# (empty for anything else), with its ID, name and version. PikaOS by its own
+# ID only: other Debian-likes are not supported.
 detect_distro() {
     local osr=${PERIHELION_OS_RELEASE:-/etc/os-release}
     DISTRO_ID="" DISTRO_LIKE="" DISTRO_NAME="" DISTRO_VERSION="" DISTRO_FAMILY=""
@@ -315,6 +317,8 @@ detect_distro() {
         DISTRO_FAMILY=arch
     elif [[ ${DISTRO_ID} == fedora || " ${DISTRO_LIKE} " == *" fedora "* ]]; then
         DISTRO_FAMILY=fedora
+    elif [[ ${DISTRO_ID} == pika ]]; then
+        DISTRO_FAMILY=pikaos
     fi
 }
 
@@ -351,8 +355,17 @@ check_system() {
                 exit 1
             fi
             ;;
+        pikaos)
+            command -v apt-get >/dev/null || { printf 'This looks like PikaOS but has no apt-get.\n' >&2; exit 1; }
+            if ! [[ ${DISTRO_VERSION%%.*} =~ ^[0-9]+$ ]] || (( ${DISTRO_VERSION%%.*} < 4 )); then
+                printf 'Perihelion Bar needs PikaOS 4 or later (this is %s).\n' "${DISTRO_NAME:-PikaOS ${DISTRO_VERSION}}" >&2
+                exit 1
+            fi
+            ;;
         *)
-            printf 'Perihelion Bar'"'"'s installer supports Arch Linux, Arch-based distros and Fedora 45+\n(this system is "%s"). Perihelion Linux ships it ready to use.\n' "${DISTRO_ID:-unknown}" >&2
+            printf 'Perihelion Bar'"'"'s installer supports Arch Linux and Arch-based distros, Fedora 45 or\nlater, and PikaOS 4. This system is %s. Nothing was changed.\n' \
+                "${DISTRO_NAME:-"\"${DISTRO_ID:-unknown}\""}" >&2
+            printf 'Supported distros and their guides: https://github.com/CipherVLT/perihelion-shell#install\n' >&2
             exit 1
             ;;
     esac

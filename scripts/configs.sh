@@ -133,8 +133,9 @@ seed_config() {
 
 font_path() {
     local f
-    f=$(find /usr/share/fonts -name 'JetBrainsMonoNerdFont-Regular.ttf' -print -quit 2>/dev/null)
-    [[ -n ${f} ]] || die "JetBrainsMono Nerd Font not found (package ttf-jetbrains-mono-nerd)"
+    # /usr/local/share/fonts: where the PikaOS path puts the Nerd Fonts download.
+    f=$(find /usr/share/fonts /usr/local/share/fonts -name 'JetBrainsMonoNerdFont-Regular.ttf' -print -quit 2>/dev/null)
+    [[ -n ${f} ]] || die "JetBrainsMono Nerd Font not found (Arch: ttf-jetbrains-mono-nerd; Fedora: jetbrainsmono-nerd-fonts from Terra)"
     printf '%s' "${f}"
 }
 

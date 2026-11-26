@@ -66,7 +66,7 @@ put_system() {
     fi
     # shellcheck disable=SC2024  # the log is yours: written by this shell, not by sudo
     sudo install -Dm"${mode}" "${src}" "${dest}" >> "${LOG_FILE}" 2>&1 || die "could not install ${dest}"
-    CHANGED_SYSTEM=$((CHANGED_SYSTEM + 1))
+    CHANGED_SYSTEM=$(( ${CHANGED_SYSTEM:-0} + 1 ))
 }
 
 put_link() {
@@ -75,7 +75,7 @@ put_link() {
     [[ -L /usr/bin/${name} && $(readlink "/usr/bin/${name}") == "${target}" ]] && return 0
     # shellcheck disable=SC2024
     sudo ln -sfn "${target}" "/usr/bin/${name}" >> "${LOG_FILE}" 2>&1 || die "could not link /usr/bin/${name}"
-    CHANGED_SYSTEM=$((CHANGED_SYSTEM + 1))
+    CHANGED_SYSTEM=$(( ${CHANGED_SYSTEM:-0} + 1 ))
 }
 
 # --- building ---------------------------------------------------------------------------

@@ -126,7 +126,7 @@ printf 'ID=debian\nID_LIKE=""\n' > /tmp/os-release-debian
 refuses_debian() {
     local out
     out=$(as_user fresh env PERIHELION_OS_RELEASE=/tmp/os-release-debian bash "${repo}/install.sh" --yes 2>&1) && return 1
-    grep -q 'supports Arch Linux, Arch-based distros and Fedora 45+' <<<"${out}"
+    grep -q 'supports Arch Linux and Arch-based distros, Fedora 45 or' <<<"${out}" && grep -q 'Nothing was changed' <<<"${out}"
 }
 check refuses_debian
 
