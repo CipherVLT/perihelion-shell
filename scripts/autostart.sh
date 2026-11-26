@@ -119,8 +119,37 @@ check_hyprland_autostart() {
     fi
 }
 
+# Quickshell (the app drawer) uses Qt's private API, so it must run on the
+# exact Qt it was built against: when Qt is updated before the distro
+# rebuilds Quickshell, it crashes at start ("likely due to a Qt version
+# mismatch"). `quickshell -V -v` says so itself: "Qt: 6.12.1 (built against
+# 6.12.0)", or just "Qt: 6.12.1" when they match. Package metadata can't
+# tell (quickshell depends on an unversioned qt6-base), so this asks
+# Quickshell, which works the same on every distro. Warns only: Qt and the
+# user's packages are never changed here.
+quickshell_qt_versions() { # prints "RUNTIME BUILT" on a mismatch, nothing otherwise
+    check_command quickshell || return 0
+    NO_COLOR=1 timeout 10 quickshell -V -v 2>/dev/null |
+        sed -n 's/^Qt: \([0-9][0-9.]*\) (built against \([0-9][0-9.]*\)).*/\1 \2/p' | head -n 1
+}
+
+check_quickshell_qt() {
+    local versions runtime built fix
+    versions=$(quickshell_qt_versions)
+    [[ -n ${versions} ]] || return 0
+    read -r runtime built <<< "${versions}"
+    [[ ${runtime} != "${built}" ]] || return 0
+    case ${DISTRO_FAMILY:-arch} in
+        fedora) fix="Run sudo dnf upgrade --refresh; if it persists, wait for the repo rebuild of quickshell." ;;
+        pikaos) fix="Run sudo apt update && sudo apt full-upgrade; if it persists, wait for the repo rebuild of quickshell." ;;
+        *) fix="Run sudo pacman -Syu; if it persists, wait for the repo rebuild or rebuild quickshell from the AUR (paru -S quickshell-git --rebuild)." ;;
+    esac
+    warn "Quickshell was built for Qt ${built}, your system has Qt ${runtime}; the app drawer may crash. ${fix}"
+}
+
 install_autostart() {
     check_services
+    check_quickshell_qt
     (( WANT_MANGO )) && check_mango_autostart
     (( WANT_HYPR )) && check_hyprland_autostart
     install_update_timer

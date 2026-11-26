@@ -28,6 +28,7 @@ source "${repo}/scripts/autostart.sh"
 put_system() { install -Dm"$1" "$2" "${work}/root$3"; CHANGED_SYSTEM=$((CHANGED_SYSTEM + 1)); }
 record() { :; }
 check_services() { :; }
+check_quickshell_qt() { :; }  # host-dependent; tests/installer/qt-mismatch-test.sh covers it
 font_path() { printf '%s' "${work}/fonts/JetBrainsMonoNerdFont-Regular.ttf"; }
 check_command() { [[ $1 != mango ]] && command -v "$1" >/dev/null 2>&1; }
 place_system_config() { put_system 644 "$1" "$2"; }
