@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Check what install.sh left on an Arch system, as the user it ran for.
-#   tests/installer/arch-check.sh <mango|hyprland> <commit>
+# Check what install.sh left (Arch, CachyOS or Fedora), as the user it ran for.
+#   tests/installer/install-check.sh <mango|hyprland> <commit>
 # shellcheck disable=SC1091,SC2012,SC2034,SC2329  # helpers run through check(); variables are read by the sourced installer
 set -uo pipefail
 
@@ -72,7 +72,8 @@ case "${wm}" in
                 perihelion-shell appdrawer swayidle perihelion-nightlight flock setsid pgrep; do
                 command -v "${p}" >/dev/null || { echo "      not installed: ${p}"; missing=1; }
             done
-            [[ -x /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 ]] || { echo "      no polkit agent"; missing=1; }
+            [[ -x /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 || -x /usr/libexec/polkit-mate-authentication-agent-1 ]] ||
+                { echo "      no polkit agent"; missing=1; }
             return "${missing}"
         }
         check session_programs_ok

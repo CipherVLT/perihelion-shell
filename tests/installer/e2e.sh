@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# The installer end to end in an Arch container (run as root; CI's
-# archlinux:latest job). Users get passwordless sudo, as a desktop user who
-# typed their password once would have.
-#   tests/installer/arch-e2e.sh <mango|hyprland>
+# The installer end to end in a container (run as root): Arch, CachyOS or
+# Fedora 45 (CI's installer jobs). Users get passwordless sudo, as a desktop
+# user who typed their password once would have.
+#   tests/installer/e2e.sh <mango|hyprland>
 # shellcheck disable=SC1091,SC2012,SC2034,SC2329  # helpers run through check(); variables are read by the sourced installer
 set -Eeuo pipefail
 
@@ -10,7 +10,11 @@ wm=$1
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 commit=$(git -C "${repo}" rev-parse --short=7 HEAD)
 
-pacman -Syu --noconfirm --needed sudo git >/dev/null
+if command -v pacman >/dev/null; then
+    pacman -Syu --noconfirm --needed sudo git >/dev/null
+else
+    dnf install -y --setopt=install_weak_deps=False sudo git-core shadow-utils util-linux procps-ng findutils >/dev/null
+fi
 
 as_user() { # USER COMMAND...
     local u=$1
@@ -41,7 +45,7 @@ step() { printf '\n######## %s\n' "$*"; }
 step "fresh home: install.sh --yes --wm=${wm}"
 new_user fresh
 as_user fresh bash -c "cd ~/src && ./install.sh --yes --wm=${wm}"
-(cd "${repo}" && as_user fresh bash "${repo}/tests/installer/arch-check.sh" "${wm}" "${commit}") || fails=1
+(cd "${repo}" && as_user fresh bash "${repo}/tests/installer/install-check.sh" "${wm}" "${commit}") || fails=1
 check() { if "$@"; then echo "  ok    $*"; else echo "  FAIL  $*"; fails=1; fi; }
 check test -x /home/fresh/.local/share/perihelionbar/zig-0.17.1/zig
 zig_version() { [[ $(/home/fresh/.local/share/perihelionbar/zig-0.17.1/zig version) == 0.17.1 ]]; }
@@ -70,7 +74,7 @@ printf -- '-- my hyprland\nhl.env("MINE", "1")\n' > /home/olduser/.config/hypr/h
 printf '{ "mine": true }\n' > /home/olduser/.config/perihelionbar/config.json
 chown -R olduser:olduser /home/olduser/.config
 as_user olduser bash -c "cd ~/src && ./install.sh --yes --wm=${wm} --existing=new"
-(cd "${repo}" && as_user olduser bash "${repo}/tests/installer/arch-check.sh" "${wm}" "${commit}") || fails=1
+(cd "${repo}" && as_user olduser bash "${repo}/tests/installer/install-check.sh" "${wm}" "${commit}") || fails=1
 b=$(ls -d /home/olduser/.local/state/perihelionbar/backup-* | head -1)
 check() { if "$@"; then echo "  ok    $*"; else echo "  FAIL  $*"; fails=1; fi; }
 check grep -qx '{ "mine": true }' "${b}/.config/perihelionbar/config.json"
@@ -118,13 +122,25 @@ fi
 
 step "not as root, not on another distro"
 check bash -c "! bash ${repo}/install.sh --yes 2>/dev/null"
-printf 'ID=fedora\nID_LIKE=""\n' > /tmp/os-release-fedora
-refuses_fedora() {
+printf 'ID=debian\nID_LIKE=""\n' > /tmp/os-release-debian
+refuses_debian() {
     local out
-    out=$(as_user fresh env PERIHELION_OS_RELEASE=/tmp/os-release-fedora bash "${repo}/install.sh" --yes 2>&1) && return 1
-    grep -q 'supports Arch Linux and Arch-based distros only' <<<"${out}"
+    out=$(as_user fresh env PERIHELION_OS_RELEASE=/tmp/os-release-debian bash "${repo}/install.sh" --yes 2>&1) && return 1
+    grep -q 'supports Arch Linux, Arch-based distros and Fedora 45+' <<<"${out}"
 }
-check refuses_fedora
+check refuses_debian
 
-(( fails == 0 )) && echo "arch-e2e (${wm}): all passed" || echo "arch-e2e (${wm}): FAILED"
+step "on Perihelion Linux: says so, changes nothing"
+touch /tmp/fake-perihelion.ref
+on_perihelion() {
+    local out before after
+    before=$(snapshot fresh)
+    out=$(as_user fresh env PERIHELION_ISO_REF=/tmp/fake-perihelion.ref bash "${repo}/install.sh" --yes 2>&1) || return 1
+    after=$(snapshot fresh)
+    grep -q 'This is Perihelion Linux: Perihelion Bar is already installed' <<<"${out}" &&
+        grep -q 'Settings > Updates' <<<"${out}" && [[ ${before} == "${after}" ]]
+}
+check on_perihelion
+
+(( fails == 0 )) && echo "e2e ($(. /etc/os-release && echo "${ID}"), ${wm}): all passed" || echo "e2e (${wm}): FAILED"
 exit "${fails}"

@@ -1,6 +1,7 @@
-# The Arch installer: shellcheck and the config unit test on every push,
-# then the real install.sh --yes in an Arch container for MangoWM and for
-# Hyprland (fresh home, second run changes nothing, existing setups).
+# The installer: shellcheck and the unit tests on every push, then the real
+# install.sh --yes in containers: Arch (MangoWM and Hyprland), CachyOS and
+# Fedora 45 (MangoWM): fresh home, second run changes nothing, existing
+# setups, a user created later, Perihelion Linux detected.
 name: Installer
 
 on:
@@ -31,23 +32,34 @@ jobs:
         run: bash tests/installer/leftovers-test.sh
       - name: Login session seeds ~/.config/mango once; the session starter starts each piece once
         run: bash tests/session/session-test.sh
+      - name: Title and steps per terminal (no emoji on TERM=linux, no colour in a pipe)
+        run: bash tests/installer/banner-test.sh
+      - name: A stale package database (404) is explained, refreshed and retried
+        run: bash tests/installer/stale-db-test.sh
 
-  arch:
+  install:
     needs: lint
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    container: ${{ matrix.image }}
+    name: ${{ matrix.distro }} (${{ matrix.wm }})
     strategy:
       fail-fast: false
       matrix:
-        wm: [mango, hyprland]
+        include:
+          - { distro: arch, image: "archlinux:latest", wm: mango }
+          - { distro: arch, image: "archlinux:latest", wm: hyprland }
+          - { distro: cachyos, image: "cachyos/cachyos-v3:latest", wm: mango }
+          - { distro: fedora, image: "fedora:45", wm: mango }
     steps:
       - name: Tools for checkout
-        run: pacman -Syu --noconfirm --needed git
+        run: |
+          if command -v pacman >/dev/null; then pacman -Syu --noconfirm --needed git
+          else dnf install -y git-core; fi
       - uses: actions/checkout@v4
       - name: install.sh --yes --wm=${{ matrix.wm }} on fresh and existing homes
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          bash tests/installer/arch-e2e.sh "${{ matrix.wm }}"
+          bash tests/installer/e2e.sh "${{ matrix.wm }}"
       - name: The install log
         if: always()
         run: |
