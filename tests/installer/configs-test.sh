@@ -29,6 +29,7 @@ put_system() { install -Dm"$1" "$2" "${work}/root$3"; CHANGED_SYSTEM=$((CHANGED_
 record() { :; }
 check_services() { :; }
 check_quickshell_qt() { :; }  # host-dependent; tests/installer/qt-mismatch-test.sh covers it
+NVIDIA_DRIVER_FILE=${work}/no-nvidia  # the host's driver must not decide; the radius note is tested below
 font_path() { printf '%s' "${work}/fonts/JetBrainsMonoNerdFont-Regular.ttf"; }
 check_command() { [[ $1 != mango ]] && command -v "$1" >/dev/null 2>&1; }
 place_system_config() { put_system 644 "$1" "$2"; }
@@ -141,6 +142,22 @@ check grep -qx -- '-- Perihelion Bar (delete this line to switch it off)' "${H2}
 check test "$(grep -cx 'require("perihelion")' "${H2}/hyprland.lua")" -eq 1
 check test ! -e "${H2}/perihelion.conf"
 check grep -qx 'x=1' "${H2}/hyprland.conf"
+
+echo "== NVIDIA driver: a note when a kept appearance.conf still rounds corners, none at the shipped 0"
+A="${work}/appearance.conf"
+NVIDIA_DRIVER_FILE=${work}/nvidia-version; printf 'NVRM version: NVIDIA UNIX Open Kernel Module  620.73.04\n' > "${NVIDIA_DRIVER_FILE}"
+reset_lists; check_mango_radius "${repo}/desktop/mango/cfg/appearance.conf"
+check test "${#WARNINGS[@]}" -eq 0
+printf '# border_radius=3\nborder_radius=12\n' > "${A}"
+reset_lists; check_mango_radius "${A}" >/dev/null
+check test "${#WARNINGS[@]}" -eq 1
+check grep -q 'border_radius=12' <<< "${WARNINGS[*]:-}"
+printf 'border_radius = 0\n' > "${A}"
+reset_lists; check_mango_radius "${A}"
+check test "${#WARNINGS[@]}" -eq 0
+NVIDIA_DRIVER_FILE=${work}/no-nvidia; printf 'border_radius=12\n' > "${A}"
+reset_lists; check_mango_radius "${A}"
+check test "${#WARNINGS[@]}" -eq 0
 
 (( fails )) && echo "configs-test: FAILED" || echo "configs-test: all passed"
 exit "${fails}"

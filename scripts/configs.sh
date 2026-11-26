@@ -186,6 +186,21 @@ install_mango_config() {
     if check_command mango && ! mango -p -c "${cfg}/mango/config.conf" >> "${LOG_FILE}" 2>&1; then
         warn "mango -p does not accept ~/.config/mango/config.conf (details in the log)"
     fi
+    check_mango_radius "${cfg}/mango/cfg/appearance.conf"
+}
+
+# SceneFX 0.5 draws rounded window borders badly on NVIDIA's proprietary
+# driver (dots along the focused border, wlrfx/scenefx#233). Perihelion
+# ships border_radius=0; a kept appearance.conf may still round. Note only:
+# the user's file is not changed here.
+NVIDIA_DRIVER_FILE=${NVIDIA_DRIVER_FILE:-/proc/driver/nvidia/version}
+check_mango_radius() { # APPEARANCE_CONF
+    local r
+    [[ -r ${NVIDIA_DRIVER_FILE} && -r $1 ]] || return 0
+    r=$(sed -n 's/^[[:space:]]*border_radius[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$1" | tail -n 1)
+    (( ${r:-0} > 0 )) || return 0
+    # shellcheck disable=SC2088  # text for you to read
+    warn "NVIDIA driver and rounded window corners (border_radius=${r}): if you see dots along window borders, set it lower in Settings > Mango > Decoration or in ~/.config/mango/cfg/appearance.conf (0 = square)"
 }
 
 # shellcheck disable=SC2088  # "~/..." below is text for you to read, not a path
