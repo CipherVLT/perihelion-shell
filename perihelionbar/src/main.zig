@@ -2854,9 +2854,9 @@ const JsonConfig = struct {
     bar: BarSettings = .{},
 };
 
-// JSON-facing shape of ~/.config/perihelionbar/matugen.json — the file matugen
-// renders (from the repo's matugen/perihelionbar-matugen.json template) whenever
-// it generates a colorscheme, holding just the ten colors this bar draws.
+// JSON-facing shape of ~/.config/perihelionbar/matugen.json — the file the
+// wallpaper theming writes (seeded from desktop/config/perihelionbar/matugen.json),
+// holding just the ten colors this bar draws.
 // Unlike JsonAppearance every field is OPTIONAL: matugen owns this file
 // outright and may add/remove colors across versions or be hand-edited
 // mid-way, so the merge below applies only the keys that are actually

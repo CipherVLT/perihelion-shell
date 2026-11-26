@@ -279,9 +279,9 @@ var widgets_disabled_path: [:0]const u8 = "";
 var shell_pidfile_path_buf: [512]u8 = undefined;
 var shell_pidfile_path: [:0]const u8 = "";
 
-/// SIGUSR1 live-reload flag: matugen's post_hook sends the shell the very
-/// same signal it sends the bar (see [templates.perihelionbar] in
-/// matugen/config.toml), so a wallpaper change reaches both at once. The
+/// SIGUSR1 live-reload flag: a matugen post_hook (in your own
+/// ~/.config/matugen/config.toml) can send the shell the very same signal
+/// it sends the bar, so a wallpaper change reaches both at once. The
 /// handler only raises this — file I/O is not async-signal-safe — and the
 /// poll loop does the reading. The shell is single-threaded, so a plain flag
 /// is enough here; the bar needs a self-pipe only because it isn't.
