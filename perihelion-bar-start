@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Starts Perihelion Bar and its dock at login (Mango's autostart.conf runs
-# it); running it again restarts both. The same starter Perihelion Linux
-# uses, so a Mango config behaves the same on both.
+# Starts Perihelion Bar and its dock (perihelion-session-start runs it at
+# login; Super+Shift+D runs it again to restart both). The same starter on
+# Arch (install.sh) and Perihelion Linux.
 #
 # The bar waits until PipeWire/WirePlumber have a default audio output, so
 # its cava connects to it (started earlier, cava can stay unconnected and
@@ -14,6 +14,16 @@
 #
 # Exactly one bar and one dock: every running copy is stopped first, and
 # each new copy holds a lock, so a second one of either kind just exits.
+
+# Installs from before perihelion-launcher open plain fuzzel on Super+D,
+# which ignores the icon theme. Move that one line, only while it is still
+# the shipped default, and reload Mango so it applies now.
+keybinds="${XDG_CONFIG_HOME:-${HOME}/.config}/mango/cfg/keybinds.conf"
+if [[ -w "${keybinds}" ]] && command -v perihelion-launcher >/dev/null &&
+        grep -qx 'bind=SUPER,d,spawn,fuzzel' "${keybinds}"; then
+    sed -i 's/^bind=SUPER,d,spawn,fuzzel$/bind=SUPER,d,spawn,perihelion-launcher/' "${keybinds}"
+    mmsg dispatch reload_config >/dev/null 2>&1 || true
+fi
 
 if pkill -x perihelion-bar 2>/dev/null; then
     for _ in $(seq 1 20); do
