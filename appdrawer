@@ -43,13 +43,48 @@ else
     SEL_VAL=$CFG
 fi
 
+# Crashes go to the session log (the one perihelion-session-start writes),
+# not a dialog on the desktop.
+LOG_FILE="${PERIHELIONBAR_LOG_DIR:-$HOME/.config/perihelionbar-config/logs}/perihelion-session-start/trace.log"
+log() {
+    mkdir -p "${LOG_FILE%/*}" 2>/dev/null
+    printf '%s appdrawer: %s\n' "$(date '+%F %T')" "$*" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# Start the daemon in the background and return at once. Quickshell's own
+# crash handler is off (QS_DISABLE_CRASH_HANDLER; quickshell has no command
+# line flag for it), so a crash, such as the Qt version mismatch after a Qt
+# update, never leaves its "Quickshell has crashed" dialog on the desktop.
+# Instead a watcher waits for the daemon and logs how it ended, with the
+# Qt versions when they differ. The next Super+A starts it again (the cold
+# path below). The watcher ignores SIGHUP, as -d's detaching did, so
+# closing a terminal that ran `appdrawer start` leaves the drawer running.
+launch_daemon() {
+    (
+        trap '' HUP
+        QS_DISABLE_CRASH_HANDLER=1 "$QS" "$SEL_FLAG" "$SEL_VAL" >/dev/null 2>&1 </dev/null
+        rc=$?
+        case $rc in
+            0 | 129 | 130 | 143) ;; # normal exit, or stopped (HUP, INT, TERM: `quickshell kill`, logout)
+            *)
+                qt=$(NO_COLOR=1 timeout 10 "$QS" -V -v 2>/dev/null | sed -n 's/^Qt: //p' | head -n 1)
+                if [ "$rc" -gt 128 ]; then how="crashed (signal $((rc - 128)))"; else how="exited with status $rc"; fi
+                case $qt in
+                    *"built against"*) log "quickshell $how; Qt $qt: a Qt version mismatch, see docs/install (Troubleshooting)" ;;
+                    *) log "quickshell $how${qt:+ (Qt $qt)}; details: quickshell log $SEL_FLAG $SEL_VAL" ;;
+                esac
+                ;;
+        esac
+    ) >/dev/null 2>&1 </dev/null &
+}
+
 if [ "$#" -gt 0 ]; then
     case "$1" in
         start)
-            # -d detaches, so this returns immediately instead of blocking the
-            # compositor's startup path.
-            "$QS" "$SEL_FLAG" "$SEL_VAL" -d >/dev/null 2>&1
-            exit $?
+            # Returns immediately instead of blocking the compositor's
+            # startup path.
+            launch_daemon
+            exit 0
             ;;
         restart)
             # Both selectors: a daemon started before the QML moved to
@@ -57,8 +92,8 @@ if [ "$#" -gt 0 ]; then
             "$QS" kill -c "$CFG" >/dev/null 2>&1
             [ "$SEL_FLAG" = -p ] && "$QS" kill -p "$SEL_VAL" >/dev/null 2>&1
             sleep 0.3
-            "$QS" "$SEL_FLAG" "$SEL_VAL" -d >/dev/null 2>&1
-            exit $?
+            launch_daemon
+            exit 0
             ;;
         open|close|toggle|wallpapers|apps|bluetooth|power)
             ACTION="$1"
@@ -90,7 +125,7 @@ fi
 # Cold path: bring the daemon up, then retry until its IPC target is registered.
 # The handler is registered during config load, well before the icon scan and
 # app catalogue finish, so this normally succeeds in well under a second.
-"$QS" "$SEL_FLAG" "$SEL_VAL" -d >/dev/null 2>&1 &
+launch_daemon
 
 waited=0
 while [ "$waited" -lt 60 ]; do
