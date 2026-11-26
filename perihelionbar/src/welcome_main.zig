@@ -57,22 +57,37 @@ const WNOHANG: c_int = 1;
 
 const APP_ID = "io.github.ciphervlt.perihelionbar.Welcome";
 const REPO_URL = "https://github.com/CipherVLT/perihelion-shell";
-const HYPRLAND_CONF = "~/.config/hypr/hyprland.lua";
 
-const PERIHELIONBAR_WELCOME_AUTOSTART_LINE = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"perihelionbar-welcome\") end)";
-const STEAM_SILENT_AUTOSTART_LINE = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"steam -silent\") end)";
-const EASYEFFECTS_AUTOSTART_LINE = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"easyeffects --gapplication-service\") end)";
+/// A program started at login: the line for MangoWM's autostart.conf and
+/// the line for Hyprland's hyprland.lua.
+const AutostartLine = struct { mango: []const u8, hypr: []const u8 };
+const WELCOME_AUTOSTART = AutostartLine{
+    .mango = "exec_once=perihelionbar-welcome",
+    .hypr = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"perihelionbar-welcome\") end)",
+};
+const STEAM_SILENT_AUTOSTART = AutostartLine{
+    .mango = "exec_once=steam -silent",
+    .hypr = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"steam -silent\") end)",
+};
+const EASYEFFECTS_AUTOSTART = AutostartLine{
+    .mango = "exec_once=easyeffects --gapplication-service",
+    .hypr = "hl.on(\"hyprland.start\", function() hl.exec_cmd(\"easyeffects --gapplication-service\") end)",
+};
 
 // ---------------------------------------------------------------------
 // Paths (resolved from $HOME at startup)
 // ---------------------------------------------------------------------
 
 var hyprland_lua_buf: [512]u8 = undefined;
+var mango_autostart_buf: [512]u8 = undefined;
 var first_run_marker_buf: [512]u8 = undefined;
 var perihelionbar_config_dir_buf: [512]u8 = undefined;
 var terminal_spec_buf: [512]u8 = undefined;
 
 var g_hyprland_lua_path: [:0]const u8 = "";
+var g_mango_autostart_path: [:0]const u8 = "";
+/// MangoWM unless this session is Hyprland: Perihelion is MangoWM-first.
+var g_hyprland_session = false;
 var g_first_run_marker_path: [:0]const u8 = "";
 var g_perihelionbar_config_dir: [:0]const u8 = "";
 var g_terminal_spec_path: [:0]const u8 = "";
@@ -80,6 +95,12 @@ var g_terminal_spec_path: [:0]const u8 = "";
 fn resolvePaths() void {
     const home = std.mem.span(getenv("HOME") orelse "/root");
     g_hyprland_lua_path = std.fmt.bufPrintSentinel(&hyprland_lua_buf, "{s}/.config/hypr/hyprland.lua", .{home}, 0) catch "";
+    g_hyprland_session = getenv("HYPRLAND_INSTANCE_SIGNATURE") != null;
+    // cfg/autostart.conf is what the installer and the ISO write; a Mango
+    // config without it gets the line in config.conf itself.
+    g_mango_autostart_path = std.fmt.bufPrintSentinel(&mango_autostart_buf, "{s}/.config/mango/cfg/autostart.conf", .{home}, 0) catch "";
+    if (!fileExists(g_mango_autostart_path))
+        g_mango_autostart_path = std.fmt.bufPrintSentinel(&mango_autostart_buf, "{s}/.config/mango/config.conf", .{home}, 0) catch "";
     g_first_run_marker_path = std.fmt.bufPrintSentinel(&first_run_marker_buf, "{s}/.config/perihelionbar/welcome-shown", .{home}, 0) catch "";
     g_perihelionbar_config_dir = std.fmt.bufPrintSentinel(&perihelionbar_config_dir_buf, "{s}/.config/perihelionbar", .{home}, 0) catch "";
     g_terminal_spec_path = std.fmt.bufPrintSentinel(&terminal_spec_buf, "{s}/.config/perihelionbar/terminal", .{home}, 0) catch "";
@@ -158,46 +179,63 @@ fn detectAutostartMode() bool {
 }
 
 // ---------------------------------------------------------------------
-// hyprland.lua autostart-line toggling
+// Autostart lines (MangoWM autostart.conf, or hyprland.lua on Hyprland)
 // ---------------------------------------------------------------------
 
-fn isHyprLineEnabled(line: []const u8) bool {
-    const content = readFileAll(g_hyprland_lua_path) orelse return false;
-    defer gpa.free(content);
-    return std.mem.indexOf(u8, content, line) != null;
+fn autostartTarget(entry: AutostartLine) struct { path: [:0]const u8, line: []const u8 } {
+    if (g_hyprland_session) return .{ .path = g_hyprland_lua_path, .line = entry.hypr };
+    return .{ .path = g_mango_autostart_path, .line = entry.mango };
 }
 
-fn setHyprLineEnabled(line: []const u8, enabled: bool) bool {
-    const existing = readFileAll(g_hyprland_lua_path);
-    defer if (existing) |e| gpa.free(e);
-
-    if (enabled) {
-        if (existing) |content| {
-            if (std.mem.indexOf(u8, content, line) != null) return true;
-            var list: std.ArrayList(u8) = .empty;
-            defer list.deinit(gpa);
-            list.appendSlice(gpa, content) catch return false;
-            if (content.len > 0 and content[content.len - 1] != '\n') list.append(gpa, '\n') catch return false;
-            list.appendSlice(gpa, line) catch return false;
-            list.append(gpa, '\n') catch return false;
-            return writeFileAll(g_hyprland_lua_path, list.items);
-        }
-        var buf: [512]u8 = undefined;
-        const out = std.fmt.bufPrint(&buf, "{s}\n", .{line}) catch return false;
-        return writeFileAll(g_hyprland_lua_path, out);
-    }
-
-    const content = existing orelse return true;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
+/// True when `line` is one of `content`'s lines (surrounding blanks ignored).
+fn hasLine(content: []const u8, line: []const u8) bool {
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |ln| {
-        const trimmed = std.mem.trim(u8, ln, " \t\r");
-        if (std.mem.eql(u8, trimmed, line)) continue;
-        list.appendSlice(gpa, ln) catch return false;
-        list.append(gpa, '\n') catch return false;
+        if (std.mem.eql(u8, std.mem.trim(u8, ln, " \t\r"), line)) return true;
     }
-    return writeFileAll(g_hyprland_lua_path, list.items);
+    return false;
+}
+
+/// `content` with `line` appended (enabled) or every copy of it dropped
+/// (disabled); null when nothing changes. Caller frees the result.
+fn withLine(alloc: std.mem.Allocator, content: []const u8, line: []const u8, enabled: bool) !?[]u8 {
+    if (hasLine(content, line) == enabled) return null;
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(alloc);
+    if (enabled) {
+        try list.appendSlice(alloc, content);
+        if (content.len > 0 and content[content.len - 1] != '\n') try list.append(alloc, '\n');
+        try list.appendSlice(alloc, line);
+        try list.append(alloc, '\n');
+    } else {
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        var first = true;
+        while (lines.next()) |ln| {
+            if (std.mem.eql(u8, std.mem.trim(u8, ln, " \t\r"), line)) continue;
+            if (!first) try list.append(alloc, '\n');
+            try list.appendSlice(alloc, ln);
+            first = false;
+        }
+    }
+    return try list.toOwnedSlice(alloc);
+}
+
+fn isAutostartEnabled(entry: AutostartLine) bool {
+    const t = autostartTarget(entry);
+    const content = readFileAll(t.path) orelse return false;
+    defer gpa.free(content);
+    return hasLine(content, t.line);
+}
+
+fn setAutostartEnabled(entry: AutostartLine, enabled: bool) bool {
+    const t = autostartTarget(entry);
+    const existing = readFileAll(t.path);
+    defer if (existing) |e| gpa.free(e);
+    // Never create a window manager config just to switch something off.
+    if (existing == null and !enabled) return true;
+    const updated = (withLine(gpa, existing orelse "", t.line, enabled) catch return false) orelse return true;
+    defer gpa.free(updated);
+    return writeFileAll(t.path, updated);
 }
 
 fn markShown() void {
@@ -1126,7 +1164,7 @@ fn buildWelcomePage() *gtk.GtkBox {
     const autostart_label = gtk.gtk_label_new("Launch on startup");
     const autostart_switch = gtk.gtk_switch_new();
     gtk.gtk_widget_set_valign(@ptrCast(autostart_switch), gtk.ALIGN_CENTER);
-    gtk.gtk_switch_set_active(autostart_switch, @intFromBool(isHyprLineEnabled(PERIHELIONBAR_WELCOME_AUTOSTART_LINE)));
+    gtk.gtk_switch_set_active(autostart_switch, @intFromBool(isAutostartEnabled(WELCOME_AUTOSTART)));
     _ = gtk.g_signal_connect_data(@ptrCast(autostart_switch), "notify::active", @ptrCast(&onAutostartToggled), null, null, 0);
     g_autostart_switch = autostart_switch;
 
@@ -1138,15 +1176,15 @@ fn buildWelcomePage() *gtk.GtkBox {
 }
 
 fn onAutostartToggled(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    _ = setHyprLineEnabled(PERIHELIONBAR_WELCOME_AUTOSTART_LINE, gtk.gtk_switch_get_active(sw) != 0);
+    _ = setAutostartEnabled(WELCOME_AUTOSTART, gtk.gtk_switch_get_active(sw) != 0);
 }
 
 fn onSteamAutostartToggled(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    _ = setHyprLineEnabled(STEAM_SILENT_AUTOSTART_LINE, gtk.gtk_switch_get_active(sw) != 0);
+    _ = setAutostartEnabled(STEAM_SILENT_AUTOSTART, gtk.gtk_switch_get_active(sw) != 0);
 }
 
 fn onEasyEffectsAutostartToggled(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, _: ?*anyopaque) callconv(.c) void {
-    _ = setHyprLineEnabled(EASYEFFECTS_AUTOSTART_LINE, gtk.gtk_switch_get_active(sw) != 0);
+    _ = setAutostartEnabled(EASYEFFECTS_AUTOSTART, gtk.gtk_switch_get_active(sw) != 0);
 }
 
 fn onSetupActionClicked(_: *gtk.GtkButton, data: ?*anyopaque) callconv(.c) void {
@@ -1370,7 +1408,7 @@ fn buildSetupPage() *gtk.GtkBox {
         gtk.adw_action_row_set_icon_name(row, "applications-games-symbolic");
         const sw = gtk.gtk_switch_new();
         gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
-        gtk.gtk_switch_set_active(sw, @intFromBool(isHyprLineEnabled(STEAM_SILENT_AUTOSTART_LINE)));
+        gtk.gtk_switch_set_active(sw, @intFromBool(isAutostartEnabled(STEAM_SILENT_AUTOSTART)));
         _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onSteamAutostartToggled), null, null, 0);
         gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
         gtk.adw_preferences_group_add(autostart_group, @ptrCast(row));
@@ -1382,7 +1420,7 @@ fn buildSetupPage() *gtk.GtkBox {
         gtk.adw_action_row_set_icon_name(row, "multimedia-volume-control-symbolic");
         const sw = gtk.gtk_switch_new();
         gtk.gtk_widget_set_valign(@ptrCast(sw), gtk.ALIGN_CENTER);
-        gtk.gtk_switch_set_active(sw, @intFromBool(isHyprLineEnabled(EASYEFFECTS_AUTOSTART_LINE)));
+        gtk.gtk_switch_set_active(sw, @intFromBool(isAutostartEnabled(EASYEFFECTS_AUTOSTART)));
         _ = gtk.g_signal_connect_data(@ptrCast(sw), "notify::active", @ptrCast(&onEasyEffectsAutostartToggled), null, null, 0);
         gtk.adw_action_row_add_suffix(row, @ptrCast(sw));
         gtk.adw_preferences_group_add(autostart_group, @ptrCast(row));
@@ -1412,9 +1450,10 @@ fn buildKeybindingsPage() *gtk.GtkBox {
 
     const config_group = gtk.adw_preferences_group_new();
     gtk.adw_preferences_group_set_title(config_group, "Editing your config");
-    var desc_buf: [128]u8 = undefined;
-    const desc = std.fmt.bufPrintSentinel(&desc_buf, "Change keybindings or monitor setup with:\nnvim {s}", .{HYPRLAND_CONF}, 0) catch "Change keybindings or monitor setup with nvim.";
-    gtk.adw_preferences_group_set_description(config_group, desc);
+    gtk.adw_preferences_group_set_description(config_group,
+        "Keys, monitors and autostart are in Perihelion Settings (Mango section), " ++
+        "or by hand in ~/.config/mango/cfg/ (keybinds.conf, monitors.conf, autostart.conf). " ++
+        "Super+Shift+R reloads.");
     gtk.gtk_box_append(box, @ptrCast(config_group));
 
     return box;
@@ -2136,6 +2175,28 @@ test "pkg search parser: rejects junk and malformed names" {
     try t.expectEqual(@as(usize, 0), r.count);
 }
 
+test "autostart lines: append once, remove every copy, keep the rest" {
+    const t = std.testing;
+    const a = t.allocator;
+    const line = STEAM_SILENT_AUTOSTART.mango;
+
+    const added = (try withLine(a, "exec_once=perihelion-bar-start", line, true)).?;
+    defer a.free(added);
+    try t.expectEqualStrings("exec_once=perihelion-bar-start\nexec_once=steam -silent\n", added);
+    try t.expect((try withLine(a, added, line, true)) == null);
+
+    const removed = (try withLine(a, "# keep\n  exec_once=steam -silent \nexec_once=swayidle\nexec_once=steam -silent\n", line, false)).?;
+    defer a.free(removed);
+    try t.expectEqualStrings("# keep\nexec_once=swayidle\n", removed);
+    try t.expect((try withLine(a, "exec_once=swayidle\n", line, false)) == null);
+
+    // A commented-out line is not an enabled one.
+    try t.expect(!hasLine("# exec_once=steam -silent\n", line));
+    const fresh = (try withLine(a, "", WELCOME_AUTOSTART.mango, true)).?;
+    defer a.free(fresh);
+    try t.expectEqualStrings("exec_once=perihelionbar-welcome\n", fresh);
+}
+
 test "terminal spec parsing" {
     const t = std.testing;
 
@@ -2156,9 +2217,10 @@ test "terminal spec parsing" {
     try t.expect(!applyTermSpec(""));
     try t.expect(!applyTermSpec("# comment line"));
 
-    // The install.sh shape for a real pick.
-    try t.expect(applyTermSpec("alacritty -e"));
-    try t.expectEqualStrings("alacritty", g_term_bin);
+    // The install.sh shape for a real pick ("<binary> <flag>"; sh is on
+    // every machine, a real terminal may not be).
+    try t.expect(applyTermSpec("sh -e"));
+    try t.expectEqualStrings("sh", g_term_bin);
     try t.expectEqualStrings("-e", g_term_flag.?);
 }
 

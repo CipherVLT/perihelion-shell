@@ -358,6 +358,12 @@ pub fn build(b: *Build) !void {
     welcome_exe.use_lld = true;
     b.installArtifact(welcome_exe);
 
+    // `zig build test-welcome`: the Welcome app's pure-data tests (package
+    // search parsing, terminal spec, autostart lines). No display needed.
+    const welcome_tests = b.addTest(.{ .root_module = welcome_mod, .use_llvm = true, .use_lld = true });
+    const welcome_test_step = b.step("test-welcome", "Run src/welcome_main.zig unit tests");
+    welcome_test_step.dependOn(&b.addRunArtifact(welcome_tests).step);
+
     const run_welcome_cmd = b.addRunArtifact(welcome_exe);
     run_welcome_cmd.step.dependOn(b.getInstallStep());
     const run_welcome_step = b.step("run-welcome", "Run perihelionbar-welcome");

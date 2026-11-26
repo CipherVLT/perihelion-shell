@@ -105,6 +105,9 @@ jobs:
       - name: Unit-test Settings (module drawer, retired modules, Ly greeter palette block)
         working-directory: perihelionbar
         run: /opt/zig/zig build test-settings
+      - name: Unit-test the Welcome app (package search, terminal spec, autostart lines)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-welcome
       - name: Unit-test the theme settings writers
         working-directory: perihelionbar
         run: /opt/zig/zig test src/desk_theme.zig -lc
