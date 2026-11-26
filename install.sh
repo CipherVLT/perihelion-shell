@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Perihelion Bar installer for Arch Linux (and Arch-based distros).
+# Perihelion Bar installer for Arch Linux and Arch-based distros (CachyOS,
+# EndeavourOS, Garuda, ...) and Fedora 45 or later. On Perihelion Linux the
+# shell is already part of the system; this says so and changes nothing.
 #
 #   curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
 #   or, from a checkout:  ./install.sh [--yes] [--wm=mango|hyprland|both]
@@ -28,25 +30,103 @@ OPT_YES=0
 OPT_WM=""
 OPT_EXISTING=""
 OPT_REBUILD=0
+OPT_EXTRAS=0
 
 # --- output -----------------------------------------------------------------------
 
-if [[ -t 1 ]]; then
-    B=$'\e[1m' DIM=$'\e[2m' RED=$'\e[31m' GRN=$'\e[32m' YLW=$'\e[33m' BLU=$'\e[34m' RST=$'\e[0m'
-else
-    B='' DIM='' RED='' GRN='' YLW='' BLU='' RST=''
-fi
+# What this terminal can show. Colours: on a terminal, not with NO_COLOR or
+# TERM=dumb. Unicode (✓, the block-letter title): a UTF-8 locale, and not the
+# Linux console (TERM=linux), whose fonts lack most of it. Emoji: the same,
+# plus PERIHELION_NO_EMOJI unset. PERIHELION_TTY=1 treats stdout as a
+# terminal (tests).
+ui_setup() {
+    local tty=0 utf8=0 term=${TERM:-dumb} colors=0
+    [[ -t 1 || ${PERIHELION_TTY:-} == 1 ]] && tty=1
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8* | *[Uu][Tt][Ff]8*) utf8=1 ;; esac
+    UI_COLOR=0 UI_UNICODE=0 UI_EMOJI=0 UI_256=0
+    if (( tty )) && [[ -z ${NO_COLOR:-} && ${term} != dumb ]]; then
+        UI_COLOR=1
+        colors=$(tput colors 2>/dev/null || echo 8)
+        [[ ${colors} =~ ^[0-9]+$ ]] || colors=8
+        if (( colors >= 256 )) || [[ ${COLORTERM:-} == truecolor || ${COLORTERM:-} == 24bit || ${term} == *256color* ]]; then UI_256=1; fi
+    fi
+    if (( utf8 )) && [[ ${term} != linux && ${term} != dumb ]]; then UI_UNICODE=1; fi
+    if (( tty && UI_UNICODE )) && [[ ${PERIHELION_NO_EMOJI:-} != 1 ]]; then UI_EMOJI=1; fi
+    if (( UI_COLOR )); then
+        B=$'\e[1m' DIM=$'\e[2m' RED=$'\e[31m' GRN=$'\e[32m' YLW=$'\e[33m' BLU=$'\e[34m' RST=$'\e[0m'
+    else
+        B='' DIM='' RED='' GRN='' YLW='' BLU='' RST=''
+    fi
+    if (( UI_UNICODE )); then
+        G_OK='✓' G_NOTE='·' G_WARN='!' G_FAIL='✗'
+    else
+        G_OK='+' G_NOTE='-' G_WARN='!' G_FAIL='x'
+    fi
+}
+ui_setup
+
+# emoji GLYPH [PLAIN]: the glyph and a space where emoji show, else PLAIN
+# (and a space) or nothing.
+emoji() {
+    if (( UI_EMOJI )); then printf '%s ' "$1"; elif [[ -n ${2:-} ]]; then printf '%s ' "$2"; fi
+}
+
+# The title: PERIHELION in block letters (# on terminals without Unicode),
+# shaded from gold to red on 256-colour terminals; one plain line on narrow
+# terminals.
+TITLE_ROWS=(
+    '████   █████  ████   ███  █   █  █████  █      ███  ▄███▄  █   █'
+    '█   █  █      █   █   █   █   █  █      █       █   █   █  ██  █'
+    '████   ████   ████    █   █████  ████   █       █   █   █  █ █ █'
+    '█      █      █  █    █   █   █  █      █       █   █   █  █  ██'
+    '█      █████  █   █  ███  █   █  █████  █████  ███  ▀███▀  █   █'
+)
+TITLE_SHADES=(220 214 208 202 196)
+
+banner() { # VERSION COMMIT
+    local cols=${COLUMNS:-} i line color
+    [[ ${cols} =~ ^[0-9]+$ ]] || cols=$(tput cols 2>/dev/null || echo 80)
+    [[ ${cols} =~ ^[0-9]+$ ]] || cols=80
+    printf '\n'
+    if (( cols < 68 )); then
+        printf '  %sP E R I H E L I O N%s\n' "${B}${YLW}" "${RST}"
+    else
+        for i in "${!TITLE_ROWS[@]}"; do
+            line=${TITLE_ROWS[i]}
+            if (( ! UI_UNICODE )); then
+                line=${line//█/#}
+                line=${line//▄/ }
+                line=${line//▀/ }
+            fi
+            color=""
+            if (( UI_256 )); then color=$'\e[1;38;5;'"${TITLE_SHADES[i]}m"; elif (( UI_COLOR )); then color="${B}${YLW}"; fi
+            printf '  %s%s%s\n' "${color}" "${line}" "${RST}"
+        done
+    fi
+    printf '\n  %s%sPerihelion Bar installer%s  %s%s (%s)%s\n' \
+        "$(emoji '🚀' '>>')" "${B}" "${RST}" "${DIM}" "$1" "$2" "${RST}"
+}
 
 log() { if [[ -d ${STATE_DIR} ]]; then printf '%s %s\n' "$(date +%T)" "$*" >> "${LOG_FILE}" || true; fi; }
 say() { printf '%s\n' "$*"; log "$*"; }
-ok() { printf '  %s✓%s %s\n' "${GRN}" "${RST}" "$*"; log "ok: $*"; }
-note() { printf '  %s·%s %s\n' "${BLU}" "${RST}" "$*"; log "note: $*"; }
-warn() { printf '  %s!%s %s\n' "${YLW}" "${RST}" "$*"; log "warning: $*"; WARNINGS+=("$*"); }
+ok() { printf '  %s%s%s %s\n' "${GRN}" "${G_OK}" "${RST}" "$*"; log "ok: $*"; }
+note() { printf '  %s%s%s %s\n' "${BLU}" "${G_NOTE}" "${RST}" "$*"; log "note: $*"; }
+warn() { printf '  %s%s%s %s\n' "${YLW}" "${G_WARN}" "${RST}" "$*"; log "warning: $*"; WARNINGS+=("$*"); }
 CURRENT_STEP=""
-step() { CURRENT_STEP=$1; printf '\n%s==>%s %s%s%s\n' "${BLU}" "${RST}" "${B}" "$1" "${RST}"; log "=== $1"; }
+STEP_NO=0
+STEP_TOTAL=0
+# step "Title" [EMOJI]: "[2/5] 📦 Packages" (the emoji only where it shows).
+step() {
+    CURRENT_STEP=$1
+    STEP_NO=$((STEP_NO + 1))
+    local count=""
+    (( STEP_TOTAL )) && count="[${STEP_NO}/${STEP_TOTAL}] "
+    printf '\n%s%s%s%s%s%s\n' "${BLU}${B}" "${count}" "${RST}" "$(emoji "${2:-}")" "${B}$1" "${RST}"
+    log "=== ${count}$1"
+}
 
 die() {
-    printf '\n%s✗ %s failed:%s %s\n' "${RED}${B}" "${CURRENT_STEP:-Install}" "${RST}" "$*" >&2
+    printf '\n%s%s %s failed:%s %s\n' "${RED}${B}" "${G_FAIL}" "${CURRENT_STEP:-Install}" "${RST}" "$*" >&2
     log "FAILED (${CURRENT_STEP}): $*"
     if [[ -f ${LOG_FILE} ]]; then
         printf '%sLast lines of %s:%s\n' "${DIM}" "${LOG_FILE}" "${RST}" >&2
@@ -147,7 +227,7 @@ answer_set() {
 
 usage() {
     cat <<'EOF'
-Perihelion Bar installer (Arch Linux)
+Perihelion Bar installer (Arch Linux and Arch-based distros, Fedora 45+)
 
   ./install.sh [options]
   curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash -s -- [options]
@@ -162,6 +242,8 @@ Perihelion Bar installer (Arch Linux)
                       Perihelion's next to yours as <file>.perihelion-new)
   --rebuild           build again even when the installed programs already
                       match this commit
+  --extras            also install the optional extras (an image viewer,
+                      Blueman, wev); Perihelion Bar doesn't need them
   -h, --help          this text
 
 Log: ~/.local/state/perihelionbar/install.log
@@ -176,6 +258,7 @@ parse_args() {
             --wm=*) OPT_WM=${a#--wm=} ;;
             --existing=*) OPT_EXISTING=${a#--existing=} ;;
             --rebuild) OPT_REBUILD=1 ;;
+            --extras) OPT_EXTRAS=1 ;;
             -h | --help) usage; exit 0 ;;
             *) printf 'Unknown option: %s\n\n' "${a}" >&2; usage >&2; exit 2 ;;
         esac
@@ -196,7 +279,7 @@ locate_source() {
         [[ -f ${SRC_DIR}/scripts/build.sh ]] && return 0
     fi
     command -v git >/dev/null || {
-        printf 'The installer needs git to fetch Perihelion Bar. Install it first:\n  sudo pacman -S git\n' >&2
+        printf 'The installer needs git to fetch Perihelion Bar. Install it first:\n  sudo pacman -S git      (Arch and Arch-based)\n  sudo dnf install git    (Fedora)\n' >&2
         exit 1
     }
     local tmp
@@ -213,24 +296,68 @@ locate_source() {
 
 # --- checks ------------------------------------------------------------------------
 
+# Which family this system belongs to: DISTRO_FAMILY=arch|fedora (empty for
+# anything else), with its ID, name and Fedora release.
+detect_distro() {
+    local osr=${PERIHELION_OS_RELEASE:-/etc/os-release}
+    DISTRO_ID="" DISTRO_LIKE="" DISTRO_NAME="" DISTRO_VERSION="" DISTRO_FAMILY=""
+    if [[ -r ${osr} ]]; then
+        # shellcheck disable=SC1090
+        DISTRO_ID=$(. "${osr}" && printf '%s' "${ID:-}")
+        # shellcheck disable=SC1090
+        DISTRO_LIKE=$(. "${osr}" && printf '%s' "${ID_LIKE:-}")
+        # shellcheck disable=SC1090
+        DISTRO_NAME=$(. "${osr}" && printf '%s' "${PRETTY_NAME:-${NAME:-}}")
+        # shellcheck disable=SC1090
+        DISTRO_VERSION=$(. "${osr}" && printf '%s' "${VERSION_ID:-}")
+    fi
+    if [[ ${DISTRO_ID} == arch || " ${DISTRO_LIKE} " == *" arch "* ]]; then
+        DISTRO_FAMILY=arch
+    elif [[ ${DISTRO_ID} == fedora || " ${DISTRO_LIKE} " == *" fedora "* ]]; then
+        DISTRO_FAMILY=fedora
+    fi
+}
+
+# Perihelion Linux ships the shell in its image (the same marker Settings >
+# Updates uses); installing over it would fight the image's own copy.
+on_perihelion_linux() { [[ -e ${PERIHELION_ISO_REF:-/usr/share/perihelion/perihelionbar.ref} ]]; }
+
 check_system() {
+    if on_perihelion_linux; then
+        printf '\n  %sThis is Perihelion Linux: Perihelion Bar is already installed.%s\n' "${GRN}${B}" "${RST}"
+        printf '  Updates come with the system: Perihelion Settings > Updates.\n  Nothing was changed.\n'
+        exit 0
+    fi
     if (( EUID == 0 )); then
         printf 'Run the installer as your normal user, not root: it asks for sudo only\nfor the steps that need it.\n' >&2
         exit 1
     fi
-    local id="" like="" osr=${PERIHELION_OS_RELEASE:-/etc/os-release}
-    if [[ -r ${osr} ]]; then
-        # shellcheck disable=SC1090
-        id=$(. "${osr}" && printf '%s' "${ID:-}")
-        # shellcheck disable=SC1090
-        like=$(. "${osr}" && printf '%s' "${ID_LIKE:-}")
-    fi
-    if [[ ${id} != arch && " ${like} " != *" arch "* ]] || ! command -v pacman >/dev/null; then
-        printf 'Perihelion Bar'"'"'s installer supports Arch Linux and Arch-based distros only\n(this system is "%s"). On Fedora, Perihelion Linux ships it ready to use.\n' "${id:-unknown}" >&2
-        exit 1
-    fi
+    detect_distro
+    case "${DISTRO_FAMILY}" in
+        arch)
+            command -v pacman >/dev/null || { printf 'This looks Arch-based but has no pacman.\n' >&2; exit 1; }
+            ;;
+        fedora)
+            command -v dnf >/dev/null || { printf 'This looks like Fedora but has no dnf.\n' >&2; exit 1; }
+            if [[ -e /run/ostree-booted ]]; then
+                printf '%s is an image-based (rpm-ostree) system: installing into /usr is not possible here.\nUse Perihelion Linux, or a regular Fedora install.\n' "${DISTRO_NAME:-This system}" >&2
+                exit 1
+            fi
+            local rel
+            rel=$(rpm -E %fedora 2>/dev/null || true)
+            [[ ${rel} =~ ^[0-9]+$ ]] || rel=${DISTRO_VERSION%%.*}
+            if ! [[ ${rel} =~ ^[0-9]+$ ]] || (( rel < 45 )); then
+                printf 'Perihelion Bar needs Fedora 45 or later (this is %s).\n' "${DISTRO_NAME:-Fedora ${rel}}" >&2
+                exit 1
+            fi
+            ;;
+        *)
+            printf 'Perihelion Bar'"'"'s installer supports Arch Linux, Arch-based distros and Fedora 45+\n(this system is "%s"). Perihelion Linux ships it ready to use.\n' "${DISTRO_ID:-unknown}" >&2
+            exit 1
+            ;;
+    esac
     [[ $(uname -m) == x86_64 ]] || { printf 'Only x86_64 is supported for now (this is %s).\n' "$(uname -m)" >&2; exit 1; }
-    command -v sudo >/dev/null || { printf 'sudo is needed (pacman -S sudo, as root).\n' >&2; exit 1; }
+    command -v sudo >/dev/null || { printf 'sudo is needed (install it as root first).\n' >&2; exit 1; }
 }
 
 SUDO_KEEPALIVE=""
@@ -238,7 +365,7 @@ need_sudo() {
     [[ -n ${SUDO_KEEPALIVE} ]] && return 0
     if ! sudo -n true 2>/dev/null; then
         have_tty || die "sudo needs a password and there is no terminal to ask on"
-        printf '  Some steps need administrator rights (pacman, /usr/bin, /etc/pam.d).\n' > /dev/tty
+        printf '  Some steps need administrator rights (packages, /usr/bin, /etc/pam.d).\n' > /dev/tty
         # shellcheck disable=SC2024  # sudo reads the password from the keyboard
         sudo -v < /dev/tty || die "sudo did not accept the password"
     fi
@@ -256,8 +383,8 @@ cleanup() {
 
 pick_wms() {
     local have_mango=0 have_hypr=0 saved default
-    pacman -Qq mangowm >/dev/null 2>&1 && have_mango=1
-    pacman -Qq hyprland >/dev/null 2>&1 && have_hypr=1
+    check_package mangowm && have_mango=1
+    check_package hyprland && have_hypr=1
     note "Installed: MangoWM $( ((have_mango)) && echo yes || echo no), Hyprland $( ((have_hypr)) && echo yes || echo no)"
     saved=$(answer_get wm)
     if [[ -n ${OPT_WM} ]]; then
@@ -282,7 +409,7 @@ pick_wms() {
 # --- report ---------------------------------------------------------------------------
 
 report() {
-    printf '\n%sPerihelion Bar is installed%s (commit %s).\n' "${GRN}${B}" "${RST}" "${COMMIT}"
+    printf '\n%s%sPerihelion Bar is installed%s (commit %s).\n' "$(emoji '✨')" "${GRN}${B}" "${RST}" "${COMMIT}"
     printf '\n%sInstalled%s\n' "${B}" "${RST}"
     printf '  Programs in /usr/bin: perihelion-bar, perihelion-shell, perihelion-settings,\n'
     printf '    perihelion-lockscreen, perihelion-lock, appdrawer, perihelion-theme and helpers\n'
@@ -330,11 +457,11 @@ main() {
     VERSION=$(sed -n 's/^const DEFAULT_VERSION = "\(.*\)";/\1/p' "${SRC_DIR}/perihelionbar/build.zig")
     [[ -n ${VERSION} ]] || VERSION=0.1.0-dev
 
-    printf '%sPerihelion Bar installer%s  %s (%s)\n' "${B}" "${RST}" "${VERSION}" "${COMMIT}"
-    printf '%sLog: %s%s\n' "${DIM}" "${LOG_FILE}" "${RST}"
+    banner "${VERSION}" "${COMMIT}"
+    printf '  %sLog: %s%s\n' "${DIM}" "${LOG_FILE}" "${RST}"
 
     # shellcheck source=scripts/packages-arch.sh
-    source "${SRC_DIR}/scripts/packages-arch.sh"
+    source "${SRC_DIR}/scripts/packages-${DISTRO_FAMILY}.sh"
     # shellcheck source=scripts/build.sh
     source "${SRC_DIR}/scripts/build.sh"
     # shellcheck source=scripts/configs.sh
@@ -344,14 +471,15 @@ main() {
     # shellcheck source=scripts/leftovers.sh
     source "${SRC_DIR}/scripts/leftovers.sh"
 
-    step "Checking this system"
-    ok "$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Arch Linux}"), user ${USER:-$(id -un)}"
+    STEP_TOTAL=5
+    step "Checking this system" "🔎"
+    ok "${DISTRO_NAME:-${DISTRO_ID}}, user ${USER:-$(id -un)}"
     pick_wms
 
-    step "Packages";              install_packages
-    step "Building Perihelion Bar"; build_and_install
-    step "Your configs";          install_configs; remove_old_images
-    step "Starting with the session"; install_autostart
+    step "Packages" "📦";                 install_packages
+    step "Building Perihelion Bar" "🔧";  build_and_install
+    step "Your configs" "📁";             install_configs; remove_old_images
+    step "Starting with the session" "🚀"; install_autostart
 
     report
 }
