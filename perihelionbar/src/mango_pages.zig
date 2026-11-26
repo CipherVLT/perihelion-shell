@@ -169,13 +169,18 @@ fn onFieldEntry(buffer: *gtk.GtkEntryBuffer, _: *gtk.GParamSpec, user_data: ?*an
 
 fn onFieldSpin(spin: *gtk.GtkSpinButton, user_data: ?*anyopaque) callconv(.c) void {
     const f: *Field = @ptrCast(@alignCast(user_data.?));
+    storeNum(f, hg.gtk_spin_button_get_value(spin));
+    _ = f.doc.save();
+}
+
+/// A number row's value into its Doc (int rows rounded, as the spin shows them).
+fn storeNum(f: *Field, v: f64) void {
     var buf: [64]u8 = undefined;
     const s = if (f.is_float)
-        std.fmt.bufPrint(&buf, "{d}", .{hg.gtk_spin_button_get_value(spin)}) catch return
+        std.fmt.bufPrint(&buf, "{d}", .{v}) catch return
     else
-        std.fmt.bufPrint(&buf, "{d}", .{gtk.gtk_spin_button_get_value_as_int(spin)}) catch return;
+        std.fmt.bufPrint(&buf, "{d}", .{@as(i64, @intFromFloat(@round(v)))}) catch return;
     f.doc.setValue(f.key, s);
-    _ = f.doc.save();
 }
 
 fn onFieldSwitch(sw: *gtk.GtkSwitch, _: *gtk.GParamSpec, user_data: ?*anyopaque) callconv(.c) void {
@@ -1850,7 +1855,7 @@ const G_GENERAL = [_]Group{
 const G_DECOR_TOP = [_]Group{
     .{ .title = "Borders and corners", .opts = &.{
         oNum(.appearance, "border_px", 4, 0, 32, 1, "Border width (px)", ""),
-        oNum(.appearance, "border_radius", 12, 0, 64, 1, "Corner radius (px)", "12 matches Perihelion's frosted app windows."),
+        oNum(.appearance, "border_radius", 0, 0, 64, 1, "Corner radius (px)", "0 by default. Rounded corners can leave dots along the window border on some NVIDIA setups; set it lower if you see them. Frosted GTK windows follow it at the next theme change."),
         oTg(.misc, "no_border_when_single", false, "No border for a single window", ""),
         oTg(.appearance, "no_radius_when_single", false, "Square corners for a single window", ""),
     } },
@@ -3395,6 +3400,37 @@ test "option tables: unique keys, sane defaults" {
         }
     }
     try t.expect(n > 120);
+}
+
+test "border_radius: shipped default, Settings default and the key Settings writes agree" {
+    const t = std.testing;
+    // The shipped cfg/appearance.conf: square corners (SceneFX draws dots on
+    // rounded borders with NVIDIA's proprietary driver, wlrfx/scenefx#233).
+    var shipped: mango.Doc = .{};
+    defer shipped.reset();
+    var it = std.mem.splitScalar(u8, @embedFile("mango_appearance_conf"), '\n');
+    while (it.next()) |l| shipped.appendLine(l);
+    try t.expectEqual(@as(i64, 0), shipped.getInt("border_radius", -1));
+
+    // The Settings row: same key, same file, same default.
+    var opt: ?Opt = null;
+    for (G_DECOR_TOP) |g| for (g.opts) |o| {
+        if (std.mem.eql(u8, o.key, "border_radius")) opt = o;
+    };
+    const o = opt orelse return error.NoBorderRadiusRow;
+    try t.expectEqual(DocId.appearance, o.doc);
+    try t.expectEqual(Kind.int, o.kind);
+    try t.expectEqual(@as(f64, 0), o.num);
+
+    // What the row writes: the border_radius line Mango reads, in place.
+    doc_appearance.reset();
+    defer doc_appearance.reset();
+    doc_appearance.appendLine("border_px=4");
+    doc_appearance.appendLine("border_radius=0");
+    storeNum(fieldFor(docOf(o.doc), o.key, false, null), 6);
+    try t.expectEqualStrings("border_radius = 6", doc_appearance.line(1));
+    try t.expectEqual(@as(i64, 6), doc_appearance.getInt("border_radius", -1));
+    try t.expectEqual(@as(usize, 2), doc_appearance.lineCount());
 }
 
 // ---------------------------------------------------------------------

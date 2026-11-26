@@ -7390,3 +7390,8 @@ test "launcher move reorders" {
     try t.expect(!g.move(9, 0));
 }
 
+
+// Settings > Mango's own tests (option tables, layer blur, border_radius).
+test {
+    _ = mango_pages;
+}

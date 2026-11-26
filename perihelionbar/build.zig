@@ -380,6 +380,8 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     config_mod.addImport("cli_version", cli_version_mod);
+    // Settings > Mango's test checks its border_radius default against the shipped file.
+    config_mod.addAnonymousImport("mango_appearance_conf", .{ .root_source_file = b.path("../desktop/mango/cfg/appearance.conf") });
     config_mod.linkSystemLibrary("gtk4", .{});
     config_mod.linkSystemLibrary("libadwaita-1", .{});
     config_mod.linkSystemLibrary("gobject-2.0", .{});
