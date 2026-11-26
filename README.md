@@ -5,9 +5,17 @@ A native Zig/Wayland desktop for **MangoWM and Hyprland**: the bar and dock, des
 
 Where it came from and whose work it includes: [NOTICE.md](NOTICE.md).
 
-On **Fedora**, Perihelion Linux ships Perihelion Bar ready to use. On **Arch Linux** (and Arch-based distros: CachyOS, EndeavourOS, Garuda, ...) the installer below sets it up.
+**Perihelion Linux** ships Perihelion Bar ready to use (updates come from Settings >
+Updates; the installer sees it and changes nothing). Everywhere else the installer below
+sets it up:
 
-## Install (Arch)
+| Distro | Packages from |
+|---|---|
+| Arch Linux | pacman (+ your AUR helper for Strata and the Bibata cursor, if you have one) |
+| CachyOS (incl. v3/v4 repos), EndeavourOS, Garuda, other Arch-based | pacman, from your distro's repos |
+| Fedora 45 or later (not image-based ones like Silverblue or Bazzite) | dnf, plus [Terra](https://terra.fyralabs.com) for MangoWM, Quickshell, matugen and the Nerd Font (asked first) |
+
+## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
@@ -26,16 +34,21 @@ Run it as your normal user; it asks for sudo for the steps that need it. Options
 `--yes` (take every default, no questions), `--wm=mango|hyprland|both` (default: the
 window managers you have installed; MangoWM when you have neither),
 `--existing=keep|new|beside` (what `--yes` does with a config of yours that differs;
-default `beside`), `--rebuild`. With curl, pass them after `bash -s --`, for example
+default `beside`), `--rebuild`, `--extras` (an image viewer, Blueman and wev, which
+Perihelion Bar doesn't need). With curl, pass them after `bash -s --`, for example
 `curl -fsSL .../install.sh | bash -s -- --wm=hyprland`.
 
 **What it changes**
 
-- **Packages:** brings the system up to date and installs what is missing in one
-  `pacman -Syu --needed` (the window manager you picked, the build tools, and the
-  programs the desktop uses: quickshell, fuzzel, kitty, swaybg, swayidle, matugen, ...).
-  AUR packages (Strata, the Bibata cursor) only through paru or yay if you have one;
-  otherwise it tells you what to install.
+- **Packages:** only what Perihelion Bar uses (the window manager you picked, the build
+  tools, and the programs the desktop runs: quickshell, fuzzel, kitty, swaybg, swayidle,
+  matugen, ...); no drivers, games or Flatpak. On Arch it refreshes the package database
+  and updates the system in the same `pacman -Syu --needed`. If a mirror answers 404
+  (your mirror list or package database is out of date), it says so, offers one
+  `pacman -Syyu` and a retry, and names the mirror tool to use (`cachyos-rate-mirrors` on
+  CachyOS). AUR packages (Strata, the Bibata cursor) only through paru or yay if you have
+  one. On Fedora: one `dnf install --refresh`, with the same retry after
+  `dnf clean metadata`.
 - **Programs:** Zig 0.17.1 from ziglang.org (signature checked with minisign, kept in
   `~/.local/share/perihelionbar/`), then `perihelion-bar`, `perihelion-shell`,
   `perihelion-settings`, the lock screen and their helpers built from this commit and
