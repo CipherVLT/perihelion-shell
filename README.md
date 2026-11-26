@@ -10,6 +10,7 @@ Where it came from and whose work it includes: [NOTICE.md](NOTICE.md).
 Pick the guide for your distro below; each one is a complete walkthrough, from a freshly installed system to Perihelion Bar running on your desktop.
 
 <!-- distro-table: each row's guide must have a CI job, or its status must say "experimental, not tested in CI" (tests/docs-check.sh) -->
+
 | Your distro | Guide | Status |
 |---|---|---|
 | Arch, CachyOS (v3/v4 too), EndeavourOS, Garuda, other Arch-based | [docs/install/arch.md](docs/install/arch.md) | Tested in CI: Arch (MangoWM and Hyprland), CachyOS v3 (MangoWM). CachyOS v4, EndeavourOS, Garuda and other Arch-based: experimental, not tested in CI |

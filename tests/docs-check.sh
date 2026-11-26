@@ -46,9 +46,24 @@ while IFS= read -r row; do
         bad "${name}: no installer CI job, but its row doesn't say \"experimental, not tested in CI\""
     fi
     grep -qi 'tested in CI' <<<"${status}" || bad "${name}: status doesn't say what CI tests"
-done < <(sed -n '/^<!-- distro-table/,/^$/p' README.md | grep -E '^\| .*docs/install/')
+done < <(awk '/^<!-- distro-table/{on=1; next} on && /^\|/{print; seen=1; next} on && seen{exit}' README.md | grep -E '^\| .*docs/install/')
 (( rows >= 4 )) || bad "found ${rows} table rows (expected the four distro rows)"
 echo "  ${rows} rows checked"
+
+echo "## table rows: each one line, starting and ending with |"
+for doc in README.md docs/install/*.md; do
+    lineno=0
+    while IFS= read -r line; do
+        lineno=$((lineno + 1))
+        line=${line%"${line##*[![:space:]]}"}          # trailing blanks
+        if [[ ${line} == '|'* && ${line} != *'|' ]]; then
+            bad "${doc}:${lineno}: table row does not end with | (split across lines?)"
+        elif [[ ${line} != '|'* && ${line} == *'|' && ${prev:-} == '|'* ]]; then
+            bad "${doc}:${lineno}: line ends with | but does not start with one (a row split across lines)"
+        fi
+        prev=${line}
+    done < <(awk '/^```/{f=!f; print ""; next} f{print ""; next} {print}' "${doc}")
+done
 
 echo "## only the supported distros"
 others=$(grep -n -i -w -E 'ubuntu|debian|mint|nobara|manjaro|opensuse|nixos|gentoo|artix|void linux|ultramarine' README.md docs/install/*.md |
