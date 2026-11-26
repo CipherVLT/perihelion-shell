@@ -17,6 +17,18 @@ MANGO_NEEDS_KEYS=(
     'bind=SUPER,l,spawn,perihelion-lock'
 )
 
+# The Control Center's rows talk to these services. An existing system may
+# manage its network another way, so they are never switched on here; the
+# report says which are off and how to turn them on.
+check_services() {
+    local unit
+    for unit in NetworkManager.service bluetooth.service power-profiles-daemon.service; do
+        systemctl list-unit-files "${unit}" >/dev/null 2>&1 || continue
+        systemctl is-enabled "${unit}" >/dev/null 2>&1 && continue
+        warn "${unit} is not enabled (Control Center row stays dim). To use it: sudo systemctl enable --now ${unit}"
+    done
+}
+
 # The update check Settings > Updates expects: a user timer that fires every
 # hour and runs `perihelion-settings --check-updates --if-due`, which checks
 # only when "Check automatically" is on and its interval has passed.
