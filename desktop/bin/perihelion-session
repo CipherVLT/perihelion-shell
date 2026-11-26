@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# The "Perihelion (MangoWM)" login session (/usr/share/wayland-sessions/
+# perihelion.desktop). Makes sure this user has a Mango config, then runs
+# Mango. Without ~/.config/mango, Mango falls back to the stock
+# /etc/mango/config.conf, which starts nothing: no bar, no dock, no lock.
+#
+# Only when ~/.config/mango/config.conf is missing, Perihelion's defaults
+# (/usr/share/perihelion/mango: config.conf and cfg/) are copied in; a file
+# that exists is never replaced, and a config of yours is never touched.
+# The same file on Arch (install.sh) and Perihelion Linux.
+set -u
+
+defaults=${PERIHELION_MANGO_DEFAULTS:-/usr/share/perihelion/mango}
+cfg="${XDG_CONFIG_HOME:-${HOME}/.config}/mango"
+log_dir="${PERIHELIONBAR_LOG_DIR:-${HOME}/.config/perihelionbar-config/logs}/perihelion-session"
+mkdir -p "${log_dir}" 2>/dev/null
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "${log_dir}/trace.log" 2>/dev/null || true; }
+
+if [ -e "${cfg}/config.conf" ]; then
+    log "login: using ${cfg}/config.conf"
+elif [ ! -f "${defaults}/config.conf" ]; then
+    log "login: no ${cfg}/config.conf and no defaults in ${defaults}; Mango uses its stock config"
+else
+    n=0
+    while IFS= read -r -d '' src; do
+        rel=${src#"${defaults}"/}
+        dest="${cfg}/${rel}"
+        [ -e "${dest}" ] && continue
+        mkdir -p "$(dirname "${dest}")" && cp --no-preserve=mode,ownership "${src}" "${dest}" && chmod 644 "${dest}" && n=$((n + 1))
+    done < <(find "${defaults}" -type f -name '*.conf' -print0)
+    log "login: seeded ${cfg} from ${defaults} (${n} files)"
+fi
+
+exec mango "$@"

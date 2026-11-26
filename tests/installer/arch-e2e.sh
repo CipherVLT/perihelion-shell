@@ -98,6 +98,24 @@ check grep -qx 'font_size 14' /home/keeper/.config/kitty/kitty.conf
 check test -f /home/keeper/.config/kitty/kitty.conf.perihelion-new
 check grep -q 'file:~/.config/kitty/kitty.conf=beside' /home/keeper/.local/state/perihelionbar/installer-answers
 
+if [[ ${wm} == mango ]]; then
+    step "a user created after the install: first login through the Perihelion session"
+    useradd -m latecomer
+    # A stand-in mango: the session runs `exec mango`, which needs a display here.
+    mkdir -p /tmp/stub-mango
+    # shellcheck disable=SC2016  # expands when the stub runs
+    printf '#!/bin/sh\necho "mango $*" > "$HOME/mango-ran"\n' > /tmp/stub-mango/mango
+    chmod 755 /tmp/stub-mango/mango
+    check test ! -e /home/latecomer/.config/mango
+    runuser -u latecomer -- env -i HOME=/home/latecomer USER=latecomer PATH=/tmp/stub-mango:/usr/bin:/bin perihelion-session
+    check test -f /home/latecomer/mango-ran
+    check diff -r /usr/share/perihelion/mango /home/latecomer/.config/mango
+    check mango -p -c /home/latecomer/.config/mango/config.conf
+    check grep -qx 'exec_once=perihelion-session-start' /home/latecomer/.config/mango/cfg/autostart.conf
+    owned_by_user() { [[ -z $(find /home/latecomer/.config/mango ! -user latecomer) ]]; }
+    check owned_by_user
+fi
+
 step "not as root, not on another distro"
 check bash -c "! bash ${repo}/install.sh --yes 2>/dev/null"
 printf 'ID=fedora\nID_LIKE=""\n' > /tmp/os-release-fedora

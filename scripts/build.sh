@@ -154,6 +154,10 @@ install_support_files() {
     put_system 644 "${SRC_DIR}/perihelion-settings.desktop" /usr/share/applications/perihelion-settings.desktop
     put_system 644 "${SRC_DIR}/perihelionbar-welcome.desktop" /usr/share/applications/perihelionbar-welcome.desktop
     put_system 644 "${SRC_DIR}/appdrawer.desktop" /usr/share/applications/appdrawer.desktop
+    # The "Perihelion (MangoWM)" login session (perihelion-session seeds
+    # ~/.config/mango when it is missing, then runs Mango). The stock Mango
+    # session stays.
+    put_system 644 "${SRC_DIR}/desktop/wayland-sessions/perihelion.desktop" /usr/share/wayland-sessions/perihelion.desktop
     local png size name
     for png in "${SRC_DIR}"/assets/icons/perihelion-settings/*.png; do
         size=$(basename "${png}" .png)

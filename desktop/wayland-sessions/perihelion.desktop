@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Perihelion (MangoWM)
+Comment=MangoWM with Perihelion Bar, its dock and desktop
+Exec=/usr/bin/perihelion-session
+TryExec=/usr/bin/mango
+Type=Application
+DesktopNames=mango;wlroots

@@ -47,9 +47,13 @@ case "${wm}" in
         check test -f "${C}/mango/config.conf"
         check grep -qx 'bind=SUPER,i,spawn,perihelion-shell glance toggle' "${C}/mango/cfg/keybinds.conf"
         check grep -qx 'bind=SUPER,l,spawn,perihelion-lock' "${C}/mango/cfg/keybinds.conf"
-        check grep -qx 'exec_once=perihelion-bar-start' "${C}/mango/cfg/autostart.conf"
-        check grep -q '^exec_once=swayidle ' "${C}/mango/cfg/autostart.conf"
-        check grep -q '^exec_once=dbus-update-activation-environment' "${C}/mango/cfg/autostart.conf"
+        check grep -qx 'exec_once=perihelion-session-start' "${C}/mango/cfg/autostart.conf"
+        check test "$(grep -c '^exec_once=' "${C}/mango/cfg/autostart.conf")" -eq 1
+        # The login session, the same file the ISO ships.
+        check cmp -s desktop/wayland-sessions/perihelion.desktop /usr/share/wayland-sessions/perihelion.desktop
+        check test -f /usr/share/wayland-sessions/mango.desktop
+        check test -f /usr/share/perihelion/mango/config.conf
+        for p in perihelion-session perihelion-session-start; do check cmp -s "desktop/bin/${p}" "/usr/bin/${p}"; done
         check mango -p -c "${C}/mango/config.conf"
         # Every program the Mango config starts or binds is installed.
         programs_ok() {
@@ -61,6 +65,17 @@ case "${wm}" in
             return "${missing}"
         }
         check programs_ok
+        # Everything perihelion-session-start starts is installed.
+        session_programs_ok() {
+            local p missing=0
+            for p in dbus-update-activation-environment mako perihelion-wallpaper perihelion-bar-start \
+                perihelion-shell appdrawer swayidle perihelion-nightlight flock setsid pgrep; do
+                command -v "${p}" >/dev/null || { echo "      not installed: ${p}"; missing=1; }
+            done
+            [[ -x /usr/lib/mate-polkit/polkit-mate-authentication-agent-1 ]] || { echo "      no polkit agent"; missing=1; }
+            return "${missing}"
+        }
+        check session_programs_ok
         ;;
     hyprland)
         check test -f "${C}/hypr/perihelion.lua"

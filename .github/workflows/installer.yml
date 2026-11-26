@@ -19,7 +19,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version | head -2
-          shellcheck -x -s bash install.sh scripts/*.sh tests/installer/*.sh
+          shellcheck -x -s bash install.sh scripts/*.sh tests/installer/*.sh tests/session/*.sh
           for f in desktop/bin/*; do
             if head -1 "$f" | grep -qE '^#!.*\b(ba)?sh\b'; then shellcheck -S warning "$f"; fi
           done
@@ -29,6 +29,8 @@ jobs:
         run: bash tests/installer/prompts-test.sh
       - name: Old images removed only when their checksum matches
         run: bash tests/installer/leftovers-test.sh
+      - name: Login session seeds ~/.config/mango once; the session starter starts each piece once
+        run: bash tests/session/session-test.sh
 
   arch:
     needs: lint
