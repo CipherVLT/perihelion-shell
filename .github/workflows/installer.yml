@@ -20,7 +20,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version | head -2
-          shellcheck -x -s bash install.sh scripts/*.sh tests/installer/*.sh tests/session/*.sh
+          shellcheck -x -s bash install.sh scripts/*.sh tests/installer/*.sh tests/session/*.sh tests/docs-check.sh
           for f in desktop/bin/*; do
             if head -1 "$f" | grep -qE '^#!.*\b(ba)?sh\b'; then shellcheck -S warning "$f"; fi
           done
@@ -36,6 +36,8 @@ jobs:
         run: bash tests/installer/banner-test.sh
       - name: A stale package database (404) is explained, refreshed and retried
         run: bash tests/installer/stale-db-test.sh
+      - name: "Install docs: every relative link resolves; untested distros are labelled"
+        run: bash tests/docs-check.sh
 
   install:
     needs: lint
