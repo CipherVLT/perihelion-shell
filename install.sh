@@ -341,6 +341,8 @@ main() {
     source "${SRC_DIR}/scripts/configs.sh"
     # shellcheck source=scripts/autostart.sh
     source "${SRC_DIR}/scripts/autostart.sh"
+    # shellcheck source=scripts/leftovers.sh
+    source "${SRC_DIR}/scripts/leftovers.sh"
 
     step "Checking this system"
     ok "$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-Arch Linux}"), user ${USER:-$(id -un)}"
@@ -348,7 +350,7 @@ main() {
 
     step "Packages";              install_packages
     step "Building Perihelion Bar"; build_and_install
-    step "Your configs";          install_configs
+    step "Your configs";          install_configs; remove_old_images
     step "Starting with the session"; install_autostart
 
     report

@@ -1,0 +1,17 @@
+# Images older versions of the installer copied into place and that are no
+# longer part of Perihelion. A file is removed only when its SHA-256 is one
+# of these, so anything of yours under the same name is never touched.
+# Read by scripts/leftovers.sh and by the Perihelion ISO build.
+aa40e198aa75799eb85812b3618ff74a60be57e897098040550f6b78df0ac80d  old Welcome logo (logo.png)
+3599ada8076ce1ff383e3d97c732bb330bd1bd37c52856c89a7eb8906bd8d31c  old Settings icon (perihelionbar-config.svg)
+76dd90fbc557142d81211b100fb13491b63821ec9f30ecc7b1aea7392286ee56  old Welcome icon (perihelionbar-welcome.svg)
+c6bba14914c9beef3c2ba8b1f8981918be66ae9d65e2eaad7b4e1235f64c8b5b  old emblem
+2d3417e3df68f116dfa5621ebb53b58e7777049889f7474cf139fa72025b84cc  old author logo
+660472edfb07262523fa7adf23bb20e31db56d08e8c431be4457da78ccc9ad5a  old README image
+601e9180c75d2351502095a0510f65298fa1424e3008347c2a61adf79b079e12  old README image
+528133e1915ad4f296032782e33ad34f6e1379af6e68199fe1f889231aa8b1cd  old README image
+68737e1b89d167a3531e6c03e185202ce22f6e0d15e340554876129ee7ab892e  old screenshot
+6af4071952b7dcbd98917ce0688264219a15612cba655c997fed5896b0287416  old screenshot
+bb48f49fc538fdd0660a8e2f70518eed9a4e4000af414f53f6b76b8ce6696f17  old screenshot
+a777808c74ed7c3e4b300c9770c5d9481473d1f75f273ee21d9f9f5be970047c  old screenshot
+efc6af0777ee623cf74fb1818ae4107264f405d661d35b54cc6e9beb960028b4  old screenshot
