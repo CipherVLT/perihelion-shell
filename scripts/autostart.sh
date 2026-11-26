@@ -2,13 +2,17 @@
 # What starts with the session, and how Settings > Updates knows this copy.
 # Sourced by install.sh.
 
-# Lines each window manager's config needs for the full desktop.
-MANGO_NEEDS=(
+# What a Mango config needs for the full desktop: the starter line (it starts
+# every piece once) or, in configs from before it, each piece on its own line.
+MANGO_SESSION_LINE='exec_once=perihelion-session-start'
+MANGO_NEEDS_OLD=(
     'exec_once=perihelion-bar-start'
     'exec_once=perihelion-shell'
     'exec_once=appdrawer start'
     'exec_once=swayidle -w timeout 600 perihelion-lock before-sleep perihelion-lock'
     'exec_once=dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE'
+)
+MANGO_NEEDS_KEYS=(
     'bind=SUPER,i,spawn,perihelion-shell glance toggle'
     'bind=SUPER,l,spawn,perihelion-lock'
 )
@@ -69,8 +73,17 @@ write_install_marker() {
 
 check_mango_autostart() {
     local dir="${XDG_CONFIG_HOME:-$HOME/.config}/mango" line missing=()
-    [[ -d ${dir} ]] || return 0
-    for line in "${MANGO_NEEDS[@]}"; do
+    if [[ ! -f ${dir}/config.conf ]]; then
+        note "No ~/.config/mango yet: the \"Perihelion (MangoWM)\" login session writes it at your first login"
+        return 0
+    fi
+    if ! grep -rqsxF "${MANGO_SESSION_LINE}" "${dir}" --include='*.conf'; then
+        for line in "${MANGO_NEEDS_OLD[@]}"; do
+            grep -rqsxF "${line}" "${dir}" --include='*.conf' || missing+=("${line}")
+        done
+        (( ${#missing[@]} )) && missing=("${MANGO_SESSION_LINE}  (or each of: ${missing[*]})")
+    fi
+    for line in "${MANGO_NEEDS_KEYS[@]}"; do
         grep -rqsxF "${line}" "${dir}" --include='*.conf' || missing+=("${line}")
     done
     if (( ${#missing[@]} )); then

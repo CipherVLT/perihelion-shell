@@ -3129,7 +3129,9 @@ fn nlApply() void {
     if (!disp.writeFileZ(path, text)) return;
     var have = false;
     for (doc_autostart.lines.items) |l| {
-        if (std.mem.indexOf(u8, l, "perihelion-nightlight") != null) have = true;
+        // perihelion-session-start starts the night light too.
+        if (std.mem.indexOf(u8, l, "perihelion-nightlight") != null or
+            std.mem.indexOf(u8, l, "perihelion-session-start") != null) have = true;
     }
     if (!have) {
         doc_autostart.appendLine("# Night light (Settings → Display; ~/.config/perihelion/nightlight.conf)");

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Starts the Perihelion desktop with the session: the one line Mango's
+# autostart.conf needs is `exec_once=perihelion-session-start`. The same file
+# on Arch (install.sh) and Perihelion Linux.
+#
+# Each piece starts once: one already running is left alone, one that isn't
+# installed is logged and skipped, and a second copy of this script exits
+# right away (it holds a lock), so running it again, or an older config that
+# still starts some pieces itself, never doubles anything. In order:
+#
+#   dbus/systemd activation environment (portals, D-Bus-started apps)
+#   notifications (mako, unless something already owns the name)
+#   password prompts (the MATE polkit agent, wherever the distro puts it)
+#   wallpaper, Perihelion Bar + dock (perihelion-bar-start),
+#   Perihelion Shell, the app drawer daemon, the idle lock (swayidle),
+#   the night light (only does something when switched on in Settings)
+#
+# Log: ${PERIHELIONBAR_LOG_DIR:-~/.config/perihelionbar-config/logs}/perihelion-session-start/trace.log
+set -u
+
+log_dir="${PERIHELIONBAR_LOG_DIR:-${HOME}/.config/perihelionbar-config/logs}/perihelion-session-start"
+mkdir -p "${log_dir}" 2>/dev/null
+log_file="${log_dir}/trace.log"
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >> "${log_file}" 2>/dev/null || true; }
+# Keep the log small: the last 400 lines from earlier sessions.
+if [ -f "${log_file}" ] && [ "$(wc -l < "${log_file}")" -gt 800 ]; then
+    tail -n 400 "${log_file}" > "${log_file}.tmp" && mv -f "${log_file}.tmp" "${log_file}"
+fi
+
+lock="${XDG_RUNTIME_DIR:-/tmp}/perihelion-session-start-$(id -u).lock"
+exec 9>"${lock}" || { log "cannot open ${lock}"; exit 1; }
+if ! flock -n 9; then
+    log "another perihelion-session-start is running; exiting"
+    exit 0
+fi
+
+log "=== session start (WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset} XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-unset})"
+uid=$(id -u)
+started=() skipped=() missing=()
+
+have() { command -v "$1" >/dev/null 2>&1; }
+# running PATTERN: a process of this user whose whole command line matches.
+running() { pgrep -u "${uid}" -f -- "$1" >/dev/null 2>&1; }
+spawn() { # NAME CMD...: detached, so this script never waits on it
+    local name=$1; shift
+    # 9>&-: the children must not inherit the lock, or it would stay held
+    # for the whole session and a later run (to bring back a piece that
+    # crashed) would always exit.
+    setsid -f "$@" >/dev/null 2>&1 < /dev/null 9>&-
+    log "started ${name}: $*"
+    started+=("${name}")
+}
+# piece NAME RUNNING_PATTERN CMD...
+piece() {
+    local name=$1 pattern=$2; shift 2
+    if ! have "$1"; then
+        log "missing ${name}: $1 is not installed"
+        missing+=("${name}")
+    elif running "${pattern}"; then
+        log "already running: ${name}"
+        skipped+=("${name}")
+    else
+        spawn "${name}" "$@"
+    fi
+}
+
+# 1. Activation environment first, so everything D-Bus starts (mako,
+#    portals) can reach this Wayland display.
+if have dbus-update-activation-environment; then
+    if dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE >/dev/null 2>&1; then
+        log "dbus activation environment updated"
+    else
+        log "dbus-update-activation-environment failed"
+    fi
+else
+    log "missing dbus-update-activation-environment"
+    missing+=(dbus-env)
+fi
+
+# 2. Notifications: whoever owns org.freedesktop.Notifications already wins.
+notif_owned() {
+    have busctl && busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
+        NameHasOwner s org.freedesktop.Notifications 2>/dev/null | grep -q 'true'
+}
+if notif_owned; then
+    log "already running: notifications (name owned)"
+    skipped+=(notifications)
+else
+    piece notifications '^(\S*/)?mako( |$)' mako
+fi
+
+# 3. Polkit agent: Arch and Fedora keep it in different places.
+polkit=""
+# PERIHELION_POLKIT_AGENTS: tests only.
+for p in ${PERIHELION_POLKIT_AGENTS:-/usr/lib/mate-polkit/polkit-mate-authentication-agent-1 /usr/libexec/polkit-mate-authentication-agent-1}; do
+    [ -x "${p}" ] && { polkit=${p}; break; }
+done
+if [ -z "${polkit}" ]; then
+    log "missing polkit agent (mate-polkit)"
+    missing+=(polkit)
+elif running 'polkit.*authentication-agent|polkit-kde-authentication|lxpolkit|hyprpolkitagent'; then
+    log "already running: polkit agent"
+    skipped+=(polkit)
+else
+    spawn polkit "${polkit}"
+fi
+
+# 4. The desktop itself.
+piece wallpaper '^(\S*/)?swaybg( |$)' perihelion-wallpaper
+piece bar '^(\S*/)?perihelion-bar( |$)' perihelion-bar-start
+# perihelion-shell is longer than the kernel's 15-character process name;
+# the daemon runs without arguments ("perihelion-shell glance toggle" is a
+# short-lived client), so match the whole command line.
+piece shell '^(\S*/)?perihelion-shell$' perihelion-shell
+piece appdrawer 'quickshell .*appdrawer' appdrawer start
+piece idle-lock '^(\S*/)?swayidle( |$)' swayidle -w timeout 600 perihelion-lock before-sleep perihelion-lock
+piece nightlight '^(\S*/)?wlsunset( |$)' perihelion-nightlight
+
+log "done: started ${started[*]:-nothing}; already running ${skipped[*]:-nothing}; missing ${missing[*]:-nothing}"
+exit 0

@@ -1,9 +1,13 @@
 //! What a Mango config must contain for Perihelion, checked without Mango:
 //! Super+I opens Glance (with its "#:" cheatsheet line) and nothing else is
 //! on Super+I, Super+L locks, Alt+W opens the window overview, and the
-//! session starts the dbus activation line (portals), swayidle with the
-//! lock, perihelion-bar-start (bar + dock, and no second bar) and
-//! perihelion-shell; config.conf sources both files.
+//! session starts the desktop: either the one line
+//! `exec_once=perihelion-session-start` (which starts every piece once), or,
+//! in configs from before it, the dbus activation line (portals), swayidle
+//! with the lock, perihelion-bar-start (bar + dock, and no second bar) and
+//! perihelion-shell, each on its own line. Next to the starter, a piece on
+//! its own line is reported (it would race the starter). config.conf
+//! sources both files.
 //!
 //! Lines are matched the way Mango reads them: `bind = SUPER, i, spawn, x`
 //! and `bind=SUPER,i,spawn,x` are the same bind, modifiers in any order and
@@ -28,6 +32,7 @@ pub const SWAYIDLE_CMD = "swayidle -w timeout 600 perihelion-lock before-sleep p
 pub const DBUS_CMD = "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE";
 pub const BAR_CMD = "perihelion-bar-start";
 pub const SHELL_CMD = "perihelion-shell";
+pub const SESSION_CMD = "perihelion-session-start";
 
 pub const Bind = struct {
     mods: u8,
@@ -126,6 +131,8 @@ pub const Problem = enum {
     /// A bare perihelion-bar/perihelionbar exec_once next to the starter.
     bar_started_twice,
     shell_missing,
+    /// perihelion-session-start plus a piece it starts on a line of its own.
+    started_twice,
     source_keybinds_missing,
     source_autostart_missing,
 };
@@ -185,15 +192,22 @@ fn checkAutostart(text: []const u8, r: *Report) void {
     var bar = false;
     var bare_bar = false;
     var shell = false;
+    var session = false;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
         const cmd = parseExecOnce(raw) orelse continue;
+        if (sameWords(cmd, SESSION_CMD)) session = true;
         if (sameWords(cmd, DBUS_CMD)) dbus = true;
         if (sameWords(cmd, SWAYIDLE_CMD)) swayidle = true;
         if (sameWords(cmd, BAR_CMD)) bar = true;
         if (sameWords(cmd, SHELL_CMD)) shell = true;
         const w = firstWord(cmd);
         if (std.mem.eql(u8, w, "perihelion-bar") or std.mem.eql(u8, w, "perihelionbar")) bare_bar = true;
+    }
+    if (session) {
+        // The starter does all of it; anything it starts listed again races it.
+        if (dbus or swayidle or bar or bare_bar or shell) r.problems.insert(.started_twice);
+        return;
     }
     if (!dbus) r.problems.insert(.dbus_missing);
     if (!swayidle) r.problems.insert(.swayidle_missing);
@@ -331,6 +345,17 @@ test "autostart: each required line" {
     try tt.expect(check(good_config, good_keys, good_auto ++ "\nexec_once=perihelion-bar").has(.bar_started_twice));
     // Commented out doesn't count.
     try tt.expect(check(good_config, good_keys, "#exec_once=perihelion-bar-start").has(.bar_missing));
+}
+
+test "autostart: the one starter line covers everything; listing a piece again is reported" {
+    const r = check(good_config, good_keys, "exec_once = perihelion-session-start\n");
+    try tt.expect(r.ok());
+    const twice = check(good_config, good_keys, "exec_once=perihelion-session-start\nexec_once=perihelion-bar-start\n");
+    try tt.expect(twice.has(.started_twice));
+    try tt.expect(check(good_config, good_keys, "exec_once=perihelion-session-start\nexec_once=perihelion-shell").has(.started_twice));
+    // Commented out, or as `exec` (every reload), it doesn't count.
+    try tt.expect(check(good_config, good_keys, "#exec_once=perihelion-session-start").has(.bar_missing));
+    try tt.expect(check(good_config, good_keys, "exec=perihelion-session-start").has(.bar_missing));
 }
 
 test "config.conf must source both files" {
