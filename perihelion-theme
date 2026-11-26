@@ -743,7 +743,27 @@ def mango_conf(t):
 # window under it sharp, which is what reads as messy glass. Layers stack
 # (window, then sidebar / header bar / view on top), so only the window
 # background carries the frost and the rest are light washes over it.
-GLASS_RADIUS = 12  # Mango's border_radius (cfg/appearance.conf): the frost ends where the window does
+GLASS_RADIUS = 0  # Perihelion's default Mango border_radius, used when the file doesn't say
+
+
+def mango_radius():
+    """Mango's border_radius from cfg/appearance.conf (where Perihelion
+    Settings writes it), so the GTK glass corners match the window's and the
+    frost behind a window ends exactly where the window does. The last
+    border_radius line wins, as in Mango; GLASS_RADIUS when there is none."""
+    r = GLASS_RADIUS
+    try:
+        with open(os.path.join(CONFIG, "mango", "cfg", "appearance.conf")) as f:
+            for line in f:
+                k, sep, v = line.partition("=")
+                m = re.match(r"\s*(\d+)", v) if sep and k.strip() == "border_radius" else None
+                if m:
+                    r = min(int(m.group(1)), 64)
+    except OSError:
+        pass
+    return r
+
+
 GLASS_MARK = f"/* Written by {MARKER}: frosted glass for GTK"
 
 
@@ -762,7 +782,7 @@ def _glass_values(t):
     a = glass_alpha(t)
     hl = "rgba(255, 255, 255, 0.%s)" % ("10" if t.get("light") else "06")
     return {
-        "mark": GLASS_MARK, "radius": GLASS_RADIUS,
+        "mark": GLASS_MARK, "radius": mango_radius(),
         "window": rgba(c["base"], a),
         "header": rgba(c["crust"], 0.16),
         "sidebar": rgba(c["mantle"], 0.38),

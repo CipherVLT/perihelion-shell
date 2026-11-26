@@ -330,7 +330,13 @@ try:
     a = float(re.search(r"--window-bg-color: rgba\([^)]*, ([0-9.]+)\)", css4).group(1)) if css4 else 0
     p = float(re.search(r"--popover-bg-color: rgba\([^)]*, ([0-9.]+)\)", css4).group(1)) if css4 else 0
     check(0.7 <= a <= 0.9 and p >= 0.95, f"glass: see-through windows ({a}), nearly solid popovers ({p})")
-    check("border-radius: 12px" in css4, "glass: corners match Mango's border_radius")
+    check("border-radius: 0px" in css4, "glass: no appearance.conf, Perihelion's default radius (0)")
+    os.makedirs(os.path.join(gh, ".config", "mango", "cfg"))
+    with open(os.path.join(gh, ".config", "mango", "cfg", "appearance.conf"), "w") as f:
+        f.write("# border_radius=3\nborder_radius=12\nborder_px=4\nborder_radius = 8\n")
+    run(gh, img("dark-red.png"), "--force")
+    css4 = open(os.path.join(g4, "perihelion-glass.css")).read()
+    check("border-radius: 8px" in css4, "glass: corners follow Mango's border_radius (last line wins)")
     check(pt.GLASS_IMPORT in open(os.path.join(g4, "gtk.css")).read(), "glass: gtk.css imports it")
     css3 = open(os.path.join(gh, ".config", "gtk-3.0", "perihelion-glass.css")).read()
     check("window.background" in css3 and "menu" in css3, "glass: GTK 3 rules written")
