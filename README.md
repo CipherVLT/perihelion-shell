@@ -5,125 +5,70 @@ A native Zig/Wayland desktop for **MangoWM and Hyprland**: the bar and dock, des
 
 Where it came from and whose work it includes: [NOTICE.md](NOTICE.md).
 
-**Perihelion Linux** ships Perihelion Bar ready to use (updates come from Settings >
-Updates; the installer sees it and changes nothing). Everywhere else the installer below
-sets it up:
-
-| Distro | Packages from |
-|---|---|
-| Arch Linux | pacman (+ your AUR helper for Strata and the Bibata cursor, if you have one) |
-| CachyOS (incl. v3/v4 repos), EndeavourOS, Garuda, other Arch-based | pacman, from your distro's repos |
-| Fedora 45 or later (not image-based ones like Silverblue or Bazzite) | dnf, plus [Terra](https://terra.fyralabs.com) for MangoWM, Quickshell, matugen and the Nerd Font (asked first) |
-
 ## Install
+
+Pick the guide for your distro below; each one is a complete walkthrough, from a freshly installed system to Perihelion Bar running on your desktop.
+
+<!-- distro-table: each row's guide must have a CI job, or its status must say "experimental, not tested in CI" (tests/docs-check.sh) -->
+| Your distro | Guide | Status |
+|---|---|---|
+| Arch, CachyOS (v3/v4 too), EndeavourOS, Garuda, other Arch-based | [docs/install/arch.md](docs/install/arch.md) | Tested in CI: Arch (MangoWM and Hyprland), CachyOS v3 (MangoWM). CachyOS v4, EndeavourOS, Garuda and other Arch-based: experimental, not tested in CI |
+| Fedora 45 and later (Workstation, Server, spins; not Silverblue, Kinoite or Bazzite) | [docs/install/fedora.md](docs/install/fedora.md) | Tested in CI: Fedora 45 (MangoWM). Fedora 46 and later, Hyprland on Fedora: experimental, not tested in CI |
+| PikaOS 4 | [docs/install/pikaos.md](docs/install/pikaos.md) | Experimental, not tested in CI (there is no official PikaOS container image) |
+| Perihelion Linux (the ISO) | [docs/install/perihelion-linux.md](docs/install/perihelion-linux.md) | Already installed; updates come from Settings > Updates. Tested in CI: the ISO build rehearses the whole install |
+
+On any other distro the installer stops with a clear message before it changes anything.
+
+### Quick install
+
+The same command on every distro in the table. Run it as your normal user; it asks for your password when a step needs root.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/CipherVLT/perihelion-shell/main/install.sh | bash
 ```
 
-Or download first and read it before running:
+| Flag | What it does |
+|---|---|
+| `--yes` | Takes the default answer to every question, so it runs unattended. |
+| `--wm=mango\|hyprland\|both` | Which window manager to set up. Default: the ones you have; MangoWM if you have neither. |
+| `--existing=keep\|new\|beside` | What `--yes` does with a config of yours that differs from Perihelion's. Default: `beside` (Perihelion's goes next to yours as `<file>.perihelion-new`). |
+| `--rebuild` | Builds again even when the installed programs already match this commit. |
+| `--extras` | Also installs the optional extras (an image viewer, Blueman, wev). Perihelion Bar doesn't need them. |
+
+With `curl | bash`, put flags after `bash -s --`, for example `curl -fsSL .../install.sh | bash -s -- --yes --wm=mango`.
+
+To read the installer before running it, use a checkout:
 
 ```sh
 git clone https://github.com/CipherVLT/perihelion-shell.git
 cd perihelion-shell
-less install.sh scripts/*.sh
 ./install.sh
 ```
 
-Run it as your normal user; it asks for sudo for the steps that need it. Options:
-`--yes` (take every default, no questions), `--wm=mango|hyprland|both` (default: the
-window managers you have installed; MangoWM when you have neither),
-`--existing=keep|new|beside` (what `--yes` does with a config of yours that differs;
-default `beside`), `--rebuild`, `--extras` (an image viewer, Blueman and wev, which
-Perihelion Bar doesn't need). With curl, pass them after `bash -s --`, for example
-`curl -fsSL .../install.sh | bash -s -- --wm=hyprland`.
+### Build it yourself
 
-**What it changes**
-
-- **Packages:** only what Perihelion Bar uses (the window manager you picked, the build
-  tools, and the programs the desktop runs: quickshell, fuzzel, kitty, swaybg, swayidle,
-  matugen, ...); no drivers, games or Flatpak. On Arch it refreshes the package database
-  and updates the system in the same `pacman -Syu --needed`. If a mirror answers 404
-  (your mirror list or package database is out of date), it says so, offers one
-  `pacman -Syyu` and a retry, and names the mirror tool to use (`cachyos-rate-mirrors` on
-  CachyOS). AUR packages (Strata, the Bibata cursor) only through paru or yay if you have
-  one. On Fedora: one `dnf install --refresh`, with the same retry after
-  `dnf clean metadata`.
-- **Programs:** Zig 0.17.1 from ziglang.org (signature checked with minisign, kept in
-  `~/.local/share/perihelionbar/`), then `perihelion-bar`, `perihelion-shell`,
-  `perihelion-settings`, the lock screen and their helpers built from this commit and
-  installed to `/usr/bin`; the lock screen's PAM file at `/etc/pam.d/perihelion-lock`;
-  the app drawer's QML in `~/.local/share/perihelionbar/appdrawer`.
-- **Configs:** MangoWM gets `~/.config/mango/` (config.conf plus cfg/, the same keys
-  and programs as Perihelion Linux). Hyprland gets `~/.config/hypr/perihelion.lua` and
-  one line, `require("perihelion")`, at the end of your `hyprland.lua` (Hyprland 0.55+;
-  if you still run a `hyprland.conf` on 0.55 or 0.56 it gets `perihelion.conf` and one
-  `source = ~/.config/hypr/perihelion.conf` line instead). Nothing else in that file
-  changes, it is backed up first, and the line is never added twice. Also `~/.config/perihelionbar/`, kitty, fuzzel, btop, GTK and qt6ct.
-- **Never silently over yours:** for each config of yours that differs it asks: keep
-  mine, take the new one (yours is copied to
-  `~/.local/state/perihelionbar/backup-<date>/` first), or write the new one beside
-  yours as `<file>.perihelion-new`. It remembers the answers for the next run.
-- **Updates:** Settings → System → Updates shows *Installed with: install.sh* and checks
-  for releases with a user timer (`perihelion-update-check.timer`).
-
-Run it again any time to update: it changes only what is out of date and skips the
-build when the installed programs already match the commit. The log is
-`~/.local/state/perihelionbar/install.log`; a failing step stops the installer and
-shows the end of the log.
-
-**Undo**
+If you already have the development packages your guide lists, you can build without the installer. With Zig 0.17.1 (`zig version` must print `0.17.1`), run in both folders the build command the installer uses (it also stamps the version and commit):
 
 ```sh
-xargs -a ~/.local/state/perihelionbar/installed-files sudo rm -f   # the installed programs and files
-cp -a ~/.local/state/perihelionbar/backup-<date>/. ~/                  # your configs from before
+cd perihelionbar && zig build -Doptimize=fast --prefix "$HOME/.local" && cd ..
+cd perihelionbar-shell && zig build -Doptimize=fast --prefix "$HOME/.local" && cd ..
 ```
 
-On Hyprland, delete the `require("perihelion")` line in `~/.config/hypr/hyprland.lua`
-(or the `source = ~/.config/hypr/perihelion.conf` line in `hyprland.conf`).
-Packages stay installed; remove any you don't want with `sudo pacman -Rns`.
+The programs land in `~/.local/bin`. The installer does more than this (scripts, configs, the login session, the PAM file for the lock screen); the guides list every file.
 
-**From source** (no installer): `zig build -Doptimize=fast` in `perihelionbar/` and in
-`perihelionbar-shell/`, with Zig 0.17.1.
+## How the session starts
 
-After installing, pick **Perihelion (MangoWM)** on your login screen (or Hyprland).
-`perihelion-bar --version` prints the version and commit, for example
-`perihelion-bar 0.1.0-dev (20034aa)`.
+Log in with **Perihelion (MangoWM)** (`/usr/share/wayland-sessions/perihelion.desktop`). It runs `perihelion-session`, which copies Perihelion's Mango config from `/usr/share/perihelion/mango/` into `~/.config/mango` when you have none yet (an existing config is never touched), then starts Mango. The stock **Mango** session stays on the list.
 
-**How the session starts (the same on Arch and Perihelion Linux):**
+`~/.config/mango/cfg/autostart.conf` holds one line, `exec_once=perihelion-session-start`. It starts each piece once and skips what is already running: notifications, the password prompt agent, the wallpaper, the bar and dock, the desktop widgets, the app drawer, the idle lock and the night light. Run it again to bring back anything that stopped; it logs to `~/.config/perihelionbar-config/logs/perihelion-session-start/trace.log`.
 
-- `/usr/share/wayland-sessions/perihelion.desktop` runs `perihelion-session`. If you
-  have no `~/.config/mango/config.conf` yet (a second user, an account made after the
-  install), it copies Perihelion's defaults from `/usr/share/perihelion/mango/` first;
-  a config of yours is never touched. Then it runs Mango. The stock **Mango** session
-  stays; with it and no `~/.config/mango`, Mango uses its own config and starts nothing.
-- `~/.config/mango/cfg/autostart.conf` has one line, `exec_once=perihelion-session-start`.
-  It starts each piece once and skips what is already running or not installed: the
-  dbus activation environment, notifications (mako), the polkit agent, the wallpaper,
-  the bar and dock, `perihelion-shell`, the app drawer, swayidle and the night light.
-  Run it again to bring back anything that stopped. Its log:
-  `~/.config/perihelionbar-config/logs/perihelion-session-start/trace.log`.
+`perihelion-bar --version` prints the version and commit, for example `perihelion-bar 0.1.0-dev (20034aa)`.
 
 ## Updates
 
-**Perihelion Settings → System → Updates** keeps Perihelion Shell current from its GitHub releases.
+**Perihelion Settings → System → Updates** keeps Perihelion Shell current from its GitHub releases: **Check now**, **Download**, **Install update** (one password prompt), **Restart shell**. Before anything changes, a download is checked: its SHA-256, that it holds only the known program files at their known destinations, and that every program starts on your system. Your settings in `~/.config` and `/etc/pam.d` are never touched. A user timer (`perihelion-update-check.timer`) checks in the background and notifies you; switch off **Check automatically** to stop it.
 
-- **This device:** the installed version and commit, how it was installed (*install.sh*, *Release update* or *Perihelion Linux*), **Check automatically** (on by default) with **Check every N hours** (6 by default; `"updates"` in `config.json`), and when it last checked.
-- **Software update:** a status line and four buttons, each live only when it makes sense: **Check now**, **Download**, **Install update**, **Restart shell**.
-- **Release notes:** the latest release's notes, after a check.
-
-To check for and apply an update on Arch:
-
-1. Open **Perihelion Settings → System → Updates** and press **Check now** (or wait: the `perihelion-update-check` timer checks in the background and sends a notification when a new release is out).
-2. If it says *vX.Y.Z is available*, read the release notes and press **Download**. It downloads the release and checks it before anything changes: the SHA-256 checksum, that the tarball holds only the known program files, the release's manifest against the updater's built-in list of files and destinations, and that every program actually starts on your system (`--version`). Any failure stops here, says why, and installs nothing.
-3. Press **Install update** and give your password (one `pkexec` prompt). The programs go to `/usr/bin`; the app drawer's QML goes to `~/.local/share/perihelionbar/appdrawer`. Your settings in `~/.config` and `/etc/pam.d` are never touched.
-4. Press **Restart shell**: the bar, the dock, the desktop and the app drawer restart on the new version. `perihelion-bar --version` now shows it.
-
-From a terminal, the same steps: `perihelion-settings --check-updates`, then `perihelion-settings --download-update` (prints `ready <folder>`), then `perihelion-settings --install-update <folder> <tag>`, then `perihelion-bar-start` (restarts the bar and the dock) and `appdrawer restart`.
-
-Safety: downloads come only from this repository's GitHub releases over HTTPS. The one redirect GitHub answers with is checked by hand and must go to `release-assets.githubusercontent.com`. Nothing goes through a shell. Downloads go to a new folder in `/tmp`. Releases are built on Arch Linux for any x86_64 CPU. On **Perihelion Linux** the page shows and checks releases, but the shell is updated with the system.
-
-To turn the background check off: switch off **Check automatically**, or `systemctl --user disable --now perihelion-update-check.timer`.
+From a terminal: `perihelion-settings --check-updates`, `perihelion-settings --download-update` (prints `ready <folder>`), `perihelion-settings --install-update <folder> <tag>`, then `perihelion-bar-start` and `appdrawer restart`. Running the installer again also updates (it builds the current commit). On **Perihelion Linux** the shell is updated with the system.
 
 ## Desktop widgets
 
