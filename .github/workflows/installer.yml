@@ -27,6 +27,8 @@ jobs:
         run: bash tests/installer/configs-test.sh
       - name: MangoWM configs with answers typed at a real terminal (script)
         run: bash tests/installer/prompts-test.sh
+      - name: Old images removed only when their checksum matches
+        run: bash tests/installer/leftovers-test.sh
 
   arch:
     needs: lint
@@ -76,20 +78,29 @@ jobs:
           Hyprland --version | head -1
           Hyprland --version | head -1 | grep -q '^Hyprland 0\.56\.'
       - uses: actions/checkout@v4
+      - name: Unprivileged user (Hyprland refuses to run as root; --version returns before that check)
+        run: useradd -m hyprci
       - name: perihelion.conf through one source line passes Hyprland's config check
         run: |
-          d=$(mktemp -d)
+          d=$(runuser -u hyprci -- mktemp -d)
           cp desktop/hypr/perihelion.conf "$d/"
           printf 'monitor=,preferred,auto,1\nbind = SUPER, Q, exec, foot\n\n# Perihelion Bar (delete this line to switch it off)\nsource = %s/perihelion.conf\n' "$d" > "$d/hyprland.conf"
-          export XDG_RUNTIME_DIR=$(mktemp -d)
-          out=$(timeout 60 Hyprland --verify-config -c "$d/hyprland.conf" 2>&1 || true)
-          printf '%s\n' "$out" | sed -n '/parsing result/,$p'
-          grep -qx 'config ok' <<<"$out"
+          chown -R hyprci "$d"
+          rt=$(runuser -u hyprci -- mktemp -d)
+          out=$(runuser -u hyprci -- env XDG_RUNTIME_DIR="$rt" timeout 60 Hyprland --verify-config -c "$d/hyprland.conf" 2>&1 || true)
+          if printf '%s\n' "$out" | grep -qx 'config ok'; then
+            printf '%s\n' "$out" | sed -n '/parsing result/,$p'
+          else
+            printf '%s\n' "$out"; exit 1
+          fi
       - name: The check catches a broken line (so "config ok" above means something)
         run: |
-          d=$(mktemp -d)
+          d=$(runuser -u hyprci -- mktemp -d)
           printf 'bind = SUPER, Q, notadispatcher_xyz,\nnot_a_keyword_xyz = 1\n' > "$d/hyprland.conf"
-          export XDG_RUNTIME_DIR=$(mktemp -d)
-          out=$(timeout 60 Hyprland --verify-config -c "$d/hyprland.conf" 2>&1 || true)
-          printf '%s\n' "$out" | sed -n '/parsing result/,$p'
-          ! grep -qx 'config ok' <<<"$out"
+          chown -R hyprci "$d"
+          rt=$(runuser -u hyprci -- mktemp -d)
+          out=$(runuser -u hyprci -- env XDG_RUNTIME_DIR="$rt" timeout 60 Hyprland --verify-config -c "$d/hyprland.conf" 2>&1 || true)
+          printf '%s\n' "$out"
+          # It must have parsed (not died early) and must not say ok.
+          printf '%s\n' "$out" | grep -q 'parsing result'
+          ! printf '%s\n' "$out" | grep -qx 'config ok'
