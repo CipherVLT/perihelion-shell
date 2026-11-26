@@ -33,6 +33,7 @@ while read -r mode src _dest; do
     case "${src}" in
         bin/perihelion-bar|bin/perihelion-settings|bin/perihelionbar-welcome) from="${bar_bin}/${name}" ;;
         bin/perihelion-shell|bin/perihelion-lockscreen) from="${shell_bin}/${name}" ;;
+        bin/perihelion-session|bin/perihelion-session-start) from="${root}/desktop/bin/${name}" ;;
         bin/*) from="${root}/${name}" ;;
         appdrawer/*) from="${root}/quickshell/appdrawer/${name}" ;;
         *) echo "unknown manifest entry: ${src}" >&2; exit 1 ;;

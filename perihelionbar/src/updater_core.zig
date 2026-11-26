@@ -350,6 +350,8 @@ pub const ALLOWLIST = [_]Allowed{
     .{ .src = "bin/perihelion-lockscreen", .dest = "/usr/bin/perihelion-lockscreen", .mode = 0o755, .scope = .system, .binary = true },
     .{ .src = "bin/perihelion-lock", .dest = "/usr/bin/perihelion-lock", .mode = 0o755, .scope = .system },
     .{ .src = "bin/perihelion-bar-start", .dest = "/usr/bin/perihelion-bar-start", .mode = 0o755, .scope = .system },
+    .{ .src = "bin/perihelion-session", .dest = "/usr/bin/perihelion-session", .mode = 0o755, .scope = .system },
+    .{ .src = "bin/perihelion-session-start", .dest = "/usr/bin/perihelion-session-start", .mode = 0o755, .scope = .system },
     .{ .src = "bin/appdrawer", .dest = "/usr/bin/appdrawer", .mode = 0o755, .scope = .system },
     .{ .src = "bin/perihelionbar-matugen", .dest = "/usr/bin/perihelionbar-matugen", .mode = 0o755, .scope = .system },
     .{ .src = "bin/perihelion-trash", .dest = "/usr/bin/perihelion-trash", .mode = 0o755, .scope = .system },
