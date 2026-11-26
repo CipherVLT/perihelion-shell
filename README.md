@@ -73,8 +73,23 @@ Packages stay installed; remove any you don't want with `sudo pacman -Rns`.
 **From source** (no installer): `zig build -Doptimize=fast` in `perihelionbar/` and in
 `perihelionbar-shell/`, with Zig 0.17.1.
 
-After installing, log in to MangoWM or Hyprland. `perihelion-bar --version` prints the
-version and commit, for example `perihelion-bar 0.1.0-dev (20034aa)`.
+After installing, pick **Perihelion (MangoWM)** on your login screen (or Hyprland).
+`perihelion-bar --version` prints the version and commit, for example
+`perihelion-bar 0.1.0-dev (20034aa)`.
+
+**How the session starts (the same on Arch and Perihelion Linux):**
+
+- `/usr/share/wayland-sessions/perihelion.desktop` runs `perihelion-session`. If you
+  have no `~/.config/mango/config.conf` yet (a second user, an account made after the
+  install), it copies Perihelion's defaults from `/usr/share/perihelion/mango/` first;
+  a config of yours is never touched. Then it runs Mango. The stock **Mango** session
+  stays; with it and no `~/.config/mango`, Mango uses its own config and starts nothing.
+- `~/.config/mango/cfg/autostart.conf` has one line, `exec_once=perihelion-session-start`.
+  It starts each piece once and skips what is already running or not installed: the
+  dbus activation environment, notifications (mako), the polkit agent, the wallpaper,
+  the bar and dock, `perihelion-shell`, the app drawer, swayidle and the night light.
+  Run it again to bring back anything that stopped. Its log:
+  `~/.config/perihelionbar-config/logs/perihelion-session-start/trace.log`.
 
 ## Updates
 
@@ -318,9 +333,10 @@ The same on MangoWM (`~/.config/mango/cfg/keybinds.conf`) and Hyprland
 | `Super + Shift + S`, `Print` | Screenshot: region, screen |
 | `Super + G`, `Super + Shift + G` | Glass windows, blur strength (MangoWM) |
 
-Both start the bar and its dock with `perihelion-bar-start` (run it again to restart
-both), plus `perihelion-shell`, the app drawer, swayidle (lock after 10 minutes and
-before suspend) and the dbus activation line the portals need.
+MangoWM starts everything with `perihelion-session-start` (see *How the session
+starts* above); Hyprland starts the bar and its dock with `perihelion-bar-start` (run it
+again to restart both), plus `perihelion-shell`, the app drawer, swayidle (lock after 10
+minutes and before suspend) and the dbus activation line the portals need.
 
 ## Credits
 
