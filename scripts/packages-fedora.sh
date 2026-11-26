@@ -5,8 +5,9 @@
 # dnf installs what is missing in one transaction, with --refresh so the
 # package metadata is current (stale metadata asks mirrors for files they no
 # longer have). A few packages are not in Fedora's own repositories: MangoWM,
-# Quickshell, matugen, the JetBrainsMono Nerd Font and the Bibata cursor come
-# from Terra (repos.fyralabs.com), the repository Perihelion Linux uses too.
+# matugen, the JetBrainsMono Nerd Font, the Nerd Font symbols and the Bibata
+# cursor come from Terra (repos.fyralabs.com), the repository Perihelion
+# Linux uses too. (Quickshell is in Fedora itself.)
 # Terra is added only if one of those is missing and you say yes.
 
 # What the build needs.
@@ -18,7 +19,7 @@ BUILD_PACKAGES=(
 
 # What Perihelion Bar uses while running (as on Perihelion Linux).
 RUNTIME_PACKAGES=(
-    quickshell                                  # the app drawer (Terra)
+    quickshell                                  # the app drawer
     python3 python3-gobject                     # theming, wallpaper picker, dock pins
     jq libnotify zenity                         # weather, notifications, dialogs
     fuzzel kitty mako btop cmatrix              # launcher, terminal, notifications, extras the bar opens
@@ -51,7 +52,7 @@ HYPRLAND_PACKAGES=(hyprland xdg-desktop-portal-hyprland)
 EXTRA_PACKAGES=(imv blueman wev)
 
 # From Terra when Fedora's repositories don't have them.
-TERRA_PACKAGES=(mangowm quickshell matugen jetbrainsmono-nerd-fonts nerdfontssymbolsonly-nerd-fonts bibata-cursor-theme)
+TERRA_PACKAGES=(mangowm matugen jetbrainsmono-nerd-fonts nerdfontssymbolsonly-nerd-fonts bibata-cursor-theme)
 # shellcheck disable=SC2016  # $releasever is dnf's, not the shell's
 TERRA_URL='https://repos.fyralabs.com/terra$releasever'
 
