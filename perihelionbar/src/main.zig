@@ -7491,7 +7491,8 @@ const CAVA_DEFAULT_CONF =
     \\bars = 24
     \\bar_width = 1
     \\bar_spacing = 1
-    \\sleep_timer = 0
+    \\sleep_timer = 1
+    \\framerate = 30
     \\
     \\[input]
     \\# 'auto' is the monitor source of the default sink, i.e. whatever plays.
@@ -7510,6 +7511,66 @@ const CAVA_DEFAULT_CONF =
     \\
 ;
 
+/// SHA-256 of cava.conf files exactly as earlier versions wrote them (the
+/// bar's own default, and the installer's desktop/config/perihelionbar copy),
+/// both with `sleep_timer = 0`: cava then never sleeps and sends 60 frames a
+/// second of silence. Such an untouched file takes the new values; a file
+/// with any change of yours is never rewritten.
+const CAVA_OLD_DEFAULTS = [_][64]u8{
+    "4e6692c7ca1991d0f4b66b0129de3aa698602acb3646f816307c9853c7a6a10a".*,
+    "bc1d696aa3d75957fb1fe9605153e7e88a4e4be8760f00fee80b97bb862c387d".*,
+};
+
+/// The upgraded text for an untouched old default (into `buf`), else null.
+fn upgradeCavaConf(text: []const u8, buf: []u8) ?[]const u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(text, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    for (CAVA_OLD_DEFAULTS) |old| {
+        if (!std.mem.eql(u8, &hex, &old)) continue;
+        const from = "sleep_timer = 0\n";
+        const to = "sleep_timer = 1\nframerate = 30\n";
+        const at = std.mem.indexOf(u8, text, from) orelse return null;
+        const len = text.len - from.len + to.len;
+        if (len > buf.len) return null;
+        @memcpy(buf[0..at], text[0..at]);
+        @memcpy(buf[at..][0..to.len], to);
+        @memcpy(buf[at + to.len ..][0 .. text.len - at - from.len], text[at + from.len ..]);
+        return buf[0..len];
+    }
+    return null;
+}
+
+/// Replaces an untouched old default cava.conf with its upgraded text
+/// (written beside it, then renamed over it).
+fn upgradeCavaConfFile(conf: [:0]const u8) void {
+    var text_buf: [4096]u8 = undefined;
+    const fd_in = posix.system.open(conf.ptr, .{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
+    if (fd_in < 0) return;
+    const n = posix.system.read(@intCast(fd_in), &text_buf, text_buf.len);
+    _ = posix.system.close(@intCast(fd_in));
+    if (n <= 0 or n >= text_buf.len) return;
+    var out_buf: [4096]u8 = undefined;
+    const new_text = upgradeCavaConf(text_buf[0..@intCast(n)], &out_buf) orelse return;
+    var tmp_buf: [600]u8 = undefined;
+    const tmp = std.fmt.bufPrintSentinel(&tmp_buf, "{s}.new", .{conf}, 0) catch return;
+    const raw_fd = posix.system.open(tmp.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(posix.mode_t, 0o644));
+    if (raw_fd < 0) return;
+    const fd: posix.fd_t = @intCast(raw_fd);
+    var off: usize = 0;
+    while (off < new_text.len) {
+        const w = posix.system.write(fd, new_text.ptr + off, new_text.len - off);
+        if (w <= 0) break;
+        off += @intCast(w);
+    }
+    _ = posix.system.close(fd);
+    if (off != new_text.len or std.c.rename(tmp.ptr, conf.ptr) != 0) {
+        _ = std.c.unlink(tmp.ptr);
+        return;
+    }
+    logging.step("cava: {s} was an untouched old default; now sleeps in silence (sleep_timer = 1, framerate = 30)", .{conf});
+}
+
 /// Writes CAVA_DEFAULT_CONF to `conf` unless something is already there.
 /// Best-effort like writePidfile: a failure here just means the visualiser
 /// stays dead, which is no worse than the missing-file case it replaces.
@@ -7517,7 +7578,8 @@ fn ensureCavaConf(conf: [:0]const u8) void {
     const probe = posix.system.open(conf.ptr, .{ .ACCMODE = .RDONLY }, @as(posix.mode_t, 0));
     if (probe >= 0) {
         _ = posix.system.close(@intCast(probe));
-        return; // already there, hands off
+        upgradeCavaConfFile(conf); // only an untouched old default changes
+        return;
     }
     const raw_fd = posix.system.open(conf.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .EXCL = true }, @as(posix.mode_t, 0o644));
     if (raw_fd < 0) return;
@@ -12987,6 +13049,43 @@ test "cava: redraw only on changed values, at most every 33 ms" {
     try t.expect(st.pending); // the drop to zero still waits to be drawn
     try t.expect(cavaGate(&st, 1100));
     try t.expect(!cavaGate(&st, 5000)); // then silence: nothing more
+}
+
+test "cava.conf: an untouched old default upgrades to exactly the new one; edited files stay" {
+    const t = std.testing;
+    const old_builtin =
+    \\# Written by perihelionbar. Edit freely — it is only re-created when missing.
+    \\[general]
+    \\bars = 24
+    \\bar_width = 1
+    \\bar_spacing = 1
+    \\sleep_timer = 0
+    \\
+    \\[input]
+    \\# 'auto' is the monitor source of the default sink, i.e. whatever plays.
+    \\method = pipewire
+    \\source = auto
+    \\
+    \\[output]
+    \\method = raw
+    \\data_format = ascii
+    \\ascii_max_range = 1000
+    \\bar_delimiter = 59
+    \\frame_delimiter = 10
+    \\
+    \\[smoothing]
+    \\noise_reduction = 77
+    \\
+    ;
+    var buf: [4096]u8 = undefined;
+    const up = upgradeCavaConf(old_builtin, &buf) orelse return error.NotUpgraded;
+    try t.expectEqualStrings(CAVA_DEFAULT_CONF, up);
+    // The new default is not an old one: no upgrade loop.
+    try t.expectEqual(@as(?[]const u8, null), upgradeCavaConf(CAVA_DEFAULT_CONF, &buf));
+    // One character of yours and it is left alone.
+    var edited: [old_builtin.len]u8 = old_builtin.*;
+    edited[edited.len - 2] = '8'; // noise_reduction = 78
+    try t.expectEqual(@as(?[]const u8, null), upgradeCavaConf(&edited, &buf));
 }
 
 test "the animation tick runs only while a bar needs it" {
