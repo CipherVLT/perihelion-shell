@@ -165,6 +165,13 @@ pub fn build(b: *Build) !void {
     // Overview mode (Alt+W): the second layer surface on the overlay layer,
     // screencopy thumbnails, hyprctl window/workspace queries. Own module so
     // main.zig stays the host/wiring file.
+    // Reused wl_shm buffers per surface, shared with the bar.
+    const shm_pool_mod = b.createModule(.{
+        .root_source_file = b.path("../perihelionbar/src/shm_pool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const overview_mod = b.createModule(.{
         .root_source_file = b.path("src/overview.zig"),
         .target = target,
@@ -227,6 +234,8 @@ pub fn build(b: *Build) !void {
     exe_mod.addImport("procs", procs_mod); // shell.json processes_* keys (main.zig)
     exe_mod.addImport("netrate", netrate_mod); // shell.json network_* keys (main.zig)
     exe_mod.addImport("overview", overview_mod);
+    exe_mod.addImport("shm_pool", shm_pool_mod);
+    overview_mod.addImport("shm_pool", shm_pool_mod);
     exe_mod.addImport("art", art_mod); // Glance's large cover (glance_media_view.zig)
     exe_mod.addImport("volume", volume_mod); // Glance's Media tab (glance_media.zig)
     exe_mod.addImport("apps", apps_mod); // Glance's Apps tab (glance_apps.zig)

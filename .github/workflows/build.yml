@@ -52,6 +52,9 @@ jobs:
       - name: Unit-test the single-copy module
         working-directory: perihelionbar
         run: /opt/zig/zig test src/singleton.zig -lc
+      - name: Unit-test the shared buffer pool (reuse, busy/release, teardown, damage)
+        working-directory: perihelionbar
+        run: /opt/zig/zig build test-shm-pool
       - name: Unit-test the restart rule after an output goes away
         working-directory: perihelionbar
         run: /opt/zig/zig build test-respawn

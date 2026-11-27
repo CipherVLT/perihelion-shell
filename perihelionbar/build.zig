@@ -138,6 +138,14 @@ pub fn build(b: *Build) !void {
         .link_libc = true,
     });
     exe_mod.addImport("respawn", respawn_mod);
+    // Reused wl_shm buffers per surface (src/shm_pool.zig), shared with the
+    // shell: no Wayland import of its own, the bar passes its `wl` in.
+    const shm_pool_mod = b.createModule(.{
+        .root_source_file = b.path("src/shm_pool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("shm_pool", shm_pool_mod);
     const radios_mod = b.createModule(.{
         .root_source_file = b.path("src/radios.zig"),
         .target = target,
@@ -291,6 +299,12 @@ pub fn build(b: *Build) !void {
     const updater_tests = b.addTest(.{ .root_module = updater_core_mod, .use_llvm = true, .use_lld = true });
     const updater_test_step = b.step("test-updater", "Run src/updater_core.zig unit tests");
     updater_test_step.dependOn(&b.addRunArtifact(updater_tests).step);
+    // `zig build test-shm-pool`: buffer reuse, busy/release, teardown counts,
+    // damage regions (fake backend, no compositor).
+    const shm_pool_tests = b.addTest(.{ .root_module = shm_pool_mod, .use_llvm = true, .use_lld = true });
+    const shm_pool_test_step = b.step("test-shm-pool", "Run src/shm_pool.zig unit tests");
+    shm_pool_test_step.dependOn(&b.addRunArtifact(shm_pool_tests).step);
+
     // `zig build test-respawn`: the restart rule after an output goes away.
     const respawn_tests = b.addTest(.{ .root_module = respawn_mod, .use_llvm = true, .use_lld = true });
     const respawn_test_step = b.step("test-respawn", "Run src/respawn.zig unit tests");
