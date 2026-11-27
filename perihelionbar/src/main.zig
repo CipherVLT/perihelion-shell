@@ -6029,6 +6029,10 @@ const Bar = struct {
     /// One draw per compositor frame (see shm_pool.FramePacer).
     pacer: shm_pool.FramePacer = .{},
     frame_cb: ?*wl.Callback = null,
+    /// The last committed frame: an identical repaint commits nothing.
+    last_frame: shm_pool.LastFrame = .{ .gpa = std.heap.c_allocator },
+    /// Commit the next frame even if unchanged (answering a configure).
+    force_commit: bool = false,
     click_regions: ClickRegions = .{},
     pointer_x: i32 = -1,
     pointer_y: i32 = -1,
@@ -7535,6 +7539,7 @@ const CavaState = struct {
     has_data: bool = false,
     dead_since_tick: i64 = std.math.minInt(i64),
 };
+
 
 var cava_state: CavaState = .{};
 
@@ -12194,6 +12199,7 @@ fn layerSurfaceListener(
             bar.width = if (cfg.width > 0) cfg.width else 1;
             bar.height = if (cfg.height > 0) cfg.height else current_config.appearance.bar_height;
             bar.configured = true;
+            bar.force_commit = true; // the ack must be followed by a commit
             drawAndCommit(bar) catch |err| {
                 logging.err("draw failed: {}", .{err});
             };
@@ -12881,7 +12887,10 @@ fn presentBar(bar: *Bar) !void {
         paced: bool = false,
         pub fn paint(c: *@This(), slot: *shm_pool.Slot) ?shm_pool.Region {
             paintFrame(c.bar, slot.pixels.ptr); // fills every pixel
-            return shm_pool.Region.whole;
+            const force = c.bar.force_commit;
+            c.bar.force_commit = false;
+            // Same pixels as the frame on screen: nothing to commit.
+            return c.bar.last_frame.update(slot.pixels, force);
         }
         pub fn commit(c: *@This(), slot: *shm_pool.Slot, _: *const shm_pool.Region) void {
             const b = c.bar;

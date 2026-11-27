@@ -277,6 +277,34 @@ pub fn drawFrame(pool: anytype, w: u32, h: u32, ctx: anytype) !bool {
     return true;
 }
 
+/// The last frame a surface committed, kept in ordinary memory so the next
+/// frame can be compared with it: an identical frame is not committed at
+/// all (no buffer, no damage, no work for the compositor). `update` returns
+/// what to damage, or null when nothing changed; `force` commits anyway
+/// (a configure must be answered with a commit).
+pub const LastFrame = struct {
+    gpa: std.mem.Allocator,
+    pixels: []u32 = &.{},
+
+    pub fn deinit(self: *LastFrame) void {
+        self.gpa.free(self.pixels);
+        self.pixels = &.{};
+    }
+
+    pub fn update(self: *LastFrame, cur: []const u32, force: bool) ?Region {
+        if (!force and self.pixels.len == cur.len and std.mem.eql(u32, self.pixels, cur)) return null;
+        if (self.pixels.len != cur.len) {
+            self.gpa.free(self.pixels);
+            self.pixels = self.gpa.alloc(u32, cur.len) catch {
+                self.pixels = &.{};
+                return Region.whole; // no copy to compare with next time: commit it all
+            };
+        }
+        @memcpy(self.pixels, cur);
+        return Region.whole;
+    }
+};
+
 /// One draw per compositor frame for a surface. `request` marks the surface
 /// dirty and says whether to draw now (no frame callback outstanding); a
 /// committed draw asks for a frame callback (`drew`); `done` clears it and
@@ -584,6 +612,21 @@ test "drawFrame: every slot held gives false, nothing drawn" {
     try tt.expect(try drawFrame(&pool, 8, 8, &ctx));
     try tt.expect(!try drawFrame(&pool, 8, 8, &ctx));
     try tt.expectEqual(@as(u32, 2), ctx.commits);
+}
+
+test "last frame: identical frames are not committed" {
+    var last = LastFrame{ .gpa = tt.allocator };
+    defer last.deinit();
+    var a: [16]u32 = @splat(1);
+    try tt.expect(last.update(&a, false) != null); // first frame
+    try tt.expectEqual(@as(?Region, null), last.update(&a, false));
+    try tt.expect(last.update(&a, true) != null); // forced (configure)
+    a[3] = 2;
+    try tt.expect(last.update(&a, false) != null);
+    try tt.expectEqual(@as(?Region, null), last.update(&a, false));
+    var b: [8]u32 = @splat(2); // new size
+    try tt.expect(last.update(&b, false) != null);
+    try tt.expectEqual(@as(?Region, null), last.update(&b, false));
 }
 
 test "pacer: one draw per frame, nothing when clean" {
