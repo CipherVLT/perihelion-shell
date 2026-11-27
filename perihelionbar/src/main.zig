@@ -4505,12 +4505,21 @@ fn startVolumeListFetch() void {
     vol_fetch_since_frame = hover_frame;
 }
 
+/// Whether this process follows the audio level at all. The dock (the same
+/// binary in dock mode) has no volume module, no mixer and no OSD, so it
+/// runs no `pactl subscribe`, no wpctl poll and no OSD: with both running,
+/// every knob turn forked wpctl twice and popped a second OSD over the dock.
+/// The top bar is the one volume watcher.
+fn volumeWatched(dock: bool) bool {
+    return !dock;
+}
+
 /// Starts the long-lived `pactl subscribe` feed (see vol_sub_fd). No-op
 /// while one runs. Same fork/exec pipe plumbing as the list fetch, minus
 /// the output handling — events are drained and discarded, they only exist
 /// to kick a prompt volume re-poll.
 fn startVolumeSubscribe() void {
-    if (vol_sub_fd >= 0) return;
+    if (vol_sub_fd >= 0 or !volumeWatched(dock_mode)) return;
     var pipe_fds: [2]posix.fd_t = undefined;
     if (std.c.pipe(&pipe_fds) != 0) return;
     const read_fd = pipe_fds[0];
@@ -6505,7 +6514,7 @@ fn realMain() !void {
     // Perihelion: no package-updates module on the bar, so no polling
     // (checkupdates is Arch's pacman-contrib; on Fedora it only failed).
     var volume: PolledCommand = .{};
-    startVolumeFetch(&volume);
+    if (volumeWatched(dock_mode)) startVolumeFetch(&volume);
     startVolumeSubscribe();
     var mpris: PolledCommand = .{};
     startMprisFetch(&mpris);
@@ -6763,7 +6772,7 @@ fn realMain() !void {
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // weather.pending_fd, refreshed below
         .{ .fd = pacman_timer_fd, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // pacman_updates.pending_fd
-        .{ .fd = volume_timer_fd, .events = posix.POLL.IN, .revents = 0 },
+        .{ .fd = if (volumeWatched(dock_mode)) volume_timer_fd else -1, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // volume.pending_fd
         .{ .fd = mpris_timer_fd, .events = posix.POLL.IN, .revents = 0 },
         .{ .fd = -1, .events = posix.POLL.IN, .revents = 0 }, // mpris.pending_fd
@@ -6878,7 +6887,7 @@ fn realMain() !void {
             // pactl subscribe feed can die (pactl upgrade, PipeWire restart);
             // respawn it on the slow tick rather than wedging the OSD's
             // event-driven path — the timer poll below still covers the gap.
-            if (vol_sub_fd < 0) {
+            if (vol_sub_fd < 0 and volumeWatched(dock_mode)) {
                 if (vol_sub_dead_since == 0) {
                     vol_sub_dead_since = second_count;
                 } else if (second_count - vol_sub_dead_since >= 2) {
@@ -13509,6 +13518,17 @@ test "volume list parses pactl" {
     // Master only: single row, still openable.
     try t.expectEqual(@as(usize, 1), parseVolumeList("Volume: mono: 10 /  0% / -inf dB\nMute: yes\n", &out2));
     try t.expect(out2[0].muted);
+}
+
+test "only the top bar watches the volume; the dock does not" {
+    try std.testing.expect(volumeWatched(false));
+    try std.testing.expect(!volumeWatched(true));
+    // The dock never starts the subscribe feed, whatever state it is in.
+    const saved = dock_mode;
+    defer dock_mode = saved;
+    dock_mode = true;
+    startVolumeSubscribe();
+    try std.testing.expectEqual(@as(posix.fd_t, -1), vol_sub_fd);
 }
 
 test "volume poll and slider math" {
