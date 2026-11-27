@@ -13055,12 +13055,16 @@ fn presentBar(bar: *Bar) !void {
             const force = c.bar.force_commit;
             c.bar.force_commit = false;
             // Same pixels as the frame on screen: nothing to commit.
-            return c.bar.last_frame.update(slot.pixels, force);
+            // Otherwise only the changed boxes are damaged (B6), so Mango
+            // recomposites a ring or a clock, not the whole bar.
+            return c.bar.last_frame.update(slot.pixels, c.bar.width, c.bar.height, force);
         }
-        pub fn commit(c: *@This(), slot: *shm_pool.Slot, _: *const shm_pool.Region) void {
+        pub fn commit(c: *@This(), slot: *shm_pool.Slot, damage: *const shm_pool.Region) void {
             const b = c.bar;
             b.surface.attach(BarShm.wlBuffer(slot), 0, 0);
-            b.surface.damageBuffer(0, 0, @intCast(b.width), @intCast(b.height));
+            if (damage.full) {
+                b.surface.damageBuffer(0, 0, @intCast(b.width), @intCast(b.height));
+            } else for (damage.items()) |r| b.surface.damageBuffer(r.x, r.y, r.w, r.h);
             if (b.frame_cb == null) {
                 if (b.surface.frame()) |cb| {
                     cb.setListener(*Bar, barFrameDone, b);
