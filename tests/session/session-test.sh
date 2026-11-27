@@ -10,9 +10,23 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 t=$(mktemp -d)
 trap 'pkill -f "${t}/" 2>/dev/null; rm -rf "${t}"' EXIT
 
+# PATH for the scripts under test: only the stand-ins below plus a folder of
+# the basic system tools they use, never /usr/bin itself, so a real mango,
+# appdrawer or perihelion-shell installed on this machine is never found.
+tools=${t}/tools
+mkdir -p "${tools}"
+for p in bash sh env date mkdir wc tail mv cp chmod dirname find id flock setsid grep sleep cat; do
+    real=$(command -v "${p}") || { echo "session-test: ${p} not found"; exit 1; }
+    ln -s "${real}" "${tools}/${p}"
+done
+
 fails=0
 check() { if "$@"; then echo "  ok    $*"; else echo "  FAIL  $*"; fails=1; fi; }
 step() { printf '\n## %s\n' "$*"; }
+
+step "the scripts see no real programs from this machine"
+hidden() { [ -z "$(PATH=${tools} type -P "$1")" ]; }
+for p in mango perihelion-shell perihelion-bar-start appdrawer quickshell swayidle mako; do check hidden "${p}"; done
 
 # ---------------------------------------------------------------- session
 step "perihelion-session: a home without ~/.config/mango"
@@ -29,7 +43,7 @@ EOF
 chmod 755 "${bin}/mango"
 home=${t}/home
 mkdir -p "${home}"
-login() { env -i HOME="${home}" PATH="${bin}:/usr/bin:/bin" PERIHELION_MANGO_DEFAULTS="${defaults}" \
+login() { env -i HOME="${home}" PATH="${bin}:${tools}" PERIHELION_MANGO_DEFAULTS="${defaults}" \
     bash "${repo}/desktop/bin/perihelion-session" "$@"; }
 snapshot() { (cd "${home}/.config/mango" && find . -type f -print0 | sort -z | xargs -0 sha256sum; find . -printf '%p %m\n' | sort); }
 unchanged() { [ "$(snapshot)" = "${before}" ]; }
@@ -58,13 +72,13 @@ check test ! -e "${home}/.config/mango/cfg"
 
 step "no defaults installed: still starts Mango"
 rm -rf "${home}/.config/mango"
-env -i HOME="${home}" PATH="${bin}:/usr/bin:/bin" PERIHELION_MANGO_DEFAULTS="${t}/nowhere" \
+env -i HOME="${home}" PATH="${bin}:${tools}" PERIHELION_MANGO_DEFAULTS="${t}/nowhere" \
     bash "${repo}/desktop/bin/perihelion-session"
 check test ! -e "${home}/.config/mango/config.conf"
 check test "$(wc -l < "${home}/mango-runs")" -eq 4
 
 step "XDG_CONFIG_HOME is followed"
-env -i HOME="${home}" XDG_CONFIG_HOME="${t}/xdg" PATH="${bin}:/usr/bin:/bin" PERIHELION_MANGO_DEFAULTS="${defaults}" \
+env -i HOME="${home}" XDG_CONFIG_HOME="${t}/xdg" PATH="${bin}:${tools}" PERIHELION_MANGO_DEFAULTS="${defaults}" \
     bash "${repo}/desktop/bin/perihelion-session"
 check test -f "${t}/xdg/mango/cfg/keybinds.conf"
 
@@ -104,7 +118,7 @@ EOF
 chmod 755 "${sbin}/pgrep" "${sbin}/busctl"
 rt=${t}/run
 mkdir -p "${rt}"
-start() { env -i HOME="${home}" XDG_RUNTIME_DIR="${rt}" PATH="${sbin}:/usr/bin:/bin" \
+start() { env -i HOME="${home}" XDG_RUNTIME_DIR="${rt}" PATH="${sbin}:${tools}" \
     PERIHELION_POLKIT_AGENTS="${sbin}/polkit-agent" bash "${repo}/desktop/bin/perihelion-session-start"; }
 # setsid -f returns before the child runs; wait for N starts.
 wait_starts() { local _; for _ in $(seq 1 50); do [ "$(wc -l < "${t}/started" 2>/dev/null || echo 0)" -ge "$1" ] && return 0; sleep 0.1; done; return 1; }
