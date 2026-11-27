@@ -6937,9 +6937,13 @@ fn realMain() !void {
             // and cheap enough for something that only fires on user action.
             var drain_buf: [4096]u8 = undefined;
             _ = posix.read(comp_event_fd, &drain_buf) catch {};
+            const sig_before = activeWorkspaceSig(workspaces.list.items);
             workspaces.refresh() catch |err| {
                 logging.warn("workspaces refresh failed: {}", .{err});
             };
+            if (activeWorkspaceSig(workspaces.list.items) != sig_before) {
+                ws_motion_until_ms = monoNowMs() + WS_MOTION_MS;
+            }
             // Same event means windows may have opened/closed/focused —
             // re-read the client list so dots and tail track it.
             const running_changed = running_state.refresh() catch |err| blk: {
@@ -7050,7 +7054,10 @@ fn realMain() !void {
                     if (b.autohide_grace == 0) autohideHide(b);
                 }
                 const stepped = stepBarAnimations(b);
-                const needs_redraw = stepped or barMovesOnItsOwn(b);
+                // The tick that lands on the resting phase is drawn too
+                // (barMovesOnItsOwn already says "still"), so the ring holds
+                // at rest rather than one tick short of it.
+                const needs_redraw = stepped or barMovesOnItsOwn(b) or activeBezelJustRested(b);
                 const anim_on = current_config.appearance.animations_enabled;
                 if (needs_redraw) {
                     drawAndCommit(b) catch |err| {
@@ -10238,6 +10245,54 @@ fn bezelBreathAt(frame: u32) f32 {
 /// Rotation period of the hover bezel, in ticks (40 × 60ms ≈ 2.4s per turn).
 const HOVER_BEZEL_PERIOD: u32 = 40;
 
+/// How long the active workspace's bezel keeps moving after a switch.
+const WS_MOTION_MS: i64 = 3000;
+/// Monotonic ms until which the active bezel moves (see activeBezelMoves);
+/// pushed forward whenever the active workspace changes.
+var ws_motion_until_ms: i64 = 0;
+
+/// Whether the bezel effect at `frame` sits at its resting phase: a rotating
+/// ring at the start of its turn (where it sits with animations off), a
+/// breathing ring at full brightness, so a ring that stops never freezes
+/// half-dim or mid-turn. Solid is always at rest.
+fn bezelAtRest(effect: []const u8, frame: u32) bool {
+    if (std.mem.eql(u8, effect, BEZEL_EFFECT_BREATHING)) return frame % BEZEL_BREATH_PERIOD == BEZEL_BREATH_PERIOD / 4;
+    if (std.mem.eql(u8, effect, BEZEL_EFFECT_SOLID)) return true;
+    return frame % HOVER_BEZEL_PERIOD == 0;
+}
+
+/// Whether the active workspace's bezel needs frames: while the pointer is
+/// over the bar or until `until_ms` (a recent workspace switch), and after
+/// that only until it reaches its resting phase. Pure for tests.
+fn activeBezelMoves(effect: []const u8, pointer_over: bool, now_ms: i64, until_ms: i64, frame: u32) bool {
+    if (std.mem.eql(u8, effect, BEZEL_EFFECT_SOLID)) return false;
+    if (pointer_over or now_ms < until_ms) return true;
+    return !bezelAtRest(effect, frame);
+}
+
+/// True on the tick the active bezel reaches its resting phase (one draw
+/// per period at most while the tick runs for other reasons).
+fn activeBezelJustRested(b: *const Bar) bool {
+    if (!current_config.appearance.animations_enabled) return false;
+    const effect = current_config.appearance.bezel_effect;
+    if (std.mem.eql(u8, effect, BEZEL_EFFECT_SOLID) or !bezelAtRest(effect, hover_frame)) return false;
+    for (barWorkspaces(b)) |ws| if (ws.active) return true;
+    return false;
+}
+
+/// A fingerprint of which workspaces are active on which monitor, so a
+/// compositor event that only moved focus or a title doesn't count as a
+/// workspace switch.
+fn activeWorkspaceSig(list: []const Workspace) u64 {
+    var h = std.hash.Wyhash.init(0);
+    for (list) |ws| {
+        if (!ws.active) continue;
+        h.update(std.mem.asBytes(&ws.id));
+        h.update(ws.monitorName());
+    }
+    return h.final();
+}
+
 /// HSV → opaque 0xAARRGGBB. s,v in 0..1; h wraps (negative and >1 fold back
 /// onto the wheel via floored modulo, so callers never need to normalize).
 /// Used only by the "rainbow-puke" bezel style.
@@ -12912,7 +12967,17 @@ fn barMovesOnItsOwn(b: *const Bar) bool {
                 break;
             }
         }
-        if (!needs_redraw) {
+        // The active workspace's bezel moves only while someone is looking
+        // at the bar (pointer over it) or just after a workspace switch,
+        // then eases to its resting phase and holds still: an idle bar
+        // draws nothing (this branch alone kept the tick running forever).
+        if (!needs_redraw and activeBezelMoves(
+            current_config.appearance.bezel_effect,
+            b.pointer_x >= 0,
+            monoNowMs(),
+            ws_motion_until_ms,
+            hover_frame,
+        )) {
             for (barWorkspaces(b)) |ws| {
                 if (ws.active) {
                     needs_redraw = true;
@@ -13153,6 +13218,39 @@ test "clearGlass keeps lightness, drops hue" {
     try std.testing.expectEqual((g >> 16) & 0xFF, (g >> 8) & 0xFF);
     try std.testing.expectEqual((g >> 8) & 0xFF, g & 0xFF);
     try std.testing.expectEqual(@as(u32, 0xFF7F7F7F), clearGlass(0xFF7F7F7F, false));
+}
+
+test "the active bezel moves only when looked at or just switched, then rests" {
+    const t = std.testing;
+    const rot = BEZEL_EFFECT_ROTATING;
+    const br = BEZEL_EFFECT_BREATHING;
+    // Solid never needs frames, even under the pointer.
+    try t.expect(!activeBezelMoves(BEZEL_EFFECT_SOLID, true, 0, 10_000, 7));
+    // Pointer over the bar, or inside the post-switch window: moves.
+    try t.expect(activeBezelMoves(rot, true, 50_000, 0, 7));
+    try t.expect(activeBezelMoves(br, false, 1_000, 3_000, 7));
+    // Window over: keeps going only until the resting phase, then stops.
+    try t.expect(activeBezelMoves(rot, false, 5_000, 3_000, 7));
+    try t.expect(!activeBezelMoves(rot, false, 5_000, 3_000, HOVER_BEZEL_PERIOD * 3));
+    try t.expect(!activeBezelMoves(br, false, 5_000, 3_000, BEZEL_BREATH_PERIOD / 4));
+    // The breathing ring rests at full brightness, never dim.
+    try t.expect(@abs(bezelBreathAt(BEZEL_BREATH_PERIOD / 4) - 1.0) < 1e-4);
+    // An idle bar stops within one period after the window closes.
+    var f: u32 = 1;
+    var ticks: u32 = 0;
+    while (activeBezelMoves(br, false, 9_000, 3_000, f)) : (f += 1) ticks += 1;
+    try t.expect(ticks < BEZEL_BREATH_PERIOD);
+}
+
+test "a workspace switch changes the active signature; focus churn does not" {
+    const t = std.testing;
+    var a = [_]Workspace{ .{ .id = 1, .active = true }, .{ .id = 2, .active = false } };
+    const s1 = activeWorkspaceSig(&a);
+    a[1].urgent = true; // not a switch
+    try t.expectEqual(s1, activeWorkspaceSig(&a));
+    a[0].active = false;
+    a[1].active = true;
+    try t.expect(activeWorkspaceSig(&a) != s1);
 }
 
 test "bezel breath phases" {
