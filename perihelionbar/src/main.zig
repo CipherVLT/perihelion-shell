@@ -16,6 +16,8 @@ const icontheme = @import("icontheme.zig");
 const dbusmenu = @import("dbusmenu.zig");
 const logging = @import("logging.zig");
 const respawn = @import("respawn");
+const shm_pool = @import("shm_pool");
+const BarShm = shm_pool.WlBackend(wl);
 const cli_version = @import("cli_version");
 const singleton = @import("singleton.zig");
 const desktop_entries = @import("desktop_entries.zig");
@@ -6017,6 +6019,13 @@ const Bar = struct {
     width: u32 = 0,
     height: u32,
     configured: bool = false,
+    /// Reused buffers (shm_pool), set up on the first draw, once the Bar
+    /// sits at its final address (the pool points at shm_backend).
+    shm_backend: BarShm = undefined,
+    pool: ?shm_pool.Pool(BarShm) = null,
+    /// A frame was asked for while the compositor held every buffer; it is
+    /// drawn when one comes back (barBufferReleased).
+    draw_pending: bool = false,
     click_regions: ClickRegions = .{},
     pointer_x: i32 = -1,
     pointer_y: i32 = -1,
@@ -12805,50 +12814,37 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
     }
 }
 
-/// Paints the current frame and hands it to the compositor: allocate an
-/// anonymous memfd buffer, paint the frame into it, then attach it as a
-/// wl_shm argb8888 buffer. This is the bar's only presenter — every pixel is
+/// Paints the current frame and hands it to the compositor through the bar's
+/// reused wl_shm buffers (shm_pool): a free buffer is painted and attached;
+/// while the compositor still holds every buffer, the frame waits for the
+/// next release instead. This is the bar's only presenter — every pixel is
 /// rasterized on the CPU (see paintFrame) and handed over through shared
 /// memory, so no EGL/GLES context is ever created and no GL driver is loaded.
 fn drawAndCommit(bar: *Bar) !void {
-    const stride = bar.width * 4; // ARGB8888
-    const size: usize = @as(usize, stride) * bar.height;
-
-    const fd = try posix.memfd_create("perihelionbar-buffer", 0);
-    defer _ = posix.system.close(fd);
-    switch (posix.errno(posix.system.ftruncate(fd, @intCast(size)))) {
-        .SUCCESS => {},
-        else => return error.FTruncateFailed,
+    if (bar.pool == null) {
+        bar.shm_backend = .{ .shm = bar.shm };
+        bar.pool = .init(&bar.shm_backend, 3);
+        bar.pool.?.setReleaseHook(bar, barBufferReleased);
     }
+    const Ctx = struct {
+        bar: *Bar,
+        pub fn paint(c: @This(), slot: *shm_pool.Slot) ?shm_pool.Region {
+            paintFrame(c.bar, slot.pixels.ptr); // fills every pixel
+            return shm_pool.Region.whole;
+        }
+        pub fn commit(c: @This(), slot: *shm_pool.Slot, _: *const shm_pool.Region) void {
+            c.bar.surface.attach(BarShm.wlBuffer(slot), 0, 0);
+            c.bar.surface.damageBuffer(0, 0, @intCast(c.bar.width), @intCast(c.bar.height));
+            c.bar.surface.commit();
+        }
+    };
+    bar.draw_pending = !(try shm_pool.drawFrame(&bar.pool.?, bar.width, bar.height, Ctx{ .bar = bar }));
+}
 
-    const data = try posix.mmap(
-        null,
-        size,
-        .{ .READ = true, .WRITE = true },
-        .{ .TYPE = .SHARED },
-        fd,
-        0,
-    );
-    defer posix.munmap(data);
-
-    const pixels: [*]u32 = @ptrCast(@alignCast(data.ptr));
-    paintFrame(bar, pixels);
-
-    const pool = try bar.shm.createPool(fd, @intCast(size));
-    defer pool.destroy();
-
-    const buffer = try pool.createBuffer(
-        0,
-        @intCast(bar.width),
-        @intCast(bar.height),
-        @intCast(stride),
-        .argb8888,
-    );
-    defer buffer.destroy();
-
-    bar.surface.attach(buffer, 0, 0);
-    bar.surface.damageBuffer(0, 0, @intCast(bar.width), @intCast(bar.height));
-    bar.surface.commit();
+fn barBufferReleased(p: *anyopaque) void {
+    const bar: *Bar = @ptrCast(@alignCast(p));
+    if (!bar.draw_pending) return;
+    drawAndCommit(bar) catch |err| logging.err("draw failed: {}", .{err});
 }
 
 // ---------------------------------------------------------------------

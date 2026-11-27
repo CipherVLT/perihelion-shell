@@ -188,10 +188,30 @@ settings_shot XWayland theme-4-dark-mango-page
 rm -rf "${HOME}/.config/gtk-4.0" "${HOME}/.config/gtk-3.0" "${HOME}/.config/perihelionbar/theme"
 
 echo "Dock"
+# The dock really drew (through its reused shm buffers): the strip holds
+# more than a handful of colours, not just the wallpaper.
+drawn() {  # $1 = label, rest = grim -g geometry
+    local label=$1 f="${work}/drawn.ppm"; shift
+    grim -t ppm "$@" "${f}" 2>/dev/null || { echo "  FAIL ${label}: no capture"; fails=$((fails + 1)); return; }
+    local n
+    n=$(python3 -I -c '
+import sys
+d = open(sys.argv[1], "rb").read()
+parts, i = [], 0
+while len(parts) < 4:
+    while d[i:i+1].isspace(): i += 1
+    j = i
+    while not d[j:j+1].isspace(): j += 1
+    parts.append(d[i:j]); i = j
+px = d[i+1:]
+print(len({px[k:k+3] for k in range(0, len(px) - 2, 3)}))' "${f}")
+    if (( n >= 16 )); then echo "  ok   ${label} drawn (${n} colours)"; else echo "  FAIL ${label}: only ${n} colours, nothing drawn"; fails=$((fails + 1)); fi
+}
 dock_shots() {  # $1 = label
     PERIHELIONBAR_DOCK=1 setsid -f perihelion-bar >>"${work}/bar.log" 2>&1
     sleep 2
     shot "dock-$1" -g "450,930 600x70"
+    drawn "dock-$1" -g "450,930 600x70"
     # the pointer over the launcher, at the left end
     swaymsg -q "seat seat0 cursor set 560 972" 2>/dev/null; sleep 1
     shot "dock-$1-hover" -g "450,930 600x70"

@@ -264,6 +264,19 @@ pub fn Pool(comptime B: type) type {
     };
 }
 
+/// One frame on `pool`: take a free slot, let `ctx.paint(slot)` fill it and
+/// say what changed (null: nothing, so nothing is committed and the slot
+/// stays free), then `ctx.commit(slot, &damage)` and mark it presented.
+/// Returns false when every slot is still held by the compositor; the caller
+/// draws again from its release hook.
+pub fn drawFrame(pool: anytype, w: u32, h: u32, ctx: anytype) !bool {
+    const slot = (try pool.acquire(w, h)) orelse return false;
+    const damage: Region = ctx.paint(slot) orelse return true;
+    ctx.commit(slot, &damage);
+    pool.present(slot, &damage);
+    return true;
+}
+
 /// The real backend over a build's generated `wl` namespace: one memfd per
 /// buffer, mapped once; the wl_shm_pool is destroyed right after the buffer
 /// is made (the buffer keeps the memory) and the fd closed (the compositor
@@ -442,6 +455,68 @@ test "release hook reaches the owner" {
     s.released();
     try tt.expectEqual(@as(u32, 1), owner.n);
     try tt.expect(!s.busy);
+}
+
+const FakeFrame = struct {
+    commits: u32 = 0,
+    held: [MAX_SLOTS]?*Slot = @splat(null),
+    lag: usize = 0, // how many presented buffers the compositor still holds
+    unchanged: bool = false,
+
+    fn paint(self: *FakeFrame, slot: *Slot) ?Region {
+        if (self.unchanged) return null;
+        @memset(slot.pixels, 0xff000000 | self.commits);
+        return Region.whole;
+    }
+    fn commit(self: *FakeFrame, slot: *Slot, _: *const Region) void {
+        self.commits += 1;
+        if (self.lag == 0) return;
+        // Release the oldest once more than `lag` are held.
+        var i: usize = self.lag;
+        if (self.held[i - 1]) |old| old.released();
+        while (i > 1) : (i -= 1) self.held[i - 1] = self.held[i - 2];
+        self.held[0] = slot;
+    }
+};
+
+test "drawFrame: 100 frames make at most 3 buffers, even with a slow compositor" {
+    inline for (.{ 0, 1, 2 }) |lag| {
+        var fake = Fake{};
+        var pool = Pool(Fake).init(&fake, 3);
+        var ctx = FakeFrame{ .lag = lag };
+        var drawn: u32 = 0;
+        var i: u32 = 0;
+        while (i < 100) : (i += 1) {
+            if (try drawFrame(&pool, 32, 4, &ctx)) drawn += 1;
+            if (lag == 0) for (&pool.slots) |*s| if (s.busy) s.released();
+        }
+        try tt.expectEqual(@as(u32, 100), drawn);
+        try tt.expect(fake.created <= 3);
+        try tt.expectEqual(@as(u32, lag + 1), fake.created);
+        pool.deinit();
+        try tt.expectEqual(fake.created, fake.destroyed);
+    }
+}
+
+test "drawFrame: an unchanged frame commits nothing and keeps the slot free" {
+    var fake = Fake{};
+    var pool = Pool(Fake).init(&fake, 2);
+    defer pool.deinit();
+    var ctx = FakeFrame{ .unchanged = true };
+    try tt.expect(try drawFrame(&pool, 8, 8, &ctx));
+    try tt.expectEqual(@as(u32, 0), ctx.commits);
+    for (pool.slots) |s| try tt.expect(!s.busy);
+}
+
+test "drawFrame: every slot held gives false, nothing drawn" {
+    var fake = Fake{};
+    var pool = Pool(Fake).init(&fake, 2);
+    defer pool.deinit();
+    var ctx = FakeFrame{};
+    try tt.expect(try drawFrame(&pool, 8, 8, &ctx));
+    try tt.expect(try drawFrame(&pool, 8, 8, &ctx));
+    try tt.expect(!try drawFrame(&pool, 8, 8, &ctx));
+    try tt.expectEqual(@as(u32, 2), ctx.commits);
 }
 
 test "region merges touching rects and collapses past its capacity" {
