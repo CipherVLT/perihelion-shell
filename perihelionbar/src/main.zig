@@ -7023,6 +7023,8 @@ fn realMain() !void {
             hover_frame +%= 1;
             // Mixer-echo suppressions tick down here (see spawnVolumeSet).
             if (vol_osd_suppress_left > 0) vol_osd_suppress_left -= 1;
+            // An equalizer frame held back by the 30/s cap.
+            if (cava_state.pending and cavaGate(&cava_state, monoNowMs())) drawAllBars(bars[0..bar_count]);
             if (current_config.appearance.animations_enabled and std.mem.eql(u8, current_config.appearance.bg_mode, BG_MODE_MATRIX)) {
                 for (bars[0..bar_count]) |*b| updateMatrixHeads(b);
             }
@@ -7319,7 +7321,7 @@ fn realMain() !void {
             // frame (or several batched frames) meanwhile is the equalizer's
             // own ~30fps refresh slot, independent of the 1s clock tick.
             switch (readCavaAvailable()) {
-                .frame => drawAllBars(bars[0..bar_count]),
+                .frame => if (cavaGate(&cava_state, monoNowMs())) drawAllBars(bars[0..bar_count]),
                 .eof => cava_state.dead_since_tick = second_count,
                 .none => {},
             }
@@ -7538,8 +7540,35 @@ const CavaState = struct {
     bar_count: usize = CAVA_BARS,
     has_data: bool = false,
     dead_since_tick: i64 = std.math.minInt(i64),
+    /// The values last drawn, when, and whether newer ones wait for the
+    /// next CAVA_MIN_FRAME_MS slot (cavaGate).
+    drawn: [CAVA_BARS]u32 = @as([CAVA_BARS]u32, @splat(0)),
+    last_draw_ms: i64 = std.math.minInt(i64) / 2,
+    pending: bool = false,
 };
 
+/// At most ~30 equalizer redraws a second while audio plays.
+const CAVA_MIN_FRAME_MS: i64 = 33;
+
+/// Whether the equalizer needs a redraw now: only when its values differ
+/// from the ones last drawn (silence repeats the same zeros: no redraw), and
+/// no sooner than CAVA_MIN_FRAME_MS after the last one. A change that comes
+/// too soon stays `pending` (the animation tick keeps running for it), so
+/// the last frame before silence still reaches the screen.
+fn cavaGate(st: *CavaState, now_ms: i64) bool {
+    if (std.mem.eql(u32, st.bars[0..st.bar_count], st.drawn[0..st.bar_count])) {
+        st.pending = false;
+        return false;
+    }
+    if (now_ms - st.last_draw_ms < CAVA_MIN_FRAME_MS) {
+        st.pending = true;
+        return false;
+    }
+    @memcpy(st.drawn[0..st.bar_count], st.bars[0..st.bar_count]);
+    st.last_draw_ms = now_ms;
+    st.pending = false;
+    return true;
+}
 
 var cava_state: CavaState = .{};
 
@@ -12856,7 +12885,7 @@ fn barAnimating(b: *const Bar) bool {
 }
 
 fn animTickWanted(bars_slice: []const Bar) bool {
-    if (vol_fetch_fd >= 0 or vol_osd_suppress_left > 0) return true;
+    if (vol_fetch_fd >= 0 or vol_osd_suppress_left > 0 or cava_state.pending) return true;
     for (bars_slice) |*b| if (barAnimating(b)) return true;
     return false;
 }
@@ -12939,6 +12968,26 @@ fn barBufferReleased(p: *anyopaque) void {
 // Tests — bezel breathing math (pure, no display).
 // Run: zig test src/main.zig -lc -fllvm -flld <bar link flags below>
 // ---------------------------------------------------------------------
+
+test "cava: redraw only on changed values, at most every 33 ms" {
+    const t = std.testing;
+    var st = CavaState{};
+    st.bar_count = 3;
+    try t.expect(!cavaGate(&st, 0)); // zeros, as drawn: silence draws nothing
+    st.bars[1] = 500;
+    try t.expect(cavaGate(&st, 1000));
+    try t.expect(!cavaGate(&st, 1010)); // same values again: nothing
+    st.bars[1] = 600;
+    try t.expect(!cavaGate(&st, 1010)); // too soon: held back
+    try t.expect(st.pending);
+    try t.expect(cavaGate(&st, 1000 + CAVA_MIN_FRAME_MS)); // drawn on the next slot
+    try t.expect(!st.pending);
+    @memset(&st.bars, 0); // the music stops right after a frame
+    try t.expect(!cavaGate(&st, 1040));
+    try t.expect(st.pending); // the drop to zero still waits to be drawn
+    try t.expect(cavaGate(&st, 1100));
+    try t.expect(!cavaGate(&st, 5000)); // then silence: nothing more
+}
 
 test "the animation tick runs only while a bar needs it" {
     const t = std.testing;
