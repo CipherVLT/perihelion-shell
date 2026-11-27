@@ -282,3 +282,23 @@ When porting widgets or features from Event Horizon dotfiles:
 - PROGRESS.md: `/home/mirrez/ciphervlt/PROGRESS.md`
 
 When in doubt, check current `main` of both repos and PROGRESS.md before starting new work.
+perihelion-shell — Zig Optimization & Architecture Rules
+
+## Toolchain & Build
+- Verify exact compiler version first with `zig version` before writing `std` calls (do not use deprecated Zig 0.11/0.12 APIs).
+- Release builds must be tested with `zig build -Doptimize=ReleaseSafe` and `zig build -Doptimize=ReleaseFast`.
+
+## Memory & Allocation Rules
+- **Zero heap allocations in hot paths** (input/event loop, prompt rendering, ANSI/command tokenization).
+- Use `std.heap.ArenaAllocator` with `.reset(.retain_capacity)` for per-command or per-frame lifecycles.
+- Use `std.BoundedArray` or stack buffers + `std.heap.FixedBufferAllocator` for bounded strings, paths, and IPC packets.
+- Every allocation must have an immediate `defer` or `errdefer` cleanup; verify zero leaks in `zig build test` using `std.testing.allocator`.
+
+## Systems & Linux Performance
+- Batch all terminal/socket writes through `std.io.BufferedWriter`; never issue unbuffered per-token `write` syscalls.
+- Prefer `std.MultiArrayList` over `std.ArrayList` for collections scanned in tight loops.
+- Use `std.mem` SIMD-accelerated search helpers (`indexOfScalar`, `indexOfAny`) instead of manual byte loops.
+
+## Benchmarking Protocol
+- Before optimizing any function, write a reproducible benchmark or profile with `perf record -g ./zig-out/bin/perihelion-shell` so changes are backed by measurements.
+
