@@ -277,6 +277,73 @@ pub fn drawFrame(pool: anytype, w: u32, h: u32, ctx: anytype) !bool {
     return true;
 }
 
+/// One draw per compositor frame for a surface. `request` marks the surface
+/// dirty and says whether to draw now (no frame callback outstanding); a
+/// committed draw asks for a frame callback (`drew`); `done` clears it and
+/// says whether something became dirty meanwhile. A clean surface requests
+/// nothing, so an idle or hidden surface costs nothing: a callback that
+/// never comes (output asleep, surface covered) just leaves it waiting.
+/// `stuck` lets the owner give up on such a callback after WATCHDOG_MS so a
+/// change still reaches the screen once the output is back, at most once per
+/// WATCHDOG_MS while dirty and never as a loop.
+pub const FramePacer = struct {
+    pub const WATCHDOG_MS: i64 = 2000;
+
+    pending: bool = false,
+    dirty: bool = false,
+    since_ms: i64 = 0,
+
+    pub fn request(self: *FramePacer) bool {
+        self.dirty = true;
+        return !self.pending;
+    }
+
+    /// After a draw attempt: `committed` when a frame went to the compositor
+    /// (it asked for a frame callback), false when nothing changed.
+    pub fn drew(self: *FramePacer, committed: bool, now_ms: i64) void {
+        self.dirty = false;
+        if (committed) {
+            self.pending = true;
+            self.since_ms = now_ms;
+        }
+    }
+
+    /// frame.done: true when the owner should draw again now.
+    pub fn done(self: *FramePacer) bool {
+        self.pending = false;
+        return self.dirty;
+    }
+
+    pub fn stuck(self: *const FramePacer, now_ms: i64) bool {
+        return self.pending and self.dirty and now_ms - self.since_ms >= WATCHDOG_MS;
+    }
+};
+
+/// A repeating timerfd that runs only while wanted: `sync(true)` arms it at
+/// `interval_ms`, `sync(false)` stops it; the syscall happens only when the
+/// state changes.
+pub const AnimClock = struct {
+    fd: posix.fd_t,
+    interval_ms: i64,
+    armed: bool = false,
+    settimes: u32 = 0, // for tests: how often the timer was really changed
+
+    pub fn sync(self: *AnimClock, want: bool) void {
+        if (want == self.armed) return;
+        const ns: isize = @intCast(@mod(self.interval_ms, 1000) * std.time.ns_per_ms);
+        const s: isize = @intCast(@divTrunc(self.interval_ms, 1000));
+        const on = std.os.linux.timespec{ .sec = s, .nsec = ns };
+        const off = std.os.linux.timespec{ .sec = 0, .nsec = 0 };
+        const spec = std.os.linux.itimerspec{
+            .it_interval = if (want) on else off,
+            .it_value = if (want) on else off,
+        };
+        _ = std.os.linux.timerfd_settime(self.fd, .{}, &spec, null);
+        self.armed = want;
+        self.settimes += 1;
+    }
+};
+
 /// The real backend over a build's generated `wl` namespace: one memfd per
 /// buffer, mapped once; the wl_shm_pool is destroyed right after the buffer
 /// is made (the buffer keeps the memory) and the fd closed (the compositor
@@ -517,6 +584,60 @@ test "drawFrame: every slot held gives false, nothing drawn" {
     try tt.expect(try drawFrame(&pool, 8, 8, &ctx));
     try tt.expect(!try drawFrame(&pool, 8, 8, &ctx));
     try tt.expectEqual(@as(u32, 2), ctx.commits);
+}
+
+test "pacer: one draw per frame, nothing when clean" {
+    var p = FramePacer{};
+    try tt.expect(p.request()); // idle: draw at once
+    p.drew(true, 0);
+    try tt.expect(!p.request()); // callback outstanding: only marked dirty
+    try tt.expect(!p.request());
+    try tt.expect(p.done()); // frame.done: the coalesced change is drawn
+    p.drew(true, 16);
+    try tt.expect(!p.done()); // nothing changed: no draw, no new callback
+    try tt.expect(!p.pending);
+    try tt.expect(p.request()); // and the next change draws at once
+}
+
+test "pacer: an unchanged frame asks for no callback" {
+    var p = FramePacer{};
+    try tt.expect(p.request());
+    p.drew(false, 0);
+    try tt.expect(!p.pending and !p.dirty);
+}
+
+test "pacer: a callback that never comes is given up after the watchdog only while dirty" {
+    var p = FramePacer{};
+    _ = p.request();
+    p.drew(true, 1000);
+    try tt.expect(!p.stuck(1000 + FramePacer.WATCHDOG_MS)); // clean: nothing to show
+    _ = p.request();
+    try tt.expect(!p.stuck(1000 + FramePacer.WATCHDOG_MS - 1));
+    try tt.expect(p.stuck(1000 + FramePacer.WATCHDOG_MS));
+}
+
+test "anim clock ticks only while wanted" {
+    const linux = std.os.linux;
+    const rc = linux.timerfd_create(.MONOTONIC, .{ .CLOEXEC = true, .NONBLOCK = true });
+    try tt.expect(posix.errno(rc) == .SUCCESS);
+    const fd: posix.fd_t = @intCast(rc);
+    defer _ = posix.system.close(fd);
+    var clock = AnimClock{ .fd = fd, .interval_ms = 5 };
+    clock.sync(false); // already off: no syscall
+    try tt.expectEqual(@as(u32, 0), clock.settimes);
+    clock.sync(true);
+    clock.sync(true);
+    try tt.expectEqual(@as(u32, 1), clock.settimes);
+    var pfd = [_]posix.pollfd{.{ .fd = fd, .events = posix.POLL.IN, .revents = 0 }};
+    try tt.expectEqual(@as(usize, 1), try posix.poll(&pfd, 200));
+    var n: u64 = 0;
+    _ = try posix.read(fd, std.mem.asBytes(&n));
+    try tt.expect(n >= 1);
+    clock.sync(false);
+    try tt.expectEqual(@as(u32, 2), clock.settimes);
+    _ = posix.read(fd, std.mem.asBytes(&n)) catch {}; // drain a tick that raced the stop
+    pfd[0].revents = 0;
+    try tt.expectEqual(@as(usize, 0), try posix.poll(&pfd, 50)); // stopped: no wakeup
 }
 
 test "region merges touching rects and collapses past its capacity" {

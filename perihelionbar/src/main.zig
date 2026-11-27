@@ -6026,6 +6026,9 @@ const Bar = struct {
     /// A frame was asked for while the compositor held every buffer; it is
     /// drawn when one comes back (barBufferReleased).
     draw_pending: bool = false,
+    /// One draw per compositor frame (see shm_pool.FramePacer).
+    pacer: shm_pool.FramePacer = .{},
+    frame_cb: ?*wl.Callback = null,
     click_regions: ClickRegions = .{},
     pointer_x: i32 = -1,
     pointer_y: i32 = -1,
@@ -6624,6 +6627,9 @@ fn realMain() !void {
     };
     const scroll_timer_fd = try createMsIntervalTimer(SCROLL_INTERVAL_MS);
     defer _ = posix.system.close(scroll_timer_fd);
+    // The animation tick runs only while something animates (animTickWanted,
+    // synced before every poll): an idle bar has no timer waking it.
+    var anim_clock = shm_pool.AnimClock{ .fd = scroll_timer_fd, .interval_ms = SCROLL_INTERVAL_MS, .armed = true };
     const tray_timer_fd = try createIntervalTimer(TRAY_REFRESH_SECONDS);
     defer _ = posix.system.close(tray_timer_fd);
     defer _ = posix.system.close(timer_fd);
@@ -6812,6 +6818,7 @@ fn realMain() !void {
         poll_fds[34].fd = g_cc_proc.fd;
         poll_fds[35].fd = g_bri_proc.fd;
 
+        anim_clock.sync(animTickWanted(bars[0..bar_count]));
         _ = try posix.poll(&poll_fds, -1);
 
         if (poll_fds[32].revents & (posix.POLL.PRI | posix.POLL.ERR) != 0) {
@@ -6840,6 +6847,7 @@ fn realMain() !void {
             // reaping exactly at EOF, so it's retried until it succeeds.
             reapChildren();
             second_count += 1;
+            for (bars[0..bar_count]) |*b| unstickBar(b);
             // Fallback for backlight drivers that don't signal POLLPRI: one
             // tiny pread a second, only when a device was found.
             if (g_backlight.present()) checkBacklight(bars[0..bar_count]);
@@ -7021,92 +7029,14 @@ fn realMain() !void {
             // independently), so this loops over every bar rather than
             // updating one shared value.
             for (bars[0..bar_count]) |*b| {
-                var needs_redraw = false;
                 // Auto-hide grace countdown (see the leave handler).
                 if (b.autohide_grace > 0) {
                     b.autohide_grace -= 1;
                     if (b.autohide_grace == 0) autohideHide(b);
                 }
-                // Taskbar↔dock rubber-band morph: ease the blend toward the
-                // current mode's endpoint, redrawing every tick while
-                // traveling (settled endpoints paint no differently than
-                // before, so idle costs nothing extra).
-                if (b.mode_morph_active) {
-                    const morph_target: f32 = if (std.mem.eql(u8, current_config.appearance.bar_mode, BAR_MODE_DOCK)) 1.0 else 0.0;
-                    b.mode_morph_t += MODE_MORPH_STEP;
-                    if (b.mode_morph_t >= 1.0) {
-                        b.mode_blend = morph_target;
-                        b.mode_morph_active = false;
-                    } else {
-                        b.mode_blend = b.mode_morph_from + (morph_target - b.mode_morph_from) * easeOutElastic(b.mode_morph_t);
-                    }
-                    needs_redraw = true;
-                }
-                const drawer_target: f32 = if (b.drawer_expanded) 1.0 else 0.0;
-                if (b.drawer_anim != drawer_target) {
-                    b.drawer_anim = if (b.drawer_anim < drawer_target)
-                        @min(drawer_target, b.drawer_anim + DRAWER_ANIM_STEP)
-                    else
-                        @max(drawer_target, b.drawer_anim - DRAWER_ANIM_STEP);
-                    needs_redraw = true;
-                }
-                // Hover fade: every region's pill+underline eases toward lit
-                // (under the pointer) or dark. Same needs_redraw gating as
-                // the drawer — settled regions cost nothing per tick. With
-                // animations off the level snaps straight to target instead
-                // (the pointer handlers already redraw on change, so the
-                // snap still paints its single frame).
+                const stepped = stepBarAnimations(b);
+                const needs_redraw = stepped or barMovesOnItsOwn(b);
                 const anim_on = current_config.appearance.animations_enabled;
-                var hi: usize = 0;
-                while (hi < b.click_regions.len) : (hi += 1) {
-                    const hover_target: f32 = if (b.click_regions.hovered == hi) 1.0 else 0.0;
-                    if (b.click_regions.hover[hi] != hover_target) {
-                        b.click_regions.hover[hi] = if (!anim_on) hover_target else if (b.click_regions.hover[hi] < hover_target)
-                            @min(hover_target, b.click_regions.hover[hi] + HOVER_ANIM_STEP)
-                        else
-                            @max(hover_target, b.click_regions.hover[hi] - HOVER_ANIM_STEP);
-                        needs_redraw = true;
-                    }
-                }
-                // A settled-but-lit hover still animates its bezel, so it
-                // needs a redraw every tick until it goes fully dark — but
-                // only while animations are on (off = frozen bezel = static).
-                // Same for the active-workspace pill below: its bezel never
-                // stops while animations are on, so the bar redraws every
-                // tick while one exists (practically always). Same cost class
-                // as any animated bar — one full CPU frame per 60ms tick.
-                if (anim_on) {
-                    var hj: usize = 0;
-                    while (hj < b.click_regions.len) : (hj += 1) {
-                        if (b.click_regions.hover[hj] > 0.0) {
-                            needs_redraw = true;
-                            break;
-                        }
-                    }
-                    if (!needs_redraw) {
-                        for (barWorkspaces(b)) |ws| {
-                            if (ws.active) {
-                                needs_redraw = true;
-                                break;
-                            }
-                        }
-                    }
-                    // A pulsing urgent pill needs frames too (same gating as
-                    // the bezel above; frozen when animations are off).
-                    if (!needs_redraw) {
-                        for (barWorkspaces(b)) |ws| {
-                            if (ws.urgent and !ws.active) {
-                                needs_redraw = true;
-                                break;
-                            }
-                        }
-                    }
-                    // Animated backgrounds repaint every tick while visible
-                    // (same cost class as the always-on bezel above).
-                    if (!needs_redraw and bgEffectVisible()) needs_redraw = true;
-                    // Hovered weather plays its condition fx — same deal.
-                    if (!needs_redraw and weatherHovered(b)) needs_redraw = true;
-                }
                 if (needs_redraw) {
                     drawAndCommit(b) catch |err| {
                         logging.err("draw failed: {}", .{err});
@@ -12814,13 +12744,133 @@ fn paintFrame(bar: *Bar, pixels: [*]u32) void {
     }
 }
 
+/// Advances one bar's eased animations (taskbar/dock morph, drawer fade,
+/// hover fades) by one SCROLL_INTERVAL_MS tick; true when that changed what
+/// it shows.
+fn stepBarAnimations(b: *Bar) bool {
+    var needs_redraw = false;
+    // Taskbar↔dock rubber-band morph: ease the blend toward the
+    // current mode's endpoint, redrawing every tick while
+    // traveling (settled endpoints paint no differently than
+    // before, so idle costs nothing extra).
+    if (b.mode_morph_active) {
+        const morph_target: f32 = if (std.mem.eql(u8, current_config.appearance.bar_mode, BAR_MODE_DOCK)) 1.0 else 0.0;
+        b.mode_morph_t += MODE_MORPH_STEP;
+        if (b.mode_morph_t >= 1.0) {
+            b.mode_blend = morph_target;
+            b.mode_morph_active = false;
+        } else {
+            b.mode_blend = b.mode_morph_from + (morph_target - b.mode_morph_from) * easeOutElastic(b.mode_morph_t);
+        }
+        needs_redraw = true;
+    }
+    const drawer_target: f32 = if (b.drawer_expanded) 1.0 else 0.0;
+    if (b.drawer_anim != drawer_target) {
+        b.drawer_anim = if (b.drawer_anim < drawer_target)
+            @min(drawer_target, b.drawer_anim + DRAWER_ANIM_STEP)
+        else
+            @max(drawer_target, b.drawer_anim - DRAWER_ANIM_STEP);
+        needs_redraw = true;
+    }
+    // Hover fade: every region's pill+underline eases toward lit
+    // (under the pointer) or dark. Same needs_redraw gating as
+    // the drawer — settled regions cost nothing per tick. With
+    // animations off the level snaps straight to target instead
+    // (the pointer handlers already redraw on change, so the
+    // snap still paints its single frame).
+    const anim_on = current_config.appearance.animations_enabled;
+    var hi: usize = 0;
+    while (hi < b.click_regions.len) : (hi += 1) {
+        const hover_target: f32 = if (b.click_regions.hovered == hi) 1.0 else 0.0;
+        if (b.click_regions.hover[hi] != hover_target) {
+            b.click_regions.hover[hi] = if (!anim_on) hover_target else if (b.click_regions.hover[hi] < hover_target)
+                @min(hover_target, b.click_regions.hover[hi] + HOVER_ANIM_STEP)
+            else
+                @max(hover_target, b.click_regions.hover[hi] - HOVER_ANIM_STEP);
+            needs_redraw = true;
+        }
+    }
+    return needs_redraw;
+}
+
+/// Whether this bar shows something that moves without input: the bezel of
+/// a lit hover or of the active workspace, a pulsing urgent pill, an
+/// animated background, the hovered weather's condition effect. Read-only.
+fn barMovesOnItsOwn(b: *const Bar) bool {
+    var needs_redraw = false;
+    if (current_config.appearance.animations_enabled) {
+        var hj: usize = 0;
+        while (hj < b.click_regions.len) : (hj += 1) {
+            if (b.click_regions.hover[hj] > 0.0) {
+                needs_redraw = true;
+                break;
+            }
+        }
+        if (!needs_redraw) {
+            for (barWorkspaces(b)) |ws| {
+                if (ws.active) {
+                    needs_redraw = true;
+                    break;
+                }
+            }
+        }
+        // A pulsing urgent pill needs frames too (same gating as
+        // the bezel above; frozen when animations are off).
+        if (!needs_redraw) {
+            for (barWorkspaces(b)) |ws| {
+                if (ws.urgent and !ws.active) {
+                    needs_redraw = true;
+                    break;
+                }
+            }
+        }
+        // Animated backgrounds repaint every tick while visible
+        // (same cost class as the always-on bezel above).
+        if (!needs_redraw and bgEffectVisible()) needs_redraw = true;
+        // Hovered weather plays its condition fx — same deal.
+        if (!needs_redraw and weatherHovered(b)) needs_redraw = true;
+    }
+    return needs_redraw;
+}
+
+/// Whether this bar needs the animation tick at all: something easing, a
+/// countdown running, a popup open (OSD timeout, row fades), or something
+/// that moves on its own. Read-only; with every bar false (and nothing
+/// global pending) the tick stops and an idle bar wakes for nothing.
+fn barAnimating(b: *const Bar) bool {
+    if (b.autohide_grace > 0 or b.mode_morph_active or b.popup != null) return true;
+    const drawer_target: f32 = if (b.drawer_expanded) 1.0 else 0.0;
+    if (b.drawer_anim != drawer_target) return true;
+    var hi: usize = 0;
+    while (hi < b.click_regions.len) : (hi += 1) {
+        const target: f32 = if (b.click_regions.hovered == hi) 1.0 else 0.0;
+        if (b.click_regions.hover[hi] != target) return true;
+    }
+    return barMovesOnItsOwn(b);
+}
+
+fn animTickWanted(bars_slice: []const Bar) bool {
+    if (vol_fetch_fd >= 0 or vol_osd_suppress_left > 0) return true;
+    for (bars_slice) |*b| if (barAnimating(b)) return true;
+    return false;
+}
+
+/// Asks for a frame: drawn now when the compositor isn't still showing the
+/// last one, otherwise on its frame.done (FramePacer), so changes that come
+/// in faster than the output refreshes coalesce into one draw and a bar on
+/// a hidden or sleeping output draws nothing.
+fn drawAndCommit(bar: *Bar) !void {
+    if (!bar.pacer.request()) return;
+    try presentBar(bar);
+}
+
 /// Paints the current frame and hands it to the compositor through the bar's
 /// reused wl_shm buffers (shm_pool): a free buffer is painted and attached;
 /// while the compositor still holds every buffer, the frame waits for the
 /// next release instead. This is the bar's only presenter — every pixel is
 /// rasterized on the CPU (see paintFrame) and handed over through shared
 /// memory, so no EGL/GLES context is ever created and no GL driver is loaded.
-fn drawAndCommit(bar: *Bar) !void {
+fn presentBar(bar: *Bar) !void {
     if (bar.pool == null) {
         bar.shm_backend = .{ .shm = bar.shm };
         bar.pool = .init(&bar.shm_backend, 3);
@@ -12828,29 +12878,107 @@ fn drawAndCommit(bar: *Bar) !void {
     }
     const Ctx = struct {
         bar: *Bar,
-        pub fn paint(c: @This(), slot: *shm_pool.Slot) ?shm_pool.Region {
+        paced: bool = false,
+        pub fn paint(c: *@This(), slot: *shm_pool.Slot) ?shm_pool.Region {
             paintFrame(c.bar, slot.pixels.ptr); // fills every pixel
             return shm_pool.Region.whole;
         }
-        pub fn commit(c: @This(), slot: *shm_pool.Slot, _: *const shm_pool.Region) void {
-            c.bar.surface.attach(BarShm.wlBuffer(slot), 0, 0);
-            c.bar.surface.damageBuffer(0, 0, @intCast(c.bar.width), @intCast(c.bar.height));
-            c.bar.surface.commit();
+        pub fn commit(c: *@This(), slot: *shm_pool.Slot, _: *const shm_pool.Region) void {
+            const b = c.bar;
+            b.surface.attach(BarShm.wlBuffer(slot), 0, 0);
+            b.surface.damageBuffer(0, 0, @intCast(b.width), @intCast(b.height));
+            if (b.frame_cb == null) {
+                if (b.surface.frame()) |cb| {
+                    cb.setListener(*Bar, barFrameDone, b);
+                    b.frame_cb = cb;
+                } else |_| {}
+            }
+            c.paced = b.frame_cb != null;
+            b.surface.commit();
         }
     };
-    bar.draw_pending = !(try shm_pool.drawFrame(&bar.pool.?, bar.width, bar.height, Ctx{ .bar = bar }));
+    var ctx = Ctx{ .bar = bar };
+    const drawn = try shm_pool.drawFrame(&bar.pool.?, bar.width, bar.height, &ctx);
+    bar.draw_pending = !drawn;
+    if (drawn) bar.pacer.drew(ctx.paced, monoNowMs());
+}
+
+fn barFrameDone(cb: *wl.Callback, _: wl.Callback.Event, bar: *Bar) void {
+    cb.destroy();
+    bar.frame_cb = null;
+    if (bar.pacer.done()) presentBar(bar) catch |err| logging.err("draw failed: {}", .{err});
+}
+
+/// The output went to sleep or the bar is covered: its frame callback may
+/// never come. After the pacer's watchdog, drop it and draw the pending
+/// change once (it reaches the screen when the output is back).
+fn unstickBar(bar: *Bar) void {
+    if (!bar.pacer.stuck(monoNowMs())) return;
+    if (bar.frame_cb) |cb| cb.destroy();
+    bar.frame_cb = null;
+    _ = bar.pacer.done();
+    presentBar(bar) catch |err| logging.err("draw failed: {}", .{err});
 }
 
 fn barBufferReleased(p: *anyopaque) void {
     const bar: *Bar = @ptrCast(@alignCast(p));
     if (!bar.draw_pending) return;
-    drawAndCommit(bar) catch |err| logging.err("draw failed: {}", .{err});
+    presentBar(bar) catch |err| logging.err("draw failed: {}", .{err});
 }
 
 // ---------------------------------------------------------------------
 // Tests — bezel breathing math (pure, no display).
 // Run: zig test src/main.zig -lc -fllvm -flld <bar link flags below>
 // ---------------------------------------------------------------------
+
+test "the animation tick runs only while a bar needs it" {
+    const t = std.testing;
+    // Animations off: nothing moves on its own, so workspaces/weather are
+    // never read and the minimal bar below is enough.
+    const saved_cfg = current_config;
+    defer current_config = saved_cfg;
+    current_config.appearance.animations_enabled = false;
+    const saved_fetch = vol_fetch_fd;
+    const saved_osd = vol_osd_suppress_left;
+    defer {
+        vol_fetch_fd = saved_fetch;
+        vol_osd_suppress_left = saved_osd;
+    }
+    vol_fetch_fd = -1;
+    vol_osd_suppress_left = 0;
+
+    var bars: [1]Bar = undefined;
+    const b = &bars[0];
+    b.autohide_grace = 0;
+    b.mode_morph_active = false;
+    b.popup = null;
+    b.drawer_expanded = false;
+    b.drawer_anim = 0;
+    b.click_regions = .{};
+    try t.expect(!barAnimating(b));
+    try t.expect(!animTickWanted(&bars)); // idle: the timer stops
+
+    b.click_regions.len = 1;
+    b.click_regions.hovered = 0; // pointer just arrived: the fade must run
+    try t.expect(barAnimating(b));
+    b.click_regions.hover[0] = 1.0; // settled (animations off: no bezel)
+    try t.expect(!barAnimating(b));
+
+    b.drawer_expanded = true; // drawer fade mid-flight
+    try t.expect(barAnimating(b));
+    b.drawer_anim = 1.0;
+    try t.expect(!barAnimating(b));
+
+    b.autohide_grace = 3;
+    try t.expect(barAnimating(b));
+    b.autohide_grace = 0;
+
+    vol_osd_suppress_left = 5; // a global countdown keeps it running too
+    try t.expect(animTickWanted(&bars));
+    vol_osd_suppress_left = 0;
+    vol_fetch_fd = 9; // a mixer fetch times out on the tick clock
+    try t.expect(animTickWanted(&bars));
+}
 
 test "clearGlass keeps lightness, drops hue" {
     try std.testing.expectEqual(@as(u32, 0xFF1E1E2E), clearGlass(0xFF1E1E2E, true));
